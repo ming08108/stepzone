@@ -1,23 +1,12 @@
 /**
- * Load a song from user-provided files (a dropped folder or a folder picker).
- * Browser-only (File API); kept out of the pure engine. Finds the simfile,
- * parses it, locates the referenced audio + banner, and reads the audio bytes.
+ * Load songs from user-provided files (a dropped folder / folder picker).
+ * Browser-only (File API); kept out of the pure engine. Supports a single song
+ * folder or a whole pack (many song subfolders): metadata + banner are parsed
+ * up front; the (heavy) audio bytes are read lazily when a chart is chosen.
  */
 
 import { parseSimfile } from '../parse/loader';
 import type { Song } from '../song/song';
-
-export interface LoadedSong {
-  song: Song;
-  /** Encoded audio bytes to decode/play, or null if none was found. */
-  encodedAudio: ArrayBuffer | null;
-  audioName: string | null;
-  /** Object URL for the banner image, or null. Revoke when done. */
-  bannerUrl: string | null;
-  /** Simfile file name the song was loaded from. */
-  sourceName: string;
-  warnings: string[];
-}
 
 const AUDIO_EXT = ['.ogg', '.oga', '.mp3', '.wav', '.m4a', '.aac', '.flac', '.opus'];
 
@@ -31,6 +20,43 @@ function ext(name: string): string {
   const i = b.lastIndexOf('.');
   return i >= 0 ? b.slice(i) : '';
 }
+
+function relPath(f: File): string {
+  return f.webkitRelativePath && f.webkitRelativePath.length > 0 ? f.webkitRelativePath : f.name;
+}
+
+function dirOf(f: File): string {
+  const p = relPath(f).replace(/\\/g, '/');
+  return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+}
+
+function findSimfile(files: File[]): File | undefined {
+  return (
+    files.find((f) => ext(f.name) === '.ssc') ??
+    files.find((f) => ext(f.name) === '.sma') ??
+    files.find((f) => ext(f.name) === '.sm')
+  );
+}
+
+function findAudioFile(files: File[], song: Song): File | undefined {
+  if (song.musicFile) {
+    const want = basename(song.musicFile);
+    const m = files.find((f) => basename(f.name) === want);
+    if (m) return m;
+  }
+  return files.find((f) => AUDIO_EXT.includes(ext(f.name)));
+}
+
+function findBannerUrl(files: File[], song: Song): string | null {
+  if (song.bannerFile) {
+    const want = basename(song.bannerFile);
+    const b = files.find((f) => basename(f.name) === want);
+    if (b) return URL.createObjectURL(b);
+  }
+  return null;
+}
+
+// --- Drag-drop folder traversal --------------------------------------------
 
 async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   const out: FileSystemEntry[] = [];
@@ -47,6 +73,14 @@ async function entryToFiles(entry: FileSystemEntry): Promise<File[]> {
     const file = await new Promise<File>((res, rej) =>
       (entry as FileSystemFileEntry).file(res, rej),
     );
+    // Preserve the folder path so pack grouping works for dropped folders.
+    try {
+      Object.defineProperty(file, 'webkitRelativePath', {
+        value: entry.fullPath.replace(/^\//, ''),
+      });
+    } catch {
+      // read-only in some browsers; grouping falls back to the file name
+    }
     return [file];
   }
   if (entry.isDirectory) {
@@ -70,44 +104,59 @@ export async function filesFromDataTransfer(dt: DataTransfer): Promise<File[]> {
   return dt.files ? Array.from(dt.files) : [];
 }
 
-/** Load one song from a set of files (e.g. everything under a song folder). */
-export async function loadSongFromFiles(files: File[]): Promise<LoadedSong> {
+// --- Library loading --------------------------------------------------------
+
+export interface LibraryEntry {
+  song: Song;
+  files: File[];
+  sourceName: string;
+  bannerUrl: string | null;
+}
+
+/** Group files by folder and parse every song found (metadata + banner only). */
+export async function loadLibraryFromFiles(
+  files: File[],
+): Promise<{ entries: LibraryEntry[]; warnings: string[] }> {
   const warnings: string[] = [];
-
-  // Simfile: prefer .ssc, then .sma, then .sm.
-  const byExt = (e: string) => files.find((f) => ext(f.name) === e);
-  const sim = byExt('.ssc') ?? byExt('.sma') ?? byExt('.sm');
-  if (!sim) throw new Error('No .ssc or .sm simfile found in the selected files.');
-
-  const text = await sim.text();
-  const song = parseSimfile(text, sim.name);
-  if (song.charts.length === 0) warnings.push('The simfile has no charts.');
-
-  // Audio: match #MUSIC by basename, else fall back to the first audio file.
-  let audioFile: File | undefined;
-  if (song.musicFile) {
-    const want = basename(song.musicFile);
-    audioFile = files.find((f) => basename(f.name) === want);
-  }
-  if (!audioFile) audioFile = files.find((f) => AUDIO_EXT.includes(ext(f.name)));
-  if (!audioFile) warnings.push('No audio file found — a metronome will play instead.');
-
-  const encodedAudio = audioFile ? await audioFile.arrayBuffer() : null;
-
-  // Banner (optional).
-  let bannerUrl: string | null = null;
-  if (song.bannerFile) {
-    const want = basename(song.bannerFile);
-    const banner = files.find((f) => basename(f.name) === want);
-    if (banner) bannerUrl = URL.createObjectURL(banner);
+  const groups = new Map<string, File[]>();
+  for (const f of files) {
+    const dir = dirOf(f);
+    const g = groups.get(dir);
+    if (g) g.push(f);
+    else groups.set(dir, [f]);
   }
 
-  return {
-    song,
-    encodedAudio,
-    audioName: audioFile?.name ?? null,
-    bannerUrl,
-    sourceName: sim.name,
-    warnings,
-  };
+  const entries: LibraryEntry[] = [];
+  for (const groupFiles of groups.values()) {
+    const sim = findSimfile(groupFiles);
+    if (!sim) continue;
+    try {
+      const song = parseSimfile(await sim.text(), sim.name);
+      entries.push({
+        song,
+        files: groupFiles,
+        sourceName: sim.name,
+        bannerUrl: findBannerUrl(groupFiles, song),
+      });
+    } catch (e) {
+      warnings.push(`Failed to parse ${sim.name}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  if (entries.length === 0) warnings.push('No .sm/.ssc simfiles found in the selection.');
+  entries.sort((a, b) => (a.song.title || '').localeCompare(b.song.title || ''));
+  return { entries, warnings };
+}
+
+/** Read (and decode-ready) the audio bytes for a library entry, or null. */
+export async function readSongAudio(entry: LibraryEntry): Promise<ArrayBuffer | null> {
+  const f = findAudioFile(entry.files, entry.song);
+  return f ? f.arrayBuffer() : null;
+}
+
+/** Min/max BPM of a song (from its timing), for display/filtering. */
+export function songBpmRange(song: Song): { min: number; max: number } {
+  const bpms = song.timing.bpms.map((b) => b.bps * 60).filter((v) => v > 0);
+  if (bpms.length === 0) return { min: 0, max: 0 };
+  return { min: Math.min(...bpms), max: Math.max(...bpms) };
 }

@@ -1,15 +1,31 @@
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 import exampleSsc from '../dev/example.ssc?raw';
 import { parseSimfile } from '../parse/loader';
-import { filesFromDataTransfer, loadSongFromFiles, type LoadedSong } from '../io/songFiles';
+import {
+  filesFromDataTransfer,
+  loadLibraryFromFiles,
+  readSongAudio,
+  songBpmRange,
+  type LibraryEntry,
+} from '../io/songFiles';
+import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { difficultyToString } from '../song/difficulty';
-import type { Song } from '../song/song';
-import type { Steps } from '../song/steps';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
 const CHART_BTN =
   'rounded-lg border border-line bg-white/[0.03] px-3 py-2 text-left hover:border-accent hover:bg-accent/10';
+
+function exampleEntry(): LibraryEntry {
+  return {
+    song: parseSimfile(exampleSsc, 'example.ssc'),
+    files: [],
+    sourceName: 'example.ssc',
+    bannerUrl: null,
+  };
+}
+
+type SortKey = 'title' | 'bpm';
 
 export function SongSelect({
   onPlay,
@@ -20,35 +36,43 @@ export function SongSelect({
   onInspect: () => void;
   onOptions: () => void;
 }) {
-  const exampleSong = useMemo(() => parseSimfile(exampleSsc, 'example.ssc'), []);
-  const [loaded, setLoaded] = useState<LoadedSong | null>(null);
+  const [entries, setEntries] = useState<LibraryEntry[]>(() => [exampleEntry()]);
+  const [favs, setFavs] = useState<Set<string>>(() => loadFavorites());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   useMenuNav();
 
-  // Make the file input pick a whole directory.
+  // Filters.
+  const [search, setSearch] = useState('');
+  const [stepsType, setStepsType] = useState('all');
+  const [minMeter, setMinMeter] = useState(1);
+  const [maxMeter, setMaxMeter] = useState(20);
+  const [favOnly, setFavOnly] = useState(false);
+  const [sort, setSort] = useState<SortKey>('title');
+
   useEffect(() => {
     if (folderRef.current) folderRef.current.webkitdirectory = true;
   }, []);
 
-  // Revoke the previous banner object URL when it changes / unmounts.
+  // Revoke banner URLs when the library is replaced / unmounts.
   useEffect(() => {
-    const url = loaded?.bannerUrl;
     return () => {
-      if (url) URL.revokeObjectURL(url);
+      for (const e of entries) if (e.bannerUrl) URL.revokeObjectURL(e.bannerUrl);
     };
-  }, [loaded]);
+  }, [entries]);
 
   const handleFiles = async (files: File[]) => {
     if (files.length === 0) return;
     setError(null);
     setBusy(true);
     try {
-      setLoaded(await loadSongFromFiles(files));
+      const { entries: loaded, warnings } = await loadLibraryFromFiles(files);
+      setEntries([exampleEntry(), ...loaded]);
+      if (loaded.length === 0) setError(warnings[0] ?? 'No songs found.');
     } catch (e) {
-      setLoaded(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -61,32 +85,53 @@ export function SongSelect({
     await handleFiles(await filesFromDataTransfer(e.dataTransfer));
   };
 
-  const charts = (song: Song, audio: ArrayBuffer | null) => {
-    const sorted = [...song.charts].sort(
-      (a, b) => a.difficulty - b.difficulty || a.meter - b.meter,
-    );
-    return (
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {sorted.map((chart: Steps, i) => (
-          <button
-            key={i}
-            className={CHART_BTN}
-            onClick={() => onPlay({ song, chart, encodedAudio: audio })}
-          >
-            <div className="text-xs text-muted">{chart.stepsType}</div>
-            <div className="font-semibold">
-              {difficultyToString(chart.difficulty)}{' '}
-              <span className="text-accent">{chart.meter}</span>
-            </div>
-          </button>
-        ))}
-      </div>
-    );
+  const toggleFav = (key: string) => {
+    setFavs((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      saveFavorites(next);
+      return next;
+    });
   };
 
+  const play = async (entry: LibraryEntry, chartIndex: number) => {
+    const chart = entry.song.charts[chartIndex];
+    if (!chart) return;
+    const audio = await readSongAudio(entry);
+    onPlay({ song: entry.song, chart, encodedAudio: audio });
+  };
+
+  const stepsTypes = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of entries) for (const c of e.song.charts) set.add(c.stepsType);
+    return ['all', ...[...set].sort()];
+  }, [entries]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = entries.filter((e) => {
+      const key = songKey(e.song.title, e.song.artist);
+      if (favOnly && !favs.has(key)) return false;
+      if (q && !`${e.song.title} ${e.song.artist}`.toLowerCase().includes(q)) return false;
+      const charts = e.song.charts.filter(
+        (c) =>
+          (stepsType === 'all' || c.stepsType === stepsType) &&
+          c.meter >= minMeter &&
+          c.meter <= maxMeter,
+      );
+      return charts.length > 0 || (e.files.length === 0 && !favOnly && !q); // keep example visible
+    });
+    rows.sort((a, b) => {
+      if (sort === 'bpm') return songBpmRange(a.song).min - songBpmRange(b.song).min;
+      return (a.song.title || '').localeCompare(b.song.title || '');
+    });
+    return rows;
+  }, [entries, search, stepsType, minMeter, maxMeter, favOnly, favs, sort]);
+
   return (
-    <div className="mx-auto max-w-[900px] px-6 pb-16 pt-8">
-      <header className="mb-6 flex items-center justify-between">
+    <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
+      <header className="mb-5 flex items-center justify-between">
         <div className="text-xl font-bold">
           notefield <span className="pill">song select</span>
         </div>
@@ -106,17 +151,9 @@ export function SongSelect({
         </div>
       </header>
 
-      <section className="card">
-        <h2 className="mb-1 text-sm font-medium uppercase tracking-wider text-muted">
-          Bundled example
-        </h2>
-        <div className="text-lg font-semibold">{exampleSong.title}</div>
-        <div className="text-sm text-muted">Demo chart · metronome (no audio file)</div>
-        {charts(exampleSong, null)}
-      </section>
-
+      {/* Loader */}
       <section
-        className={`card border-2 border-dashed transition-colors ${
+        className={`card mb-4 border-2 border-dashed transition-colors ${
           drag ? 'border-accent bg-accent/5' : 'border-line'
         }`}
         onDragOver={(e) => {
@@ -126,20 +163,16 @@ export function SongSelect({
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
       >
-        <h2 className="mb-1 text-sm font-medium uppercase tracking-wider text-muted">
-          Load a song
-        </h2>
-        <p className="text-muted">
-          Drop a StepMania song <strong>folder</strong> here (a <code>.sm</code>/<code>.ssc</code>{' '}
-          plus its audio), or:
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             className="cursor-pointer rounded-xl bg-accent px-6 py-2 text-base font-bold text-night hover:brightness-110"
             onClick={() => folderRef.current?.click()}
           >
             Choose folder…
           </button>
+          <span className="text-sm text-muted">
+            or drop a song folder / pack here ({entries.length - 1} loaded)
+          </span>
           {busy && <span className="text-muted">Loading…</span>}
           {error && <span className="text-[#ff6b6b]">{error}</span>}
         </div>
@@ -152,36 +185,133 @@ export function SongSelect({
         />
       </section>
 
-      {loaded && (
-        <section className="card">
-          <div className="flex items-start gap-4">
-            {loaded.bannerUrl && (
-              <img src={loaded.bannerUrl} alt="" className="h-16 w-40 rounded-md object-cover" />
-            )}
-            <div className="min-w-0">
-              <div className="truncate text-lg font-semibold">
-                {loaded.song.title || loaded.sourceName}
+      {/* Filters */}
+      <section className="card mb-4">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <input
+            type="search"
+            placeholder="Search title / artist…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="min-w-[200px] flex-1 rounded-lg border border-line bg-white/[0.03] px-3 py-1.5"
+          />
+          <select
+            value={stepsType}
+            onChange={(e) => setStepsType(e.target.value)}
+            className="rounded-lg border border-line bg-white/[0.03] px-2 py-1.5"
+          >
+            {stepsTypes.map((t) => (
+              <option key={t} value={t}>
+                {t === 'all' ? 'All types' : t}
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-1 text-muted">
+            meter
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={minMeter}
+              onChange={(e) => setMinMeter(Number(e.target.value) || 1)}
+              className="w-14 rounded border border-line bg-white/[0.03] px-2 py-1"
+            />
+            –
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={maxMeter}
+              onChange={(e) => setMaxMeter(Number(e.target.value) || 20)}
+              className="w-14 rounded border border-line bg-white/[0.03] px-2 py-1"
+            />
+          </label>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            className="rounded-lg border border-line bg-white/[0.03] px-2 py-1.5"
+          >
+            <option value="title">Sort: Title</option>
+            <option value="bpm">Sort: BPM</option>
+          </select>
+          <label className="flex items-center gap-1 text-muted">
+            <input
+              type="checkbox"
+              checked={favOnly}
+              onChange={(e) => setFavOnly(e.target.checked)}
+            />
+            ★ only
+          </label>
+        </div>
+      </section>
+
+      {/* Table */}
+      <section className="card p-0">
+        {filtered.length === 0 && <div className="p-6 text-center text-muted">No songs match.</div>}
+        {filtered.map((entry) => {
+          const key = songKey(entry.song.title, entry.song.artist);
+          const bpm = songBpmRange(entry.song);
+          const isFav = favs.has(key);
+          const isOpen = expanded === key;
+          const meters = [...new Set(entry.song.charts.map((c) => c.meter))].sort((a, b) => a - b);
+          return (
+            <div key={key} className="border-b border-line last:border-0">
+              <div className="flex items-center gap-3 px-4 py-2.5">
+                <button
+                  onClick={() => toggleFav(key)}
+                  title="favorite"
+                  className={`text-lg ${isFav ? 'text-[#ffd24d]' : 'text-muted hover:text-ink'}`}
+                >
+                  {isFav ? '★' : '☆'}
+                </button>
+                <button
+                  onClick={() => setExpanded(isOpen ? null : key)}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                >
+                  {entry.bannerUrl && (
+                    <img src={entry.bannerUrl} alt="" className="h-8 w-20 rounded object-cover" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">
+                      {entry.song.title || entry.sourceName}
+                    </span>
+                    <span className="block truncate text-xs text-muted">
+                      {entry.song.artist || '—'}
+                    </span>
+                  </span>
+                  <span className="w-24 text-right text-sm tabular-nums text-muted">
+                    {bpm.max > 0
+                      ? bpm.min === bpm.max
+                        ? `${Math.round(bpm.min)}`
+                        : `${Math.round(bpm.min)}–${Math.round(bpm.max)}`
+                      : '—'}{' '}
+                    BPM
+                  </span>
+                  <span className="hidden w-40 text-right text-xs text-muted sm:block">
+                    {meters.join(' · ')}
+                  </span>
+                </button>
               </div>
-              <div className="truncate text-sm text-muted">
-                {loaded.song.artist || '—'}
-                {loaded.audioName ? ` · ♪ ${loaded.audioName}` : ' · no audio (metronome)'}
-              </div>
+              {isOpen && (
+                <div className="grid grid-cols-2 gap-2 px-4 pb-3 sm:grid-cols-3 md:grid-cols-4">
+                  {entry.song.charts
+                    .map((c, i) => ({ c, i }))
+                    .sort((a, b) => a.c.difficulty - b.c.difficulty || a.c.meter - b.c.meter)
+                    .map(({ c, i }) => (
+                      <button key={i} className={CHART_BTN} onClick={() => void play(entry, i)}>
+                        <div className="text-xs text-muted">{c.stepsType}</div>
+                        <div className="font-semibold">
+                          {difficultyToString(c.difficulty)}{' '}
+                          <span className="text-accent">{c.meter}</span>
+                        </div>
+                      </button>
+                    ))}
+                </div>
+              )}
             </div>
-          </div>
-          {loaded.warnings.length > 0 && (
-            <ul className="mt-2 text-sm text-[#e6b04b]">
-              {loaded.warnings.map((w, i) => (
-                <li key={i}>• {w}</li>
-              ))}
-            </ul>
-          )}
-          {loaded.song.charts.length > 0 ? (
-            charts(loaded.song, loaded.encodedAudio)
-          ) : (
-            <p className="mt-3 text-muted">No charts in this simfile.</p>
-          )}
-        </section>
-      )}
+          );
+        })}
+      </section>
     </div>
   );
 }
