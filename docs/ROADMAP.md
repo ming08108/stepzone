@@ -43,12 +43,17 @@ Deferred from the playable slice (tracked): per-row chord cohesion for combo,
 XMod/MMod + scroll/speed-segment rendering, life-delta modifiers, roll re-tap
 polish, and a real audio file loader.
 
-## M4 — Real songs
+## M4 — Real songs ✅ (done)
 
-- Load a song folder (simfile + audio + banner) via file input / drag-drop or a
-  bundled pack.
-- Song-select UI; difficulty picker.
-- Preview clips (sample start/length).
+- Load a song folder (simfile + audio + banner) via a folder picker
+  (`webkitdirectory`) or drag-drop (recursive folder traversal).
+- Song-select UI with banner + a per-chart difficulty grid; real audio decoded
+  into the clock (metronome fallback if none/unsupported).
+- Verified with DDR 1st Mix "Butterfly" (`.sm` + `.ogg`): all dance-single/
+  double/couple/solo charts parsed, banner shown, real OGG audio playing.
+
+Deferred: preview clips (sample start/length), multi-song pack browsing / a song
+wheel, and persisting a library across reloads (File System Access API).
 
 ## M5 — Feature parity for play
 
