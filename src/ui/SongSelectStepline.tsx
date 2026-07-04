@@ -384,6 +384,7 @@ export function SongSelect({
       <div className="flex h-[46px] flex-none items-center gap-2 border-b border-white/[0.09] px-[28px]">
         <input
           ref={searchRef}
+          type="search"
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);

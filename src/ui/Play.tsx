@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { ShaderBackground } from '../render/shaderBackground';
-import { isVideoFile } from '../io/songFiles';
+import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { keyToColumn } from '../input/keymap';
 import { readGamepad } from '../input/gamepad';
 import { difficultyToString } from '../song/difficulty';
@@ -61,13 +61,23 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
   );
 }
 
-const JUDGMENT_ROWS: Array<[TapNoteScore, string]> = [
-  [TapNoteScore.W1, 'Marvelous'],
-  [TapNoteScore.W2, 'Perfect'],
-  [TapNoteScore.W3, 'Great'],
-  [TapNoteScore.W4, 'Good'],
-  [TapNoteScore.W5, 'Way Off'],
-  [TapNoteScore.Miss, 'Miss'],
+const AC = '#ff4d3d';
+const DIFF_COLOR: Record<string, string> = {
+  Beginner: '#37d5ff',
+  Easy: '#ffcf3d',
+  Medium: '#ff5c5c',
+  Hard: '#59f07f',
+  Challenge: '#c86bff',
+  Edit: '#c86bff',
+};
+
+const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
+  [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
+  [TapNoteScore.W2, 'EXCELLENT', '#ffd23d'],
+  [TapNoteScore.W3, 'GREAT', '#59f07f'],
+  [TapNoteScore.W4, 'DECENT', '#c86bff'],
+  [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
+  [TapNoteScore.Miss, 'MISS', '#ff4d3d'],
 ];
 
 const CTL_BTN =
@@ -259,81 +269,111 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   };
 
   const title = req.song.title || 'Untitled';
-  const diff = `${req.chart.stepsType} · ${difficultyToString(req.chart.difficulty)} ${req.chart.meter}`;
+  const diffName = difficultyToString(req.chart.difficulty);
+  const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
+  const r = songBpmRange(req.song);
+  const bpmDisp =
+    r.max > 0
+      ? Math.round(r.min) === Math.round(r.max)
+        ? String(Math.round(r.max))
+        : `${Math.round(r.min)}–${Math.round(r.max)}`
+      : '';
 
   return (
-    <div ref={wrapRef} className="fixed inset-0 overflow-hidden bg-night">
+    <div
+      ref={wrapRef}
+      className="fixed inset-0 overflow-hidden bg-[#050506] font-grotesk [font-variant-numeric:tabular-nums]"
+    >
       <canvas ref={bgCanvasRef} className="absolute inset-0 block h-full w-full" />
       <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
-      <div className="absolute bottom-4 left-3.5 z-[3] flex gap-2">
+      <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
         <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
           ⛶
         </button>
         <button onClick={onExit} className={CTL_BTN}>
-          ← Menu
+          ← SONGS
         </button>
       </div>
 
       {phase !== 'playing' && (
-        <div className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
+        <div
+          className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-3 p-6 text-center text-[#ececec] backdrop-blur-[2px]"
+          style={{ background: 'rgba(5,6,8,.82)' }}
+        >
           {phase === 'ready' && (
             <>
-              <div className="brand text-2xl">notefield</div>
-              <h2 className="m-0 font-display text-4xl tracking-wide">{title}</h2>
-              <p className="m-0 font-display uppercase tracking-wider text-muted">{diff}</p>
-              <p className="m-0 max-w-[30rem] text-ink">
-                <kbd className="kbd">←</kbd> <kbd className="kbd">↓</kbd>{' '}
-                <kbd className="kbd">↑</kbd> <kbd className="kbd">→</kbd> &nbsp;or&nbsp;{' '}
-                <kbd className="kbd">D</kbd> <kbd className="kbd">F</kbd>{' '}
-                <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd>
-              </p>
-              <button ref={ctaRef} className="cta" onClick={start}>
-                ▶ Play
+              <div className="text-[19px] font-bold tracking-[0.22em]">STEPLINE</div>
+              <div className="mt-2 text-[40px] font-bold leading-tight">{title}</div>
+              <div className="text-[18px] text-[#ececec]/60">
+                {req.song.artist || '—'}
+                {bpmDisp && ` · BPM ${bpmDisp}`}
+              </div>
+              <div
+                className="mt-1 border px-4 py-1.5 text-[16px] font-bold uppercase tracking-wide"
+                style={{ borderColor: dcolor, color: dcolor }}
+              >
+                {diffName} {req.chart.meter}
+              </div>
+              <button
+                ref={ctaRef}
+                onClick={start}
+                className="mt-4 text-[16px] tracking-[0.22em] outline-none"
+                style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+              >
+                PRESS START (ENTER)
               </button>
+              <div className="text-[12px] tracking-[0.14em] text-[#ececec]/45">
+                ← ↓ ↑ → &nbsp;OR&nbsp; D F J K
+              </div>
             </>
           )}
           {phase === 'done' && result && (
             <>
-              <h2
-                className={`m-0 font-display text-3xl uppercase tracking-[0.2em] ${
-                  result.failed ? 'text-accent' : 'text-[color:var(--color-accent2)]'
-                }`}
-              >
-                {result.failed ? 'FAILED' : 'CLEARED'}
-              </h2>
-              <div className="font-display text-6xl font-bold tabular-nums">
+              <div className="text-[15px] tracking-[0.3em] text-[#ececec]/70">RESULTS</div>
+              <div className="text-[64px] font-bold leading-none">
                 {(result.percent * 100).toFixed(2)}%
               </div>
-              <div className="font-display text-[3.5rem] font-bold leading-none text-[#ffd94b]">
-                {result.grade}
+              <div
+                className="text-[22px] font-bold tracking-[0.1em]"
+                style={{ color: result.failed ? AC : '#59f07f' }}
+              >
+                {result.failed ? 'FAILED' : 'CLEARED'} · {result.grade}
               </div>
               {result.isNewRecord && (
-                <div className="text-lg font-bold text-accent">★ NEW RECORD</div>
+                <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
+                  ★ NEW RECORD
+                </div>
               )}
-              <div className="grid grid-cols-2 gap-x-8 gap-y-0.5 text-sm">
-                {JUDGMENT_ROWS.map(([tns, label]) => (
-                  <div key={tns} className="flex justify-between gap-6">
-                    <span className="text-muted">{label}</span>
-                    <span className="tabular-nums">{result.counts[tns] ?? 0}</span>
+              <div className="mt-2 w-[280px]">
+                {JUDGMENT_ROWS.map(([tns, label, color]) => (
+                  <div
+                    key={tns}
+                    className="flex justify-between border-b border-white/[0.06] py-0.5 text-[15px] tracking-[0.1em]"
+                  >
+                    <span style={{ color }}>{label}</span>
+                    <span className="font-bold tabular-nums">{result.counts[tns] ?? 0}</span>
                   </div>
                 ))}
-              </div>
-              <div className="text-sm text-muted">
-                max combo {result.maxCombo}
-                {result.best
-                  ? ` · best ${(result.best.percent * 100).toFixed(2)}% · ${result.best.plays} plays`
-                  : ''}
+                <div className="flex justify-between border-t border-white/20 py-0.5 text-[15px] tracking-[0.1em]">
+                  <span className="text-[#ececec]/60">MAX COMBO</span>
+                  <span className="font-bold tabular-nums">{result.maxCombo}</span>
+                </div>
               </div>
               <OffsetGraph offsets={result.offsets} />
-              <div className="mt-2 flex gap-3">
-                <button ref={ctaRef} className="cta" onClick={start}>
-                  ↻ Play again
-                </button>
-                <button className={CTL_BTN} onClick={onExit}>
-                  ← Menu
-                </button>
-              </div>
+              {result.best && (
+                <div className="text-[13px] tracking-[0.1em] text-[#ececec]/50">
+                  BEST {(result.best.percent * 100).toFixed(2)}% · {result.best.plays} PLAYS
+                </div>
+              )}
+              <button
+                ref={ctaRef}
+                onClick={start}
+                className="mt-2 text-[15px] tracking-[0.22em] outline-none"
+                style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+              >
+                PRESS START TO RETRY
+              </button>
             </>
           )}
         </div>

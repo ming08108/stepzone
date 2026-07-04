@@ -15,26 +15,28 @@ import {
   TapNoteType,
 } from '../notes/noteTypes';
 
+// STEPLINE note quantization palette (4th red, 8th blue, 12th purple, 16th green).
 const QUANT_COLOR: Record<NoteType, string> = {
-  [NoteType.N4TH]: '#ff4d4d',
-  [NoteType.N8TH]: '#4d7bff',
-  [NoteType.N12TH]: '#b24dff',
-  [NoteType.N16TH]: '#ffd24d',
-  [NoteType.N24TH]: '#ff4dc4',
-  [NoteType.N32ND]: '#ff934d',
-  [NoteType.N48TH]: '#4de6c4',
-  [NoteType.N64TH]: '#9cff4d',
-  [NoteType.N192ND]: '#9aa0b0',
+  [NoteType.N4TH]: '#ff4455',
+  [NoteType.N8TH]: '#3d7bff',
+  [NoteType.N12TH]: '#c86bff',
+  [NoteType.N16TH]: '#59f07f',
+  [NoteType.N24TH]: '#ff9d3d',
+  [NoteType.N32ND]: '#ff9d3d',
+  [NoteType.N48TH]: '#ff9d3d',
+  [NoteType.N64TH]: '#ff9d3d',
+  [NoteType.N192ND]: '#ff9d3d',
 };
 
+// STEPLINE judgment colors.
 const JUDGMENT: Record<number, { label: string; color: string }> = {
-  [TapNoteScore.W1]: { label: 'MARVELOUS', color: '#7ff0ff' },
-  [TapNoteScore.W2]: { label: 'PERFECT', color: '#ffd94b' },
-  [TapNoteScore.W3]: { label: 'GREAT', color: '#5be06a' },
-  [TapNoteScore.W4]: { label: 'GOOD', color: '#4b8be6' },
-  [TapNoteScore.W5]: { label: 'WAY OFF', color: '#a06ee6' },
-  [TapNoteScore.Miss]: { label: 'MISS', color: '#ff4d4d' },
-  [TapNoteScore.HitMine]: { label: 'MINE!', color: '#ff4d4d' },
+  [TapNoteScore.W1]: { label: 'FANTASTIC', color: '#38f0ff' },
+  [TapNoteScore.W2]: { label: 'EXCELLENT', color: '#ffd23d' },
+  [TapNoteScore.W3]: { label: 'GREAT', color: '#59f07f' },
+  [TapNoteScore.W4]: { label: 'DECENT', color: '#c86bff' },
+  [TapNoteScore.W5]: { label: 'WAY OFF', color: '#ff9d3d' },
+  [TapNoteScore.Miss]: { label: 'MISS', color: '#ff4d3d' },
+  [TapNoteScore.HitMine]: { label: 'MINE!', color: '#ff4d3d' },
 };
 
 /** Arrow rotation per dance-single column: Left, Down, Up, Right. */
@@ -234,6 +236,14 @@ export class NoteFieldRenderer {
       ctx.strokeStyle = stroke;
       ctx.stroke();
     }
+    if (fill) {
+      // STEPLINE signature: a bright inner outline (arrow scaled 0.72 about center).
+      ctx.scale(0.72, 0.72);
+      traceArrow(ctx, this.arrowS);
+      ctx.lineWidth = 3.2 / 0.72;
+      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -334,7 +344,7 @@ export class NoteFieldRenderer {
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
       else {
         const c = QUANT_COLOR[getNoteType(n.row)];
-        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, 'rgba(0,0,0,0.55)', 2, a);
+        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, '#0a0b0d', 5, a);
       }
     }
 
@@ -406,13 +416,13 @@ export class NoteFieldRenderer {
     ctx.save();
     ctx.textAlign = 'left';
     ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 24px "Chakra Petch", system-ui, sans-serif';
+    ctx.font = '800 24px "Space Grotesk", system-ui, sans-serif';
     ctx.fillText(this.meta.title || 'notefield', 28, 42);
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '600 14px "Chakra Petch", system-ui, sans-serif';
+    ctx.font = '600 14px "Space Grotesk", system-ui, sans-serif';
     ctx.fillText(this.meta.subtitle, 28, 62);
     ctx.fillStyle = '#ffd24d';
-    ctx.font = '700 14px "Chakra Petch", system-ui, sans-serif';
+    ctx.font = '700 14px "Space Grotesk", system-ui, sans-serif';
     ctx.fillText(this.meta.difficulty, 28, 84);
     ctx.restore();
 
@@ -420,10 +430,10 @@ export class NoteFieldRenderer {
     ctx.save();
     ctx.textAlign = 'right';
     ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 40px "Chakra Petch", system-ui, sans-serif';
+    ctx.font = '800 40px "Space Grotesk", system-ui, sans-serif';
     ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, width - 28, 48);
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = '700 16px "Chakra Petch", system-ui, sans-serif';
+    ctx.font = '700 16px "Space Grotesk", system-ui, sans-serif';
     ctx.fillText(`GRADE ${judge.grade}`, width - 28, 72);
     ctx.restore();
 
@@ -464,7 +474,7 @@ export class NoteFieldRenderer {
         ctx.translate(cx, this.receptorY + height * 0.24);
         ctx.scale(pop, pop);
         ctx.fillStyle = j.color;
-        ctx.font = '900 44px "Chakra Petch", system-ui, sans-serif';
+        ctx.font = '900 44px "Space Grotesk", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(j.label, 0, 0);
         ctx.restore();
@@ -476,10 +486,10 @@ export class NoteFieldRenderer {
       ctx.save();
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff';
-      ctx.font = '900 68px "Chakra Petch", system-ui, sans-serif';
+      ctx.font = '900 68px "Space Grotesk", system-ui, sans-serif';
       ctx.fillText(String(judge.combo), cx, this.receptorY + height * 0.36);
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.font = '800 18px "Chakra Petch", system-ui, sans-serif';
+      ctx.font = '800 18px "Space Grotesk", system-ui, sans-serif';
       ctx.fillText('COMBO', cx, this.receptorY + height * 0.36 + 26);
       ctx.restore();
     }
