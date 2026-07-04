@@ -81,7 +81,33 @@ const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
 ];
 
 const CTL_BTN =
-  'rounded-lg border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-sm font-semibold text-white/75 hover:bg-white/15 hover:text-white';
+  'border border-white/15 bg-black/30 px-3 py-1.5 text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:border-[#ff4d3d] hover:text-[#ececec]';
+
+/** Live FPS counter (rendered over the playfield). */
+function FpsMeter() {
+  const [fps, setFps] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    let frames = 0;
+    let last = performance.now();
+    const loop = (t: number) => {
+      frames++;
+      if (t - last >= 500) {
+        setFps(Math.round((frames * 1000) / (t - last)));
+        frames = 0;
+        last = t;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div className="absolute bottom-4 right-4 z-[3] text-[12px] tracking-[0.12em] text-[#ececec]/45 [font-variant-numeric:tabular-nums]">
+      {fps} FPS
+    </div>
+  );
+}
 
 export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
   const { settings } = useSettings();
@@ -299,6 +325,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           ← SONGS
         </button>
       </div>
+
+      {phase === 'playing' && <FpsMeter />}
 
       {phase !== 'playing' && (
         <div

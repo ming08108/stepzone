@@ -35,6 +35,17 @@ type Sort = (typeof SORTS)[number];
 
 const ROW_H = 44;
 
+// Filter/selection state kept across remounts (e.g. after returning from a song)
+// so the list doesn't reset. Session-scoped (resets on full reload).
+const savedFilters = {
+  sort: 'title' as Sort,
+  search: '',
+  minLv: 1,
+  maxLv: 20,
+  sel: 0,
+  diff: 2,
+};
+
 interface SongVM {
   entry: LibraryEntry;
   title: string;
@@ -100,15 +111,16 @@ export function SongSelect({
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const [sel, setSel] = useState(0);
-  const [diff, setDiff] = useState(2);
-  const [sort, setSort] = useState<Sort>('title');
-  const [search, setSearch] = useState('');
-  const [minLv, setMinLv] = useState(1);
-  const [maxLv, setMaxLv] = useState(20);
+  const [sel, setSel] = useState(savedFilters.sel);
+  const [diff, setDiff] = useState(savedFilters.diff);
+  const [sort, setSort] = useState<Sort>(savedFilters.sort);
+  const [search, setSearch] = useState(savedFilters.search);
+  const [minLv, setMinLv] = useState(savedFilters.minLv);
+  const [maxLv, setMaxLv] = useState(savedFilters.maxLv);
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  const wheelAcc = useRef(0);
   useGamepadKeys();
 
   // Measure the (fluid) list viewport for virtualization + centering.
@@ -190,6 +202,16 @@ export function SongSelect({
 
   const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
   const song = filtered[selClamped];
+
+  // Remember filters/selection so returning from a song restores the list (#2).
+  useEffect(() => {
+    savedFilters.sort = sort;
+    savedFilters.search = search;
+    savedFilters.minLv = minLv;
+    savedFilters.maxLv = maxLv;
+    savedFilters.sel = selClamped;
+    savedFilters.diff = diff;
+  });
 
   const start = useCallback(async () => {
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
@@ -458,7 +480,20 @@ export function SongSelect({
       </div>
 
       {/* Virtualized song list */}
-      <div ref={listRef} className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        ref={listRef}
+        className="relative min-h-0 flex-1 overflow-hidden"
+        onWheel={(e) => {
+          // Scroll wheel moves the selection (#6). Accumulate for trackpads.
+          wheelAcc.current += e.deltaY;
+          const step = 30;
+          if (Math.abs(wheelAcc.current) < step) return;
+          const dir = wheelAcc.current > 0 ? 1 : -1;
+          wheelAcc.current = 0;
+          const n = Math.max(1, filtered.length);
+          setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
+        }}
+      >
         <div
           className="absolute inset-0"
           style={{

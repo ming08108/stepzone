@@ -44,7 +44,14 @@ export function App() {
 
   if (view === 'playoptions' && req) {
     return (
-      <PlayerOptions req={req} onStart={() => setView('play')} onBack={() => setView('menu')} />
+      <PlayerOptions
+        req={req}
+        onStart={(chart) => {
+          if (chart) setReq((r) => (r ? { ...r, chart } : r));
+          setView('play');
+        }}
+        onBack={() => setView('menu')}
+      />
     );
   }
   if (view === 'play' && req) {

@@ -4,7 +4,7 @@
  * preview, then START. Options persist to localStorage["stepline.options"].
  * Applies the chosen speed to the shared settings (X-mod) on START.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { songBpmRange } from '../io/songFiles';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
@@ -14,6 +14,11 @@ import { useGamepadKeys } from './useGamepadKeys';
 
 const BG = ['OFF', 'DIM', 'FULL'] as const;
 const BG_MODE = ['off', 'dim', 'full'] as const;
+
+function slotOf(name: string): number {
+  const i = ['Beginner', 'Easy', 'Medium', 'Hard', 'Challenge'].indexOf(name);
+  return i >= 0 ? i : 4; // Edit → Expert
+}
 const DIFF_COLOR: Record<string, string> = {
   Beginner: '#37d5ff',
   Easy: '#ffcf3d',
@@ -140,7 +145,7 @@ export function PlayerOptions({
   onBack,
 }: {
   req: PlayRequest;
-  onStart: () => void;
+  onStart: (chart?: PlayRequest['chart']) => void;
   onBack: () => void;
 }) {
   const { update } = useSettings();
@@ -152,28 +157,49 @@ export function PlayerOptions({
     localStorage.setItem('stepline.options', JSON.stringify(opts));
   }, [opts]);
 
+  // Charts available for this song, one per difficulty slot, ordered by slot (#8).
+  const charts = useMemo(() => {
+    const singles = req.song.charts.filter((c) => c.stepsType === 'dance-single');
+    const use = singles.length ? singles : req.song.charts;
+    const bySlot = new Map<number, PlayRequest['chart']>();
+    for (const c of use) {
+      const s = slotOf(difficultyToString(c.difficulty));
+      const ex = bySlot.get(s);
+      if (!ex || c.meter > ex.meter) bySlot.set(s, c);
+    }
+    return [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
+  }, [req.song]);
+  const [chartIdx, setChartIdx] = useState(() => {
+    const i = charts.indexOf(req.chart);
+    return i >= 0 ? i : Math.max(0, charts.length >> 1);
+  });
+  const chart = charts[Math.min(chartIdx, charts.length - 1)] ?? req.chart;
+
   const mult = opts.speed;
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
-  const diffName = difficultyToString(req.chart.difficulty);
+  const diffName = difficultyToString(chart.difficulty);
   const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
 
   const go = () => {
     update({ scrollMode: 'X', scrollValue: opts.speed, bgMode: BG_MODE[opts.bg] });
-    onStart();
+    onStart(chart);
   };
 
   const adjust = (dir: number) => {
-    setOpts((o) => {
-      if (row === 0)
-        return { ...o, speed: Math.max(0.5, Math.min(3.5, +(o.speed + dir * 0.25).toFixed(2))) };
-      return { ...o, bg: (o.bg + dir + 3) % 3 };
-    });
+    if (row === 0)
+      setOpts((o) => ({
+        ...o,
+        speed: Math.max(0.5, Math.min(3.5, +(o.speed + dir * 0.25).toFixed(2))),
+      }));
+    else if (row === 1) setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
+    else setOpts((o) => ({ ...o, bg: (o.bg + dir + 3) % 3 }));
   };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') setRow((v) => (v + 1) % 2);
+      if (e.key === 'ArrowUp') setRow((v) => (v + 2) % 3);
+      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % 3);
       else if (e.key === 'ArrowLeft') adjust(-1);
       else if (e.key === 'ArrowRight') adjust(1);
       else if (e.key === 'Enter') go();
@@ -185,11 +211,17 @@ export function PlayerOptions({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const rows = [
+  const rows: Array<{ label: string; value: string; help: string; valueColor?: string }> = [
     {
       label: 'SPEED MOD',
       value: `${opts.speed.toFixed(2)}×`,
       help: `How fast the arrows scroll (multiple of the song's BPM). Higher = faster and more spread out — easier to read individual steps, less time on screen. ${bpm ? `≈ ${Math.round(bpm * opts.speed)} BPM on this song.` : ''}`,
+    },
+    {
+      label: 'DIFFICULTY',
+      value: `${diffName} ${chart.meter}`,
+      valueColor: dcolor,
+      help: `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
     },
     {
       label: 'BACKGROUND',
@@ -214,7 +246,7 @@ export function PlayerOptions({
             className="border px-2 py-1 text-[12px] font-bold uppercase"
             style={{ borderColor: dcolor, color: dcolor }}
           >
-            {diffName} {req.chart.meter}
+            {diffName} {chart.meter}
           </div>
         </div>
       }
@@ -229,7 +261,7 @@ export function PlayerOptions({
         </>
       }
     >
-      <div className="flex h-full">
+      <div className="mx-auto flex h-full w-full max-w-[1180px]">
         <div className="flex flex-1 flex-col justify-center gap-2 px-8">
           {rows.map((r2, i) => {
             const on = i === row;
@@ -257,7 +289,10 @@ export function PlayerOptions({
                   >
                     ◀
                   </button>
-                  <span className="min-w-[130px] text-center text-[17px] font-bold">
+                  <span
+                    className="min-w-[130px] text-center text-[17px] font-bold"
+                    style={r2.valueColor ? { color: r2.valueColor } : undefined}
+                  >
                     {r2.value}
                   </span>
                   <button
