@@ -23,7 +23,7 @@ const TAIL_SECONDS = 2;
 
 /** Playback options applied to a session. */
 export interface SessionConfig {
-  scrollMode: 'C' | 'X';
+  scrollMode: 'C' | 'X' | 'M';
   scrollValue: number;
   musicRate: number;
   audioOffsetMs: number;
@@ -74,7 +74,8 @@ export class GameSession {
 
     this.judge = new Judge(nd, this.timing, DEFAULT_WINDOWS, config.musicRate);
     this.renderer = new NoteFieldRenderer(nd.numTracks);
-    this.renderer.setScroll(config.scrollMode, config.scrollValue);
+    const maxBpm = this.timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
+    this.renderer.setScroll(config.scrollMode, config.scrollValue, maxBpm);
     this.renderer.setColumnAngles(columnAnglesFor(chart.stepsType, nd.numTracks));
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;

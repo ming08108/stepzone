@@ -65,7 +65,17 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
     update({ keybindings: kb });
   };
 
-  const isC = settings.scrollMode === 'C';
+  const mode = settings.scrollMode;
+  const isX = mode === 'X';
+  const scrollDesc =
+    mode === 'C'
+      ? 'constant speed (BPM-independent)'
+      : mode === 'M'
+        ? "scaled to the song's fastest BPM"
+        : 'multiple of the song BPM';
+  const scrollLabel = isX
+    ? `${settings.scrollValue.toFixed(2)}×`
+    : `${mode}${Math.round(settings.scrollValue)}`;
 
   return (
     <div className="mx-auto max-w-[720px] px-6 pb-16 pt-8">
@@ -83,10 +93,10 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
 
       <Section title="Scroll">
         <div className="mb-3 flex gap-2">
-          {(['C', 'X'] as const).map((m) => (
+          {(['C', 'X', 'M'] as const).map((m) => (
             <button
               key={m}
-              onClick={() => update({ scrollMode: m, scrollValue: m === 'C' ? 550 : 2 })}
+              onClick={() => update({ scrollMode: m, scrollValue: m === 'X' ? 2 : 550 })}
               className={`rounded-lg border px-4 py-1.5 ${
                 settings.scrollMode === m
                   ? 'border-accent bg-accent/10 text-ink'
@@ -96,23 +106,19 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
               {m}Mod
             </button>
           ))}
-          <span className="self-center text-sm text-muted">
-            {isC ? 'constant speed (BPM-independent)' : 'multiple of the song BPM'}
-          </span>
+          <span className="self-center text-sm text-muted">{scrollDesc}</span>
         </div>
         <label className="flex items-center gap-4">
           <input
             type="range"
-            min={isC ? 100 : 0.5}
-            max={isC ? 1200 : 8}
-            step={isC ? 10 : 0.25}
+            min={isX ? 0.5 : 100}
+            max={isX ? 8 : 1200}
+            step={isX ? 0.25 : 10}
             value={settings.scrollValue}
             onChange={(e) => update({ scrollValue: Number(e.target.value) })}
             className="flex-1 accent-[var(--color-accent)]"
           />
-          <span className="w-24 text-right font-mono tabular-nums">
-            {isC ? `C${Math.round(settings.scrollValue)}` : `${settings.scrollValue.toFixed(2)}×`}
-          </span>
+          <span className="w-24 text-right font-mono tabular-nums">{scrollLabel}</span>
         </label>
       </Section>
 

@@ -80,9 +80,11 @@ export class NoteFieldRenderer {
   private colW = 110;
   private arrowS = 46;
 
-  // Scroll: 'C' = constant px/sec (CMod), 'X' = px per beat * multiplier (XMod).
-  private scrollMode: 'C' | 'X' = 'C';
+  // Scroll: C = constant px/sec, X = px/beat * multiplier, M = X scaled to the
+  // song's peak BPM (so the fastest section scrolls at the target rate).
+  private scrollMode: 'C' | 'X' | 'M' = 'C';
   private scrollValue = 550;
+  private songMaxBpm = 200;
   private nowSeconds = 0;
   private nowBeat = 0;
   private columnAngles: number[] = [];
@@ -95,9 +97,10 @@ export class NoteFieldRenderer {
     this.meta = meta;
   }
 
-  setScroll(mode: 'C' | 'X', value: number): void {
+  setScroll(mode: 'C' | 'X' | 'M', value: number, songMaxBpm = 200): void {
     this.scrollMode = mode;
     this.scrollValue = value;
+    this.songMaxBpm = songMaxBpm > 0 ? songMaxBpm : 200;
   }
 
   /** Per-column arrow rotation (radians); see render/columns.ts. */
@@ -153,11 +156,13 @@ export class NoteFieldRenderer {
   }
 
   private yOf(timeSeconds: number, beatValue: number): number {
-    if (this.scrollMode === 'X') {
-      return this.receptorY + (beatValue - this.nowBeat) * SPACING * this.scrollValue;
+    if (this.scrollMode === 'C') {
+      const pxPerSec = (this.scrollValue / 60) * SPACING;
+      return this.receptorY + (timeSeconds - this.nowSeconds) * pxPerSec;
     }
-    const pxPerSec = (this.scrollValue / 60) * SPACING;
-    return this.receptorY + (timeSeconds - this.nowSeconds) * pxPerSec;
+    // X: multiplier is scrollValue. M: multiplier fits the peak BPM to the target.
+    const mult = this.scrollMode === 'M' ? this.scrollValue / this.songMaxBpm : this.scrollValue;
+    return this.receptorY + (beatValue - this.nowBeat) * SPACING * mult;
   }
 
   private arrow(

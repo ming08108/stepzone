@@ -3,12 +3,12 @@
  * Pure data + load/save; the React layer wraps this in a context.
  */
 
-export type ScrollMode = 'C' | 'X';
+export type ScrollMode = 'C' | 'X' | 'M';
 
 export interface Settings {
-  /** 'C' = constant time spacing (CMod), 'X' = multiple of BPM (XMod). */
+  /** 'C' = constant (CMod), 'X' = BPM multiple (XMod), 'M' = max-BPM (MMod). */
   scrollMode: ScrollMode;
-  /** CMod: pixels-per-beat "BPM" (e.g. 550). XMod: multiplier (e.g. 2.0). */
+  /** CMod/MMod: a target BPM (e.g. 550). XMod: a multiplier (e.g. 2.0). */
   scrollValue: number;
   /** Music playback rate (1 = normal; 0.75 = practice slow). */
   musicRate: number;
@@ -72,7 +72,7 @@ export function normalizeSettings(s: Settings): Settings {
   return {
     ...s,
     scrollValue:
-      s.scrollMode === 'C' ? clamp(s.scrollValue, 50, 2000, 550) : clamp(s.scrollValue, 0.25, 8, 2),
+      s.scrollMode === 'X' ? clamp(s.scrollValue, 0.25, 8, 2) : clamp(s.scrollValue, 50, 2000, 550), // C and M are target BPMs
     musicRate: clamp(s.musicRate, 0.25, 2, 1),
     audioOffsetMs: clamp(s.audioOffsetMs, -300, 300, 0),
     visualOffsetMs: clamp(s.visualOffsetMs, -300, 300, 0),
