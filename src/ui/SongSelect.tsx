@@ -9,6 +9,7 @@ import {
   songBpmRange,
   type LibraryEntry,
 } from '../io/songFiles';
+import { fetchRemoteBackground, loadRemoteLibrary, readRemoteAudio } from '../io/remoteLibrary';
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { chartKey, loadScores, totalStats } from '../app/scores';
 import { difficultyToString } from '../song/difficulty';
@@ -46,6 +47,9 @@ export function SongSelect({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [scores] = useState(() => loadScores());
   const [stats] = useState(() => totalStats());
+  const [catalogUrl, setCatalogUrl] = useState(
+    () => localStorage.getItem('notefield.catalogUrl') ?? '',
+  );
   const folderRef = useRef<HTMLInputElement>(null);
   useMenuNav();
 
@@ -89,6 +93,30 @@ export function SongSelect({
     await handleFiles(await filesFromDataTransfer(e.dataTransfer));
   };
 
+  const loadServer = async (url = catalogUrl) => {
+    const u = url.trim();
+    if (!u) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const { entries: remote, warnings } = await loadRemoteLibrary(u);
+      localStorage.setItem('notefield.catalogUrl', u);
+      setEntries((prev) => [...prev.filter((e) => !e.remoteDir), ...remote]);
+      if (remote.length === 0) setError(warnings[0] ?? 'No songs found in catalog.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Auto-load the last server catalog (files come from the local cache if seen).
+  useEffect(() => {
+    const saved = localStorage.getItem('notefield.catalogUrl');
+    if (saved) void loadServer(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggleFav = (key: string) => {
     setFavs((prev) => {
       const next = new Set(prev);
@@ -102,13 +130,11 @@ export function SongSelect({
   const play = async (entry: LibraryEntry, chartIndex: number) => {
     const chart = entry.song.charts[chartIndex];
     if (!chart) return;
-    const audio = await readSongAudio(entry);
-    onPlay({
-      song: entry.song,
-      chart,
-      encodedAudio: audio,
-      backgroundFile: findBackgroundFile(entry),
-    });
+    const audio = entry.remoteDir ? await readRemoteAudio(entry) : await readSongAudio(entry);
+    const backgroundFile = entry.remoteDir
+      ? await fetchRemoteBackground(entry)
+      : findBackgroundFile(entry);
+    onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile });
   };
 
   const stepsTypes = useMemo(() => {
@@ -187,6 +213,24 @@ export function SongSelect({
           </span>
           {busy && <span className="text-muted">Loading…</span>}
           {error && <span className="text-[#ff6b6b]">{error}</span>}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="url"
+            placeholder="https://…/catalog.json  (load a song server)"
+            value={catalogUrl}
+            onChange={(e) => setCatalogUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void loadServer();
+            }}
+            className="min-w-[240px] flex-1 rounded-lg border border-line bg-white/[0.03] px-3 py-1.5 text-sm"
+          />
+          <button
+            onClick={() => void loadServer()}
+            className="rounded-lg border border-line px-4 py-1.5 text-sm text-muted hover:border-accent hover:text-ink"
+          >
+            Load from server
+          </button>
         </div>
         <input
           ref={folderRef}

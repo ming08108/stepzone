@@ -111,6 +111,8 @@ export interface LibraryEntry {
   files: File[];
   sourceName: string;
   bannerUrl: string | null;
+  /** Base URL of the song folder when loaded from a server (see remoteLibrary). */
+  remoteDir?: string;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */
