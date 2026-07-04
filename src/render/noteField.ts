@@ -43,7 +43,9 @@ const JUDGMENT: Record<number, { label: string; color: string }> = {
 const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 
 const SPACING = 64; // base pixels per beat (ITG ARROW_SPACING)
-const HIT_FLASH = 0.18; // seconds
+const RECEPTOR_FLASH = 0.11; // seconds the receptor stays lit after a press
+const EXPLOSION = 0.26; // seconds for the hit explosion ring/glow
+const JUDGMENT_LIFE = 0.7; // seconds the judgment label shows (design keyframes)
 const DRAW_CULL = 100; // px beyond the field before a note is culled
 
 export interface Feedback {
@@ -70,6 +72,22 @@ function traceArrow(ctx: CanvasRenderingContext2D, s: number): void {
   ctx.lineTo(0.42 * s, 0);
   ctx.lineTo(s, 0);
   ctx.closePath();
+}
+
+/** Styling for one arrow draw. Widths are in design units (80px arrow), ds-scaled. */
+interface ArrowStyle {
+  fill?: string | null;
+  stroke?: string | null;
+  lineWidth?: number;
+  alpha?: number;
+  /** Inner-outline color (the STEPLINE noteskin signature); omit for none. */
+  inner?: string | null;
+  innerWidth?: number;
+  /** Soft drop shadow under the body so notes pop off the background. */
+  shadow?: boolean;
+  /** Glow color for hit explosions (applied to fill and stroke). */
+  glow?: string | null;
+  glowBlur?: number;
 }
 
 export class NoteFieldRenderer {
@@ -100,6 +118,9 @@ export class NoteFieldRenderer {
   private reverse = false; // downscroll: receptors at the bottom
   private appearance: 'visible' | 'hidden' | 'sudden' = 'visible';
   private firstVisibleIdx = 0; // forward-only cursor into the time-sorted notes
+  // Combo pop animation state (visual only).
+  private lastCombo = 0;
+  private comboPopAt = -10;
 
   constructor(readonly numTracks: number) {}
 
@@ -180,8 +201,8 @@ export class NoteFieldRenderer {
     const dw = bw * scale;
     const dh = bh * scale;
     ctx.drawImage(bg, (this.width - dw) / 2, (this.height - dh) / 2, dw, dh);
-    // Dim so arrows stay readable.
-    ctx.fillStyle = 'rgba(7,8,12,0.6)';
+    // Dim so arrows stay readable (design: rgba(5,6,8,.6)).
+    ctx.fillStyle = 'rgba(5,6,8,0.6)';
     ctx.fillRect(0, 0, this.width, this.height);
   }
 
@@ -226,32 +247,55 @@ export class NoteFieldRenderer {
     y: number,
     track: number,
     scale: number,
-    fill: string | null,
-    stroke: string | null,
-    lineWidth = 3,
-    alpha = 1,
+    style: ArrowStyle,
   ): void {
+    const {
+      fill = null,
+      stroke = null,
+      lineWidth = 5,
+      alpha = 1,
+      inner = null,
+      innerWidth = 3.5,
+      shadow = false,
+      glow = null,
+      glowBlur = 16,
+    } = style;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
     ctx.rotate(this.angle(track));
     ctx.scale(scale, scale);
+    if (glow) {
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = glowBlur * this.ds;
+    } else if (shadow) {
+      // Design: drop-shadow(0 2px 6px rgba(0,0,0,.5)) so notes pop off the bg.
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 6 * this.ds;
+      ctx.shadowOffsetY = 2 * this.ds;
+    }
     traceArrow(ctx, this.arrowS);
     if (fill) {
       ctx.fillStyle = fill;
       ctx.fill();
     }
     if (stroke) {
-      ctx.lineWidth = lineWidth;
+      ctx.lineWidth = lineWidth * this.ds;
       ctx.strokeStyle = stroke;
       ctx.stroke();
     }
-    if (fill) {
-      // STEPLINE signature: a bright inner outline (arrow scaled 0.72 about center).
+    if (inner) {
+      if (shadow && !glow) {
+        // The inner outline should not re-cast the drop shadow.
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+      }
+      // STEPLINE signature: an inner outline (arrow scaled 0.72 about center).
       ctx.scale(0.72, 0.72);
       traceArrow(ctx, this.arrowS);
-      ctx.lineWidth = 3.2 / 0.72;
-      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+      ctx.lineWidth = (innerWidth * this.ds) / 0.72;
+      ctx.strokeStyle = inner;
       ctx.stroke();
     }
     ctx.restore();
@@ -265,7 +309,7 @@ export class NoteFieldRenderer {
     progress: number,
     fb: Feedback,
   ): void {
-    const { width, height } = this;
+    const { width, height, ds } = this;
     this.nowSeconds = now;
     this.nowBeat = beat;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -277,32 +321,56 @@ export class NoteFieldRenderer {
       try {
         this.drawBackground(ctx, this.background);
       } catch {
-        ctx.fillStyle = '#07080c';
+        ctx.fillStyle = '#0b0c0e';
         ctx.fillRect(0, 0, width, height);
       }
     } else if (this.transparentBg) {
       ctx.clearRect(0, 0, width, height);
     } else {
-      ctx.fillStyle = '#07080c';
+      ctx.fillStyle = '#0b0c0e';
       ctx.fillRect(0, 0, width, height);
     }
+
+    // Sawtooth beat pulse: peaks on each beat, decays linearly to the next.
+    const beatPulse = 1 - (beat - Math.floor(beat));
+    const recY = this.recY();
+
     // STEPLINE left-aligned playfield panel: translucent dark with hairline sides.
     const pL = this.panelLeft;
     const pR = this.panelLeft + this.panelWidth;
     ctx.fillStyle = 'rgba(5,6,8,0.55)';
     ctx.fillRect(pL, 0, this.panelWidth, height);
-    ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+    // Faint lane separators give the field its arcade structure.
+    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
     ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let t = 1; t < this.numTracks; t++) {
+      const x = Math.round(this.fieldLeft + t * this.colW) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.09)';
     ctx.beginPath();
     ctx.moveTo(pL + 0.5, 0);
     ctx.lineTo(pL + 0.5, height);
     ctx.moveTo(pR - 0.5, 0);
     ctx.lineTo(pR - 0.5, height);
     ctx.stroke();
-    // Receptor glow line.
-    const recY = this.recY();
-    ctx.fillStyle = 'rgba(255,255,255,0.04)';
-    ctx.fillRect(pL, recY - 44 * this.ds, this.panelWidth, 88 * this.ds);
+    // Scrims seat the life bar / progress bar against bright backgrounds.
+    let scrim = ctx.createLinearGradient(0, 0, 0, 110 * ds);
+    scrim.addColorStop(0, 'rgba(5,6,8,0.6)');
+    scrim.addColorStop(1, 'rgba(5,6,8,0)');
+    ctx.fillStyle = scrim;
+    ctx.fillRect(pL, 0, this.panelWidth, 110 * ds);
+    scrim = ctx.createLinearGradient(0, height - 90 * ds, 0, height);
+    scrim.addColorStop(0, 'rgba(5,6,8,0)');
+    scrim.addColorStop(1, 'rgba(5,6,8,0.6)');
+    ctx.fillStyle = scrim;
+    ctx.fillRect(pL, height - 90 * ds, this.panelWidth, 90 * ds);
+    // Receptor band, breathing gently with the beat.
+    ctx.fillStyle = `rgba(255,255,255,${(0.03 + 0.025 * beatPulse).toFixed(3)})`;
+    ctx.fillRect(pL, recY - 44 * ds, this.panelWidth, 88 * ds);
 
     // Advance the visible-window cursor past notes that have scrolled off the
     // exit side (their tail included). Notes are time-sorted and scroll is
@@ -325,23 +393,20 @@ export class NoteFieldRenderer {
       if (n.note.type === TapNoteType.HoldHead && !n.holdResolved) this.drawHold(ctx, n);
     }
 
-    // Receptors (pulse to the beat).
-    const frac = beat - Math.floor(beat);
-    const pulse = 1 + 0.12 * (1 - frac);
+    // Receptors: stroke brightness pulses on the beat (design: .4 + .45·pulse);
+    // a press flashes the fill bright white for ~110ms and dips the scale.
+    const recStroke = `rgba(236,236,236,${(0.4 + 0.45 * beatPulse).toFixed(3)})`;
     for (let t = 0; t < this.numTracks; t++) {
       const x = this.laneX(t);
       const flashAge = now - (fb.laneFlash[t] ?? -1);
-      const pressed = flashAge >= 0 && flashAge < 0.1;
-      this.arrow(
-        ctx,
-        x,
-        recY,
-        t,
-        pulse,
-        pressed ? 'rgba(255,255,255,0.12)' : null,
-        `rgba(190,200,220,${pressed ? 0.95 : 0.5})`,
-        3,
-      );
+      const pressed = flashAge >= 0 && flashAge < RECEPTOR_FLASH;
+      this.arrow(ctx, x, recY, t, pressed ? 0.94 : 1, {
+        fill: pressed ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.05)',
+        stroke: pressed ? 'rgba(236,236,236,0.95)' : recStroke,
+        lineWidth: 5,
+        inner: 'rgba(236,236,236,0.25)',
+        innerWidth: 4,
+      });
     }
 
     // Notes and unhit hold heads (windowed).
@@ -359,21 +424,45 @@ export class NoteFieldRenderer {
       if (a <= 0.01) continue;
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
       else {
-        const c = QUANT_COLOR[getNoteType(n.row)];
-        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, '#0a0b0d', 5, a);
+        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, {
+          fill: QUANT_COLOR[getNoteType(n.row)],
+          stroke: '#0a0b0d',
+          lineWidth: 6,
+          alpha: a,
+          inner: 'rgba(255,255,255,0.92)',
+          shadow: true,
+        });
       }
     }
 
-    // Hit explosions.
+    // Hit explosions: an additive glow ghost plus an expanding, fading ring in
+    // the judgment color over the receptor.
     for (let t = 0; t < this.numTracks; t++) {
       const hit = fb.laneHit[t];
       if (!hit) continue;
       const age = now - hit.atSeconds;
-      if (age < 0 || age >= HIT_FLASH) continue;
-      const k = age / HIT_FLASH;
+      if (age < 0 || age >= EXPLOSION) continue;
+      const k = age / EXPLOSION;
+      const fade = 1 - k;
       const j = JUDGMENT[hit.tns];
       const color = j ? j.color : '#ffffff';
-      this.arrow(ctx, this.laneX(t), recY, t, 1 + k * 0.8, null, color, 4, 1 - k);
+      const x = this.laneX(t);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      this.arrow(ctx, x, recY, t, 1 + k * 0.4, {
+        fill: color,
+        alpha: 0.45 * fade,
+        glow: color,
+        glowBlur: 26,
+      });
+      ctx.restore();
+      this.arrow(ctx, x, recY, t, 1 + k * 0.7, {
+        stroke: color,
+        lineWidth: 5,
+        alpha: fade,
+        glow: color,
+        glowBlur: 20,
+      });
     }
 
     this.drawHud(ctx, judge, now, progress, fb);
@@ -383,18 +472,26 @@ export class NoteFieldRenderer {
     const x = this.laneX(n.track);
     let headY = this.yOf(n.time, n.beat);
     const tailY = this.yOf(n.tailTime, noteRowToBeat(n.tailRow));
-    if (n.holdInitiated && this.nowSeconds >= n.time) headY = this.recY();
+    const held = n.holdInitiated && this.nowSeconds >= n.time;
+    if (held) headY = this.recY();
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;
     const w = this.arrowS;
     ctx.save();
-    ctx.fillStyle = alive ? 'rgba(89,240,127,0.35)' : 'rgba(120,120,120,0.3)';
     ctx.beginPath();
     ctx.roundRect(x - w / 2, top, w, Math.max(0, bottom - top), w / 2);
+    if (alive && held) {
+      // Actively held: glow so the lane reads as engaged.
+      ctx.shadowColor = 'rgba(89,240,127,0.7)';
+      ctx.shadowBlur = 14 * this.ds;
+    }
+    ctx.fillStyle = alive ? 'rgba(89,240,127,0.35)' : 'rgba(120,120,120,0.3)';
     ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
     if (alive) {
-      ctx.strokeStyle = 'rgba(89,240,127,0.6)';
+      ctx.strokeStyle = held ? 'rgba(89,240,127,0.9)' : 'rgba(89,240,127,0.6)';
       ctx.lineWidth = 2 * this.ds;
       ctx.stroke();
     }
@@ -405,13 +502,21 @@ export class NoteFieldRenderer {
     const r = this.arrowS * 0.8;
     ctx.save();
     ctx.translate(x, y);
-    ctx.strokeStyle = '#ff4d4d';
-    ctx.fillStyle = 'rgba(255,77,77,0.18)';
-    ctx.lineWidth = 3;
+    ctx.rotate(this.nowSeconds * 1.6); // slow menacing spin
+    const core = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r);
+    core.addColorStop(0, 'rgba(255,120,110,0.55)');
+    core.addColorStop(0.65, 'rgba(160,20,20,0.35)');
+    core.addColorStop(1, 'rgba(60,4,4,0.25)');
+    ctx.fillStyle = core;
+    ctx.strokeStyle = '#ff4d3d';
+    ctx.lineWidth = 3 * this.ds;
+    ctx.shadowColor = 'rgba(255,77,61,0.6)';
+    ctx.shadowBlur = 10 * this.ds;
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    ctx.shadowBlur = 0;
     // Spikes.
     ctx.beginPath();
     for (let i = 0; i < 8; i++) {
@@ -439,27 +544,48 @@ export class NoteFieldRenderer {
     const pcx = pL + pW / 2;
     const lx = pL + 14 * ds;
     const lw = pW - 28 * ds;
+    const beatPulse = 1 - (this.nowBeat - Math.floor(this.nowBeat));
 
-    // Life bar (top of the playfield panel).
+    // Life bar (top of the playfield panel): dark rim, gradient fill scaled to
+    // the current life, a bright cap, and a beat-synced pulse when critical.
+    const barY = 14 * ds;
+    const barH = 8 * ds;
     ctx.save();
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    ctx.fillRect(lx, 14 * ds, lw, 8 * ds);
+    ctx.fillRect(lx, barY, lw, barH);
     const life = judge.failed ? 0 : judge.life;
     if (life > 0) {
-      if (life < 0.25) ctx.fillStyle = '#ff4d3d';
-      else {
-        const g = ctx.createLinearGradient(lx, 0, lx + lw, 0);
+      const fw = Math.max(2, lw * life);
+      if (life < 0.25) {
+        ctx.globalAlpha = 0.55 + 0.45 * beatPulse; // danger pulse
+        ctx.fillStyle = '#ff4d3d';
+        ctx.fillRect(lx, barY, fw, barH);
+        ctx.globalAlpha = 1;
+      } else {
+        const g = ctx.createLinearGradient(lx, 0, lx + fw, 0);
         g.addColorStop(0, '#ff4d3d');
         g.addColorStop(1, '#ffd23d');
         ctx.fillStyle = g;
+        ctx.fillRect(lx, barY, fw, barH);
       }
-      ctx.fillRect(lx, 14 * ds, Math.max(2, lw * life), 8 * ds);
+      if (life < 1) {
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillRect(lx + fw - 1.5 * ds, barY, 1.5 * ds, barH);
+      }
     }
-    // Song progress (bottom of the panel).
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(lx - 0.5, barY - 0.5, lw + 1, barH + 1);
+    // Song progress (bottom of the panel) with a bright playhead cap.
     ctx.fillStyle = 'rgba(255,255,255,0.1)';
     ctx.fillRect(lx, height - 14 * ds, lw, 4 * ds);
+    const prog = Math.max(0, Math.min(1, progress));
     ctx.fillStyle = '#ff4d3d';
-    ctx.fillRect(lx, height - 14 * ds, lw * Math.max(0, Math.min(1, progress)), 4 * ds);
+    ctx.fillRect(lx, height - 14 * ds, lw * prog, 4 * ds);
+    if (prog > 0 && prog < 1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillRect(lx + lw * prog - 1 * ds, height - 14 * ds, 1.5 * ds, 4 * ds);
+    }
     ctx.restore();
 
     // Song info (to the right of the panel).
@@ -491,31 +617,49 @@ export class NoteFieldRenderer {
     ctx.fillText(`MAX COMBO ${judge.maxCombo}`, width - 28 * ds, 82 * ds);
     ctx.restore();
 
-    // Judgment (centered over the panel, pops).
+    // Judgment (centered over the panel): design keyframes — scale 1.4→1 with
+    // fade-in over the first 18%, hold to 75%, then fade out (0.7s total).
     if (fb.lastJudgment) {
       const age = now - fb.lastJudgment.atSeconds;
       const j = JUDGMENT[fb.lastJudgment.tns];
-      if (j && age >= 0 && age < 0.7) {
-        const pop = age < 0.08 ? 1.4 - (age / 0.08) * 0.4 : 1;
+      if (j && age >= 0 && age < JUDGMENT_LIFE) {
+        const t = age / JUDGMENT_LIFE;
+        const pop = t < 0.18 ? 1.4 - (t / 0.18) * 0.4 : 1;
+        const alpha = t < 0.18 ? 0.35 + 0.65 * (t / 0.18) : t > 0.75 ? (1 - t) / 0.25 : 1;
         ctx.save();
-        ctx.globalAlpha = age > 0.5 ? Math.max(0, 1 - (age - 0.5) / 0.2) : 1;
+        ctx.globalAlpha = alpha;
         ctx.translate(pcx, height * 0.42);
         ctx.scale(pop, pop);
         ctx.fillStyle = j.color;
         ctx.font = font(700, 38);
         ctx.textAlign = 'center';
+        if ('letterSpacing' in ctx) ctx.letterSpacing = `${(3 * ds).toFixed(2)}px`;
+        ctx.shadowColor = 'rgba(0,0,0,0.7)';
+        ctx.shadowBlur = 14 * ds;
+        ctx.shadowOffsetY = 2 * ds;
         ctx.fillText(j.label, 0, 0);
         ctx.restore();
       }
     }
 
-    // Combo (centered over the panel).
+    // Combo (centered over the panel) — pops briefly each time it increments.
+    if (judge.combo !== this.lastCombo) {
+      if (judge.combo > this.lastCombo) this.comboPopAt = now;
+      this.lastCombo = judge.combo;
+    }
     if (judge.combo > 3) {
+      const k = Math.max(0, Math.min(1, (now - this.comboPopAt) / 0.13));
+      const pop = 1 + 0.22 * (1 - k);
       ctx.save();
+      ctx.translate(pcx, height * 0.5);
+      ctx.scale(pop, pop);
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#ececec';
+      ctx.fillStyle = 'rgba(236,236,236,0.92)';
       ctx.font = font(700, 52);
-      ctx.fillText(String(judge.combo), pcx, height * 0.5);
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 12 * ds;
+      ctx.shadowOffsetY = 2 * ds;
+      ctx.fillText(String(judge.combo), 0, 0);
       ctx.restore();
     }
   }
