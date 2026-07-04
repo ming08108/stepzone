@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import exampleSsc from '../dev/example.ssc?raw';
-import { parseSimfile } from '../parse/loader';
 import { GameSession } from '../game/session';
 import { keyToColumn } from '../input/keymap';
+import { difficultyToString } from '../song/difficulty';
+import type { PlayRequest } from './playRequest';
 
 type Phase = 'ready' | 'playing' | 'done';
 
@@ -16,14 +16,13 @@ interface Result {
 const CTL_BTN =
   'rounded-lg border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-sm font-semibold text-white/75 hover:bg-white/15 hover:text-white';
 
-export function Play({ onInspect }: { onInspect: () => void }) {
+export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
 
-  // Keep the canvas backing store matched to the (full-screen) element.
   useEffect(() => {
     const onResize = () => {
       const c = canvasRef.current;
@@ -37,7 +36,6 @@ export function Play({ onInspect }: { onInspect: () => void }) {
     };
   }, []);
 
-  // Route keyboard to the active session, on the event's own timestamp.
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.repeat) return;
@@ -66,11 +64,7 @@ export function Play({ onInspect }: { onInspect: () => void }) {
     if (!canvas) return;
     sessionRef.current?.stop();
 
-    const song = parseSimfile(exampleSsc, 'example.ssc');
-    const chart = song.charts[0];
-    if (!chart) return;
-
-    const session = new GameSession(song, chart, canvas);
+    const session = new GameSession(req.song, req.chart, canvas);
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
       setResult({
@@ -87,7 +81,7 @@ export function Play({ onInspect }: { onInspect: () => void }) {
     }
     setResult(null);
     setPhase('playing');
-    await session.start();
+    await session.start(req.encodedAudio);
   };
 
   const toggleFullscreen = () => {
@@ -97,6 +91,9 @@ export function Play({ onInspect }: { onInspect: () => void }) {
     else void el.requestFullscreen?.();
   };
 
+  const title = req.song.title || 'Untitled';
+  const diff = `${req.chart.stepsType} · ${difficultyToString(req.chart.difficulty)} ${req.chart.meter}`;
+
   return (
     <div ref={wrapRef} className="fixed inset-0 overflow-hidden bg-night">
       <canvas ref={canvasRef} className="block h-full w-full" />
@@ -105,8 +102,8 @@ export function Play({ onInspect }: { onInspect: () => void }) {
         <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
           ⛶
         </button>
-        <button onClick={onInspect} className={CTL_BTN}>
-          Inspect
+        <button onClick={onExit} className={CTL_BTN}>
+          ← Menu
         </button>
       </div>
 
@@ -114,13 +111,10 @@ export function Play({ onInspect }: { onInspect: () => void }) {
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
           {phase === 'ready' && (
             <>
-              <div className="text-[2.4rem] font-extrabold tracking-tight text-accent">
-                notefield
-              </div>
-              <h2 className="m-0 text-2xl tracking-wide">Example — dance-single (Hard)</h2>
+              <div className="text-2xl font-extrabold tracking-tight text-accent">notefield</div>
+              <h2 className="m-0 text-3xl tracking-wide">{title}</h2>
+              <p className="m-0 text-muted">{diff}</p>
               <p className="m-0 max-w-[30rem] text-ink">
-                Hit each arrow as it reaches the receptors.
-                <br />
                 <kbd className="kbd">←</kbd> <kbd className="kbd">↓</kbd>{' '}
                 <kbd className="kbd">↑</kbd> <kbd className="kbd">→</kbd> &nbsp;or&nbsp;{' '}
                 <kbd className="kbd">D</kbd> <kbd className="kbd">F</kbd>{' '}
@@ -129,9 +123,6 @@ export function Play({ onInspect }: { onInspect: () => void }) {
               <button className="cta" onClick={start}>
                 ▶ Play
               </button>
-              <p className="m-0 max-w-[30rem] text-muted">
-                A metronome plays on each beat (the example has no audio).
-              </p>
             </>
           )}
           {phase === 'done' && result && (
@@ -143,10 +134,15 @@ export function Play({ onInspect }: { onInspect: () => void }) {
               <div className="text-[3.5rem] font-black leading-none text-[#ffd94b]">
                 {result.grade}
               </div>
-              <div className="m-0 max-w-[30rem] text-muted">max combo {result.maxCombo}</div>
-              <button className="cta" onClick={start}>
-                ↻ Play again
-              </button>
+              <div className="text-muted">max combo {result.maxCombo}</div>
+              <div className="mt-2 flex gap-3">
+                <button className="cta" onClick={start}>
+                  ↻ Play again
+                </button>
+                <button className={CTL_BTN} onClick={onExit}>
+                  ← Menu
+                </button>
+              </div>
             </>
           )}
         </div>

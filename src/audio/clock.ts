@@ -35,9 +35,10 @@ export class WebAudioClock {
     if (this.ctx.state !== 'running') await this.ctx.resume();
   }
 
-  /** Decode an encoded audio file (ArrayBuffer) into a playable buffer. */
+  /** Decode an encoded audio file (ArrayBuffer) into a playable buffer.
+   *  Decodes a copy so the caller's ArrayBuffer stays usable (replays). */
   async load(encoded: ArrayBuffer): Promise<void> {
-    this.buffer = await this.ctx.decodeAudioData(encoded);
+    this.buffer = await this.ctx.decodeAudioData(encoded.slice(0));
   }
 
   /** Use a pre-made buffer (e.g. a synthesized click track). */

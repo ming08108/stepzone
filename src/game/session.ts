@@ -27,7 +27,10 @@ export class GameSession {
   private readonly held: boolean[];
   private readonly feedback: Feedback;
   private readonly clicks: Click[] = [];
-  private readonly endSeconds: number;
+  private endSeconds: number;
+
+  /** True once real decoded audio is playing (false = metronome fallback). */
+  usingRealAudio = false;
 
   private dpr = 1;
   private raf = 0;
@@ -89,10 +92,28 @@ export class GameSession {
     this.renderer.resize(width, height, this.dpr);
   }
 
-  async start(): Promise<void> {
+  /**
+   * Start playback. Pass the song's encoded audio bytes to play the real track;
+   * omit it (or pass null) to play a synthesized metronome instead.
+   */
+  async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
     await this.clock.resume();
-    const buffer = makeClickTrack(this.clock.ctx, this.clicks, this.endSeconds + 0.5);
-    this.clock.setBuffer(buffer);
+    let usedAudio = false;
+    if (encodedAudio) {
+      try {
+        await this.clock.load(encodedAudio);
+        // Play until the later of the last note and the end of the music.
+        this.endSeconds = Math.max(this.endSeconds, this.clock.durationSeconds);
+        usedAudio = true;
+      } catch {
+        // Unsupported/corrupt audio — fall back to the metronome below.
+      }
+    }
+    this.usingRealAudio = usedAudio;
+    if (!usedAudio) {
+      const buffer = makeClickTrack(this.clock.ctx, this.clicks, this.endSeconds + 0.5);
+      this.clock.setBuffer(buffer);
+    }
     this.clock.start(0, LEAD_IN_SECONDS); // negative song time during lead-in
     this.running = true;
     this.raf = requestAnimationFrame(this.loop);
