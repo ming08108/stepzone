@@ -25,6 +25,7 @@ import {
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import type { PlayRequest } from './playRequest';
+import { useGamepadKeys } from './useGamepadKeys';
 
 const AC = '#ff4d3d';
 const DIFF_NAMES = ['BEGINNER', 'EASY', 'MEDIUM', 'HARD', 'EXPERT'];
@@ -108,6 +109,7 @@ export function SongSelect({
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  useGamepadKeys();
 
   // Measure the (fluid) list viewport for virtualization + centering.
   useEffect(() => {

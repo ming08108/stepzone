@@ -10,6 +10,7 @@ import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
+import { useGamepadKeys } from './useGamepadKeys';
 
 const SPACING = [
   { key: 'TIGHT', mult: 0.75 },
@@ -151,6 +152,7 @@ export function PlayerOptions({
   const { update } = useSettings();
   const [opts, setOpts] = useState<Opts>(loadOpts);
   const [row, setRow] = useState(0);
+  useGamepadKeys();
 
   useEffect(() => {
     localStorage.setItem('stepline.options', JSON.stringify(opts));
