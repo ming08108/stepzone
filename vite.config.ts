@@ -53,4 +53,10 @@ function songsPlugin(): Plugin {
 // not use these plugins (the engine imports no React/DOM/CSS).
 export default defineConfig({
   plugins: [react(), tailwindcss(), songsPlugin()],
+  server: {
+    watch: {
+      // Don't watch (and choke on) stray archives/media dropped in the project.
+      ignored: ['**/*.zip', '**/*.7z', '**/*.rar', '**/*.mp4', '**/*.mov'],
+    },
+  },
 });

@@ -14,6 +14,10 @@ export interface RemoteSong {
   /** Pre-read metadata so the client can render rows without fetching each simfile. */
   title?: string;
   artist?: string;
+  /** Display BPM, e.g. "148" or "120–160". */
+  bpm?: string;
+  /** dance-single meters by difficulty slot [Beginner, Easy, Medium, Hard, Expert]; null = no chart. */
+  levels?: Array<number | null>;
   /** Top-level pack folder, for grouping/display. */
   pack?: string;
 }

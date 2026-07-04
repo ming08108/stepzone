@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Play } from './Play';
 import { Inspector } from './Inspector';
-import { SongSelect } from './SongSelect';
+import { SongSelect } from './SongSelectStepline';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import type { PlayRequest } from './playRequest';

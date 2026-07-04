@@ -78,6 +78,8 @@ export async function loadRemoteLibrary(
       bannerUrl: s.banner ? new URL(s.banner, songDir).href : null,
       remoteDir: songDir,
       remoteSm: s.sm,
+      bpm: s.bpm,
+      levels: s.levels,
     });
   }
   if (entries.length === 0) warnings.push('Catalog listed no songs.');

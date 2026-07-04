@@ -15,6 +15,7 @@
   --color-accent2: #21e6d6; /* cyan neon (the complement) */
   --color-night: #07070c;
   --font-display: 'Chakra Petch', system-ui, sans-serif;
+  --font-grotesk: 'Space Grotesk', system-ui, sans-serif;
 }
 
 @layer base {
@@ -83,6 +84,27 @@
     *::after {
       animation-duration: 0.001ms !important;
       transition-duration: 0.001ms !important;
+    }
+  }
+
+  /* STEPLINE (song select) animations. */
+  @keyframes toastPop {
+    from {
+      transform: scale(0.82);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  @keyframes blinkStart {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
     }
   }
 }

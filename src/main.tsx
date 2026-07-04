@@ -5,6 +5,10 @@ import '@fontsource/chakra-petch/500.css';
 import '@fontsource/chakra-petch/600.css';
 import '@fontsource/chakra-petch/700.css';
 import '@fontsource/chakra-petch/700-italic.css';
+// Space Grotesk — the STEPLINE handoff typeface (song select).
+import '@fontsource/space-grotesk/400.css';
+import '@fontsource/space-grotesk/500.css';
+import '@fontsource/space-grotesk/700.css';
 import { App } from './ui/App';
 import { SettingsProvider } from './ui/SettingsContext';
 import './index.css';

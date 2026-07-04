@@ -115,6 +115,10 @@ export interface LibraryEntry {
   remoteDir?: string;
   /** Simfile filename for a remote entry (loaded lazily on open/play). */
   remoteSm?: string;
+  /** Catalog-provided display BPM (e.g. "148" / "120–160"), for lists before load. */
+  bpm?: string;
+  /** Catalog-provided dance-single meters [Beginner, Easy, Medium, Hard, Expert]. */
+  levels?: Array<number | null>;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */

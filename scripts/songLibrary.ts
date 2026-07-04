@@ -3,10 +3,33 @@
  * (vite.config.ts) and the standalone server (song-server.ts): scan a Songs tree
  * into a catalog, and serve files with correct MIME types + HTTP Range.
  */
-import { closeSync, createReadStream, openSync, readdirSync, readSync, statSync } from 'node:fs';
+import { createReadStream, readdirSync, readFileSync, statSync } from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import { basename, extname, join, relative, sep } from 'node:path';
 import type { RemoteCatalog, RemoteSong } from '../src/io/catalog';
+
+/** Difficulty name → STEPLINE slot (Beginner, Easy, Medium, Hard, Expert). */
+const DIFF_SLOT: Record<string, number> = {
+  beginner: 0,
+  novice: 0,
+  easy: 1,
+  basic: 1,
+  light: 1,
+  medium: 2,
+  another: 2,
+  standard: 2,
+  trick: 2,
+  difficult: 2,
+  hard: 3,
+  maniac: 3,
+  heavy: 3,
+  ssr: 3,
+  challenge: 4,
+  expert: 4,
+  oni: 4,
+  smaniac: 4,
+  edit: 4,
+};
 
 const MAX_DEPTH = 6;
 const SIM = new Set(['.sm', '.ssc', '.sma']);
@@ -34,22 +57,56 @@ export const MIME: Record<string, string> = {
 };
 const ext = (n: string): string => extname(n).toLowerCase();
 
-/** Cheaply read #TITLE / #ARTIST from a simfile header (first 8 KB). */
-function readMeta(file: string): { title: string; artist: string } {
+interface SongMeta {
+  title: string;
+  artist: string;
+  bpm: string;
+  levels: Array<number | null>;
+}
+
+/** Read title/artist, display BPM, and dance-single meters from a simfile. */
+function readSongMeta(file: string): SongMeta {
+  let text: string;
   try {
-    const fd = openSync(file, 'r');
-    const buf = Buffer.alloc(8192);
-    const n = readSync(fd, buf, 0, 8192, 0);
-    closeSync(fd);
-    const text = buf.subarray(0, n).toString('utf8');
-    const grab = (tag: string): string => {
-      const m = new RegExp(`#${tag}:([^;\\r\\n]*)`, 'i').exec(text);
-      return m ? m[1].trim() : '';
-    };
-    return { title: grab('TITLE'), artist: grab('ARTIST') };
+    text = readFileSync(file, 'utf8');
   } catch {
-    return { title: '', artist: '' };
+    return { title: '', artist: '', bpm: '', levels: [null, null, null, null, null] };
   }
+  const grab = (tag: string): string => {
+    const m = new RegExp(`#${tag}:([^;\\r\\n]*)`, 'i').exec(text);
+    return m ? m[1].trim() : '';
+  };
+
+  // BPM range from #BPMS (beat=bpm,...).
+  const bpmVals = grab('BPMS')
+    .split(',')
+    .map((p) => parseFloat(p.split('=')[1]))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  let bpm = '';
+  if (bpmVals.length) {
+    const lo = Math.round(Math.min(...bpmVals));
+    const hi = Math.round(Math.max(...bpmVals));
+    bpm = lo === hi ? String(hi) : `${lo}–${hi}`;
+  }
+
+  // dance-single meters, mapped to difficulty slots (keep the hardest per slot).
+  const levels: Array<number | null> = [null, null, null, null, null];
+  const set = (diff: string, meter: number) => {
+    const slot = DIFF_SLOT[diff.trim().toLowerCase()];
+    if (slot != null && (levels[slot] == null || meter > (levels[slot] as number)))
+      levels[slot] = meter;
+  };
+  for (const m of text.matchAll(/#NOTES:\s*dance-single\s*:[^:]*:\s*([^:]+?)\s*:\s*(\d+)\s*:/gi)) {
+    set(m[1], parseInt(m[2], 10));
+  }
+  for (const block of text.split(/#NOTEDATA/i).slice(1)) {
+    if (!/#STEPSTYPE:\s*dance-single/i.test(block)) continue;
+    const d = /#DIFFICULTY:\s*([^;]+);/i.exec(block);
+    const mt = /#METER:\s*(\d+)/i.exec(block);
+    if (d && mt) set(d[1], parseInt(mt[1], 10));
+  }
+
+  return { title: grab('TITLE'), artist: grab('ARTIST'), bpm, levels };
 }
 
 /** Walk the tree; a folder holding a simfile is a song (don't descend further). */
@@ -79,13 +136,15 @@ function scan(root: string, dir: string, depth: number, songs: RemoteSong[]): vo
   if (sm && SIM.has(ext(sm))) {
     const rel = relative(root, dir).split(sep).join('/');
     const banner = files.find((f) => /(banner|-bn|jacket)/i.test(f) && IMG.has(ext(f)));
-    const { title, artist } = readMeta(join(dir, sm));
+    const meta = readSongMeta(join(dir, sm));
     songs.push({
       dir: rel,
       sm,
       ...(banner ? { banner } : {}),
-      title: title || basename(rel),
-      artist,
+      title: meta.title || basename(rel),
+      artist: meta.artist,
+      bpm: meta.bpm,
+      levels: meta.levels,
       pack: rel.split('/')[0] || '',
     });
     return;
