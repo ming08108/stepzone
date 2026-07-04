@@ -90,6 +90,8 @@ export class NoteFieldRenderer {
   private columnAngles: number[] = [];
   private background: HTMLVideoElement | HTMLImageElement | null = null;
   private transparentBg = false; // let a WebGPU layer behind show through
+  private reverse = false; // downscroll: receptors at the bottom
+  private appearance: 'visible' | 'hidden' | 'sudden' = 'visible';
   private firstVisibleIdx = 0; // forward-only cursor into the time-sorted notes
 
   constructor(readonly numTracks: number) {}
@@ -117,6 +119,16 @@ export class NoteFieldRenderer {
   /** When true (and no bg media), clear to transparent so a WebGPU layer shows. */
   setTransparentBg(v: boolean): void {
     this.transparentBg = v;
+  }
+
+  /** Reverse (downscroll) puts the receptors at the bottom. */
+  setReverse(v: boolean): void {
+    this.reverse = v;
+  }
+
+  /** Appearance mod: fade arrows near ('hidden') or far from ('sudden') the receptor. */
+  setAppearance(a: 'visible' | 'hidden' | 'sudden'): void {
+    this.appearance = a;
   }
 
   resize(width: number, height: number, dpr = 1): void {
@@ -161,14 +173,39 @@ export class NoteFieldRenderer {
     ctx.fillRect(0, 0, this.width, this.height);
   }
 
+  /** Effective receptor Y (bottom of the field under reverse). */
+  private recY(): number {
+    return this.reverse ? this.height - this.receptorY : this.receptorY;
+  }
+
   private yOf(timeSeconds: number, beatValue: number): number {
+    const rec = this.recY();
+    const dir = this.reverse ? -1 : 1;
     if (this.scrollMode === 'C') {
       const pxPerSec = (this.scrollValue / 60) * SPACING;
-      return this.receptorY + (timeSeconds - this.nowSeconds) * pxPerSec;
+      return rec + dir * (timeSeconds - this.nowSeconds) * pxPerSec;
     }
     // X: multiplier is scrollValue. M: multiplier fits the peak BPM to the target.
     const mult = this.scrollMode === 'M' ? this.scrollValue / this.songMaxBpm : this.scrollValue;
-    return this.receptorY + (beatValue - this.nowBeat) * SPACING * mult;
+    return rec + dir * (beatValue - this.nowBeat) * SPACING * mult;
+  }
+
+  /** Alpha for hidden/sudden mods: 0 at the receptor (hidden) or far away (sudden). */
+  private appearanceAlpha(y: number): number {
+    if (this.appearance === 'visible') return 1;
+    const p = Math.abs(y - this.recY()) / Math.max(1, this.height);
+    const step = (a: number, b: number, x: number) => Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return this.appearance === 'hidden' ? step(0.12, 0.4, p) : 1 - step(0.5, 0.78, p);
+  }
+
+  /** Has this y scrolled off the exit side of the field? */
+  private passed(y: number): boolean {
+    return this.reverse ? y > this.height + DRAW_CULL : y < -DRAW_CULL;
+  }
+
+  /** Is this y not yet on screen (still approaching)? */
+  private notYet(y: number): boolean {
+    return this.reverse ? y < -DRAW_CULL : y > this.height + DRAW_CULL;
   }
 
   private arrow(
@@ -237,12 +274,13 @@ export class NoteFieldRenderer {
     ctx.fillStyle = grad;
     ctx.fillRect(fieldL, 0, fieldW, height);
     // Receptor glow line.
+    const recY = this.recY();
     ctx.fillStyle = 'rgba(120,150,255,0.06)';
-    ctx.fillRect(fieldL, this.receptorY - 44, fieldW, 88);
+    ctx.fillRect(fieldL, recY - 44, fieldW, 88);
 
     // Advance the visible-window cursor past notes that have scrolled off the
-    // top (their tail included). Notes are time-sorted and scroll is monotonic,
-    // so this only moves forward — O(visible) drawing per frame (todo #14).
+    // exit side (their tail included). Notes are time-sorted and scroll is
+    // monotonic, so this only moves forward — O(visible) drawing (todo #14).
     const notes = judge.notes;
     while (this.firstVisibleIdx < notes.length) {
       const n = notes[this.firstVisibleIdx];
@@ -250,14 +288,14 @@ export class NoteFieldRenderer {
         n.note.type === TapNoteType.HoldHead
           ? this.yOf(n.tailTime, noteRowToBeat(n.tailRow))
           : this.yOf(n.time, n.beat);
-      if (endY < -DRAW_CULL) this.firstVisibleIdx++;
+      if (this.passed(endY)) this.firstVisibleIdx++;
       else break;
     }
 
     // Holds behind arrows (windowed).
     for (let i = this.firstVisibleIdx; i < notes.length; i++) {
       const n = notes[i];
-      if (this.yOf(n.time, n.beat) > height + DRAW_CULL) break;
+      if (this.notYet(this.yOf(n.time, n.beat))) break;
       if (n.note.type === TapNoteType.HoldHead && !n.holdResolved) this.drawHold(ctx, n);
     }
 
@@ -271,7 +309,7 @@ export class NoteFieldRenderer {
       this.arrow(
         ctx,
         x,
-        this.receptorY,
+        recY,
         t,
         pulse,
         pressed ? 'rgba(255,255,255,0.12)' : null,
@@ -284,17 +322,19 @@ export class NoteFieldRenderer {
     for (let i = this.firstVisibleIdx; i < notes.length; i++) {
       const n = notes[i];
       const y = this.yOf(n.time, n.beat);
-      if (y > height + DRAW_CULL) break;
-      if (y < -DRAW_CULL) continue;
+      if (this.notYet(y)) break;
+      if (this.passed(y)) continue;
       if (n.note.type === TapNoteType.HoldHead) {
         if (n.holdResolved || n.tns !== TapNoteScore.None) continue;
       } else if (n.hidden || n.note.type === TapNoteType.AutoKeysound) {
         continue;
       }
+      const a = this.appearanceAlpha(y);
+      if (a <= 0.01) continue;
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
       else {
         const c = QUANT_COLOR[getNoteType(n.row)];
-        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, 'rgba(0,0,0,0.55)', 2);
+        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, 'rgba(0,0,0,0.55)', 2, a);
       }
     }
 
@@ -307,7 +347,7 @@ export class NoteFieldRenderer {
       const k = age / HIT_FLASH;
       const j = JUDGMENT[hit.tns];
       const color = j ? j.color : '#ffffff';
-      this.arrow(ctx, this.laneX(t), this.receptorY, t, 1 + k * 0.8, null, color, 4, 1 - k);
+      this.arrow(ctx, this.laneX(t), recY, t, 1 + k * 0.8, null, color, 4, 1 - k);
     }
 
     this.drawHud(ctx, judge, now, progress, fb);
@@ -317,7 +357,7 @@ export class NoteFieldRenderer {
     const x = this.laneX(n.track);
     let headY = this.yOf(n.time, n.beat);
     const tailY = this.yOf(n.tailTime, noteRowToBeat(n.tailRow));
-    if (n.holdInitiated && this.nowSeconds >= n.time) headY = this.receptorY;
+    if (n.holdInitiated && this.nowSeconds >= n.time) headY = this.recY();
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;

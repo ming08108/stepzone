@@ -144,7 +144,7 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
       </Section>
 
       <Section title="Mods">
-        <div className="flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
           {TURNS.map((t) => (
             <button
               key={t}
@@ -159,6 +159,33 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
             </button>
           ))}
           <span className="self-center text-sm text-muted">remap the columns</span>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <button
+            onClick={() => update({ reverse: !settings.reverse })}
+            className={`rounded-lg border px-4 py-1.5 ${
+              settings.reverse ? 'border-accent bg-accent/10 text-ink' : 'border-line text-muted'
+            }`}
+          >
+            Reverse
+          </button>
+          <span className="self-center text-sm text-muted">downscroll</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(['visible', 'hidden', 'sudden'] as const).map((a) => (
+            <button
+              key={a}
+              onClick={() => update({ appearance: a })}
+              className={`rounded-lg border px-4 py-1.5 capitalize ${
+                settings.appearance === a
+                  ? 'border-accent bg-accent/10 text-ink'
+                  : 'border-line text-muted'
+              }`}
+            >
+              {a}
+            </button>
+          ))}
+          <span className="self-center text-sm text-muted">fade near / far</span>
         </div>
       </Section>
 

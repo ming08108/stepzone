@@ -22,6 +22,10 @@ export interface Settings {
   keybindings: Record<string, number>;
   /** Column-remap play modifier (mirror/left/right/shuffle). */
   turn: Turn;
+  /** Reverse (downscroll): receptors at the bottom. */
+  reverse: boolean;
+  /** Appearance mod. */
+  appearance: 'visible' | 'hidden' | 'sudden';
   /** Use the experimental WebGPU renderer (falls back to Canvas). */
   webgpu: boolean;
 }
@@ -45,6 +49,8 @@ export const DEFAULT_SETTINGS: Settings = {
   visualOffsetMs: 0,
   keybindings: { ...DEFAULT_KEYBINDINGS },
   turn: 'none',
+  reverse: false,
+  appearance: 'visible',
   webgpu: true,
 };
 

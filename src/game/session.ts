@@ -31,6 +31,8 @@ export interface SessionConfig {
   audioOffsetMs: number;
   visualOffsetMs: number;
   turn: Turn;
+  reverse: boolean;
+  appearance: 'visible' | 'hidden' | 'sudden';
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -40,6 +42,8 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   audioOffsetMs: 0,
   visualOffsetMs: 0,
   turn: 'none',
+  reverse: false,
+  appearance: 'visible',
 };
 
 export class GameSession {
@@ -97,6 +101,8 @@ export class GameSession {
     const maxBpm = this.timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
     this.renderer.setScroll(config.scrollMode, config.scrollValue, maxBpm);
     this.renderer.setColumnAngles(columnAnglesFor(chart.stepsType, nd.numTracks));
+    this.renderer.setReverse(config.reverse);
+    this.renderer.setAppearance(config.appearance);
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;

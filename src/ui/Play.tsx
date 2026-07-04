@@ -144,6 +144,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       audioOffsetMs: settings.audioOffsetMs,
       visualOffsetMs: settings.visualOffsetMs,
       turn: settings.turn,
+      reverse: settings.reverse,
+      appearance: settings.appearance,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
