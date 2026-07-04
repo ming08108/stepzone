@@ -9,7 +9,7 @@ import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
-import { readGamepad } from '../input/gamepad';
+import { readControllers } from '../input/controllers';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation, type Turn } from '../notes/transforms';
 import { columnAnglesFor } from '../render/columns';
@@ -219,8 +219,8 @@ export class GameSession {
     if (!this.running) return;
     const now = this.clock.songSecondsNow();
 
-    // Gamepad / dance pad (poll-only; frame-quantized timing).
-    const pad = readGamepad();
+    // Gamepad / dance pad / WebHID (poll-only; frame-quantized timing).
+    const pad = readControllers();
     if (pad.connected) {
       const ts = performance.now();
       for (let c = 0; c < this.prevPad.length && c < this.held.length; c++) {

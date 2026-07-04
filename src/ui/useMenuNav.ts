@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { readGamepad } from '../input/gamepad';
+import { readControllers } from '../input/controllers';
 
 /**
  * Makes a screen fully navigable with the 4 arrows + Enter (select) + Escape/
@@ -64,11 +64,11 @@ export function useMenuNav(onBack?: () => void): void {
     };
     window.addEventListener('keydown', handler);
 
-    // Gamepad navigation (rising-edge only, so no auto-repeat storm).
+    // Gamepad / WebHID navigation (rising-edge only, so no auto-repeat storm).
     let raf = 0;
     let prev = { u: false, d: false, l: false, r: false, c: false, b: false };
     const poll = () => {
-      const g = readGamepad();
+      const g = readControllers();
       if (g.connected) {
         if ((g.left && !prev.l) || (g.up && !prev.u)) moveFocus(-1);
         if ((g.right && !prev.r) || (g.down && !prev.d)) moveFocus(1);
