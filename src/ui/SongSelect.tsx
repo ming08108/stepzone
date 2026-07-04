@@ -45,6 +45,12 @@ function exampleEntry(): LibraryEntry {
   };
 }
 
+/** Append remote entries, skipping ones already present (by folder URL). */
+function mergeEntries(prev: LibraryEntry[], incoming: LibraryEntry[]): LibraryEntry[] {
+  const have = new Set(prev.map((e) => e.remoteDir).filter(Boolean));
+  return [...prev, ...incoming.filter((e) => !have.has(e.remoteDir))];
+}
+
 type SortKey = 'title' | 'bpm';
 
 export function SongSelect({
@@ -141,7 +147,7 @@ export function SongSelect({
     try {
       const { entries: remote, warnings } = await loadRemoteLibrary(u);
       localStorage.setItem('notefield.catalogUrl', u);
-      setEntries((prev) => [...prev.filter((e) => !e.remoteDir), ...remote]);
+      setEntries((prev) => mergeEntries(prev, remote));
       if (remote.length === 0) setError(warnings[0] ?? 'No songs found in catalog.');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -150,10 +156,26 @@ export function SongSelect({
     }
   };
 
-  // Auto-load the last server catalog (files come from the local cache if seen).
+  // Auto-load the built-in local library (served at /songs by the dev/preview
+  // server) plus any saved external catalog — no pasting required.
   useEffect(() => {
-    const saved = localStorage.getItem('notefield.catalogUrl');
-    if (saved) void loadServer(saved);
+    let cancelled = false;
+    void (async () => {
+      const localUrl = new URL('/songs/catalog.json', location.href).href;
+      const saved = localStorage.getItem('notefield.catalogUrl');
+      const sources = [localUrl, ...(saved && saved !== localUrl ? [saved] : [])];
+      for (const url of sources) {
+        try {
+          const { entries: remote } = await loadRemoteLibrary(url);
+          if (!cancelled && remote.length > 0) setEntries((prev) => mergeEntries(prev, remote));
+        } catch {
+          // library not configured / unreachable — ignore
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -265,7 +287,7 @@ export function SongSelect({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
             type="url"
-            placeholder="https://…/catalog.json  (load a song server)"
+            placeholder="add another song server (https://…/catalog.json)"
             value={catalogUrl}
             onChange={(e) => setCatalogUrl(e.target.value)}
             onKeyDown={(e) => {

@@ -1,18 +1,30 @@
-# Loading songs from a server
+# Songs library
 
-notefield can load songs from any static HTTP server and **caches them locally**
-(Cache Storage API), so after the first play a song works offline and loads
-instantly. Local folder loading still works exactly as before — this is additive.
+## Your local library loads automatically
 
-## How it works
+The dev/preview server serves your Songs library at `/songs`, and notefield
+**auto-loads it on startup — nothing to paste, no separate process, no CORS.**
+By default it serves `C:/Games/ITGmania/Songs`; point it elsewhere with the
+`SONGS_DIR` env var:
 
-1. You host a folder of songs plus a small `catalog.json` over HTTP.
-2. In notefield, paste the catalog URL into the **"Load from server"** box on the
-   song-select screen (or it auto-loads the last URL you used).
-3. Only the simfiles + banners are fetched up front (to build the table). A
-   song's audio and background are fetched the first time you play it.
-4. Every fetched file is stored in the `notefield-songs-v1` cache. Subsequent
-   loads/plays read from the cache — no network needed.
+```
+SONGS_DIR="D:/Songs" npm run dev
+```
+
+The catalog embeds each song's title/artist, so even a multi-thousand-song
+library lists instantly; simfiles/audio/backgrounds load only when you open or
+play a song, and every fetched file is cached (`notefield-songs-v1` Cache
+Storage) for offline/instant replay.
+
+You can also **drop a folder/pack** onto the page, or add an **external** server
+in the box on the song-select screen (see below).
+
+## Adding an external server (optional)
+
+To browse a library hosted elsewhere, host a folder of songs plus a small
+`catalog.json` over HTTP and paste its URL into the "add another song server"
+box. Same-origin isn't required, but a different origin must send
+`Access-Control-Allow-Origin` (CORS) headers.
 
 ## Catalog format
 
