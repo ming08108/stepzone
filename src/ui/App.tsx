@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Play } from './Play';
+import { PlayerOptions } from './PlayerOptions';
 import { Inspector } from './Inspector';
 import { SongSelect } from './SongSelectStepline';
 import { Options } from './Options';
@@ -7,7 +8,7 @@ import { Calibrate } from './Calibrate';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
-type View = 'menu' | 'play' | 'inspect' | 'options' | 'calibrate';
+type View = 'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate';
 
 function Chrome({
   title,
@@ -41,6 +42,11 @@ export function App() {
   const [view, setView] = useState<View>('menu');
   const [req, setReq] = useState<PlayRequest | null>(null);
 
+  if (view === 'playoptions' && req) {
+    return (
+      <PlayerOptions req={req} onStart={() => setView('play')} onBack={() => setView('menu')} />
+    );
+  }
   if (view === 'play' && req) {
     return <Play req={req} onExit={() => setView('menu')} />;
   }
@@ -62,7 +68,7 @@ export function App() {
     <SongSelect
       onPlay={(r) => {
         setReq(r);
-        setView('play');
+        setView('playoptions');
       }}
       onInspect={() => setView('inspect')}
       onOptions={() => setView('options')}
