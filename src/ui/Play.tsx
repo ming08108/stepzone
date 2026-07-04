@@ -164,16 +164,19 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     if (phase === 'playing') return;
     ctaRef.current?.focus();
     let raf = 0;
+    let seeded = false;
     let prevC = false;
     let prevB = false;
     const poll = () => {
       const g = readGamepad();
-      if (g.connected) {
+      // Seed on the first read so a button held when the overlay opens isn't a press.
+      if (g.connected && seeded) {
         if (g.confirm && !prevC) ctaRef.current?.click();
         if (g.back && !prevB) onExit();
       }
       prevC = g.connected && g.confirm;
       prevB = g.connected && g.back;
+      seeded = g.connected;
       raf = requestAnimationFrame(poll);
     };
     raf = requestAnimationFrame(poll);

@@ -64,18 +64,27 @@ export function useMenuNav(onBack?: () => void): void {
     };
     window.addEventListener('keydown', handler);
 
-    // Gamepad / WebHID navigation (rising-edge only, so no auto-repeat storm).
+    // Gamepad navigation (rising-edge only). `prev` is seeded from the first read
+    // (seeded=false skips actions that frame) so a button already held when the
+    // screen opens isn't treated as a fresh press — that was bouncing straight
+    // back out of the screen. Re-seed after any disconnect.
     let raf = 0;
+    let seeded = false;
     let prev = { u: false, d: false, l: false, r: false, c: false, b: false };
     const poll = () => {
       const g = readGamepad();
       if (g.connected) {
-        if ((g.left && !prev.l) || (g.up && !prev.u)) moveFocus(-1);
-        if ((g.right && !prev.r) || (g.down && !prev.d)) moveFocus(1);
-        if (g.confirm && !prev.c) (document.activeElement as HTMLElement | null)?.click();
-        if (g.back && !prev.b) onBackRef.current?.();
+        if (seeded) {
+          if ((g.left && !prev.l) || (g.up && !prev.u)) moveFocus(-1);
+          if ((g.right && !prev.r) || (g.down && !prev.d)) moveFocus(1);
+          if (g.confirm && !prev.c) (document.activeElement as HTMLElement | null)?.click();
+          if (g.back && !prev.b) onBackRef.current?.();
+        }
+        prev = { u: g.up, d: g.down, l: g.left, r: g.right, c: g.confirm, b: g.back };
+        seeded = true;
+      } else {
+        seeded = false;
       }
-      prev = { u: g.up, d: g.down, l: g.left, r: g.right, c: g.confirm, b: g.back };
       raf = requestAnimationFrame(poll);
     };
     raf = requestAnimationFrame(poll);
