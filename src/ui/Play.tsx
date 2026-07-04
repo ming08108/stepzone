@@ -3,6 +3,7 @@ import { GameSession } from '../game/session';
 import { keyToColumn } from '../input/keymap';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
+import { useSettings } from './SettingsContext';
 
 type Phase = 'ready' | 'playing' | 'done';
 
@@ -17,11 +18,16 @@ const CTL_BTN =
   'rounded-lg border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-sm font-semibold text-white/75 hover:bg-white/15 hover:text-white';
 
 export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
+  const { settings } = useSettings();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
+
+  // Keep the latest keybindings available to the (mount-once) key handlers.
+  const bindsRef = useRef(settings.keybindings);
+  bindsRef.current = settings.keybindings;
 
   useEffect(() => {
     const onResize = () => {
@@ -39,13 +45,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      const col = keyToColumn(e.code);
+      const col = keyToColumn(e.code, bindsRef.current);
       if (col === undefined) return;
       e.preventDefault();
       sessionRef.current?.press(col, e.timeStamp);
     };
     const up = (e: KeyboardEvent) => {
-      const col = keyToColumn(e.code);
+      const col = keyToColumn(e.code, bindsRef.current);
       if (col === undefined) return;
       sessionRef.current?.release(col, e.timeStamp);
     };
@@ -64,7 +70,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     if (!canvas) return;
     sessionRef.current?.stop();
 
-    const session = new GameSession(req.song, req.chart, canvas);
+    const session = new GameSession(req.song, req.chart, canvas, {
+      scrollMode: settings.scrollMode,
+      scrollValue: settings.scrollValue,
+      musicRate: settings.musicRate,
+      audioOffsetMs: settings.audioOffsetMs,
+      visualOffsetMs: settings.visualOffsetMs,
+    });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
       setResult({

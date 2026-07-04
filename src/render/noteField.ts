@@ -7,7 +7,13 @@
  */
 
 import type { ActiveNote, Judge } from '../gameplay/judge';
-import { getNoteType, NoteType, TapNoteScore, TapNoteType } from '../notes/noteTypes';
+import {
+  getNoteType,
+  noteRowToBeat,
+  NoteType,
+  TapNoteScore,
+  TapNoteType,
+} from '../notes/noteTypes';
 
 const QUANT_COLOR: Record<NoteType, string> = {
   [NoteType.N4TH]: '#ff4d4d',
@@ -34,7 +40,7 @@ const JUDGMENT: Record<number, { label: string; color: string }> = {
 /** Arrow rotation per dance-single column: Left, Down, Up, Right. */
 const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 
-const PPS = 620; // pixels per second (CMod scroll)
+const SPACING = 64; // base pixels per beat (ITG ARROW_SPACING)
 const HIT_FLASH = 0.18; // seconds
 
 export interface Feedback {
@@ -73,10 +79,21 @@ export class NoteFieldRenderer {
   private colW = 110;
   private arrowS = 46;
 
+  // Scroll: 'C' = constant px/sec (CMod), 'X' = px per beat * multiplier (XMod).
+  private scrollMode: 'C' | 'X' = 'C';
+  private scrollValue = 550;
+  private nowSeconds = 0;
+  private nowBeat = 0;
+
   constructor(readonly numTracks: number) {}
 
   setMeta(meta: RenderMeta): void {
     this.meta = meta;
+  }
+
+  setScroll(mode: 'C' | 'X', value: number): void {
+    this.scrollMode = mode;
+    this.scrollValue = value;
   }
 
   resize(width: number, height: number, dpr = 1): void {
@@ -98,8 +115,12 @@ export class NoteFieldRenderer {
     return ANGLES[track] ?? 0;
   }
 
-  private yOf(noteTime: number, now: number): number {
-    return this.receptorY + (noteTime - now) * PPS;
+  private yOf(timeSeconds: number, beatValue: number): number {
+    if (this.scrollMode === 'X') {
+      return this.receptorY + (beatValue - this.nowBeat) * SPACING * this.scrollValue;
+    }
+    const pxPerSec = (this.scrollValue / 60) * SPACING;
+    return this.receptorY + (timeSeconds - this.nowSeconds) * pxPerSec;
   }
 
   private arrow(
@@ -140,6 +161,8 @@ export class NoteFieldRenderer {
     fb: Feedback,
   ): void {
     const { width, height } = this;
+    this.nowSeconds = now;
+    this.nowBeat = beat;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
     // Background: dark with a slightly lit note highway.
@@ -159,7 +182,7 @@ export class NoteFieldRenderer {
     // Holds behind arrows.
     for (const n of judge.notes) {
       if (n.note.type !== TapNoteType.HoldHead || n.holdResolved) continue;
-      this.drawHold(ctx, n, now);
+      this.drawHold(ctx, n);
     }
 
     // Receptors (pulse to the beat).
@@ -189,7 +212,7 @@ export class NoteFieldRenderer {
     });
     for (let i = drawList.length - 1; i >= 0; i--) {
       const n = drawList[i];
-      const y = this.yOf(n.time, now);
+      const y = this.yOf(n.time, n.beat);
       if (y < -80 || y > height + 80) continue;
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
       else {
@@ -213,11 +236,11 @@ export class NoteFieldRenderer {
     this.drawHud(ctx, judge, now, progress, fb);
   }
 
-  private drawHold(ctx: CanvasRenderingContext2D, n: ActiveNote, now: number): void {
+  private drawHold(ctx: CanvasRenderingContext2D, n: ActiveNote): void {
     const x = this.laneX(n.track);
-    let headY = this.yOf(n.time, now);
-    const tailY = this.yOf(n.tailTime, now);
-    if (n.holdInitiated && now >= n.time) headY = this.receptorY;
+    let headY = this.yOf(n.time, n.beat);
+    const tailY = this.yOf(n.tailTime, noteRowToBeat(n.tailRow));
+    if (n.holdInitiated && this.nowSeconds >= n.time) headY = this.receptorY;
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;

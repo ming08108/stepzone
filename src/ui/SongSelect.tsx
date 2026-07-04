@@ -13,9 +13,11 @@ const CHART_BTN =
 export function SongSelect({
   onPlay,
   onInspect,
+  onOptions,
 }: {
   onPlay: (r: PlayRequest) => void;
   onInspect: () => void;
+  onOptions: () => void;
 }) {
   const exampleSong = useMemo(() => parseSimfile(exampleSsc, 'example.ssc'), []);
   const [loaded, setLoaded] = useState<LoadedSong | null>(null);
@@ -86,12 +88,20 @@ export function SongSelect({
         <div className="text-xl font-bold">
           notefield <span className="pill">song select</span>
         </div>
-        <button
-          onClick={onInspect}
-          className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
-        >
-          Inspect
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onOptions}
+            className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
+          >
+            ⚙ Options
+          </button>
+          <button
+            onClick={onInspect}
+            className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
+          >
+            Inspect
+          </button>
+        </div>
       </header>
 
       <section className="card">

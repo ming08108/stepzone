@@ -8,6 +8,7 @@
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
+import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
@@ -17,6 +18,23 @@ import type { TimingData } from '../timing/timingData';
 
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
+
+/** Playback options applied to a session. */
+export interface SessionConfig {
+  scrollMode: 'C' | 'X';
+  scrollValue: number;
+  musicRate: number;
+  audioOffsetMs: number;
+  visualOffsetMs: number;
+}
+
+export const DEFAULT_SESSION_CONFIG: SessionConfig = {
+  scrollMode: 'C',
+  scrollValue: 550,
+  musicRate: 1,
+  audioOffsetMs: 0,
+  visualOffsetMs: 0,
+};
 
 export class GameSession {
   readonly judge: Judge;
@@ -36,6 +54,7 @@ export class GameSession {
   private raf = 0;
   private running = false;
   private lastSeq = 0;
+  private readonly visualOffsetSeconds: number;
 
   onEnd?: (judge: Judge) => void;
 
@@ -43,12 +62,17 @@ export class GameSession {
     song: Song,
     chart: Steps,
     private readonly canvas: HTMLCanvasElement,
+    config: SessionConfig = DEFAULT_SESSION_CONFIG,
   ) {
     this.timing = chart.getTimingData(song.timing);
     const nd = chart.getNoteData();
 
-    this.judge = new Judge(nd, this.timing);
+    this.judge = new Judge(nd, this.timing, DEFAULT_WINDOWS, config.musicRate);
     this.renderer = new NoteFieldRenderer(nd.numTracks);
+    this.renderer.setScroll(config.scrollMode, config.scrollValue);
+    this.clock.sync.playbackRate = config.musicRate;
+    this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
+    this.visualOffsetSeconds = config.visualOffsetMs / 1000;
     this.renderer.setMeta({
       title: song.title || 'Untitled',
       subtitle: song.artist,
@@ -147,9 +171,11 @@ export class GameSession {
       this.feedback.lastJudgment = { tns: this.judge.lastTns, atSeconds: now };
     }
 
-    const beat = this.timing.getBeatFromElapsedTime(now);
+    // Rendering uses a visually-offset clock (judgment stays on the raw `now`).
+    const visualNow = now - this.visualOffsetSeconds;
+    const beat = this.timing.getBeatFromElapsedTime(visualNow);
     const progress = now <= 0 ? 0 : Math.min(1, now / this.endSeconds);
-    this.renderer.draw(this.ctx2d, this.judge, now, beat, progress, this.feedback);
+    this.renderer.draw(this.ctx2d, this.judge, visualNow, beat, progress, this.feedback);
 
     if (now >= this.endSeconds) {
       this.finish();

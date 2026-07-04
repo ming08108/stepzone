@@ -84,12 +84,20 @@ export class Judge {
   private actualDance = 0;
   private possibleDance = 0;
   private possibleGrade = 0;
+  private readonly rate: number;
   private readonly maxWindow: number;
   private lastUpdate = 0;
 
-  constructor(noteData: NoteData, timing: TimingData, windows: TimingWindows = DEFAULT_WINDOWS) {
+  constructor(
+    noteData: NoteData,
+    timing: TimingData,
+    windows: TimingWindows = DEFAULT_WINDOWS,
+    rate = 1,
+  ) {
     this.windows = windows;
-    this.maxWindow = maxWindowSeconds(windows);
+    this.rate = rate;
+    // Windows are in chart-seconds; at rate r a real ±W is ±(W·r) chart-seconds.
+    this.maxWindow = maxWindowSeconds(windows) * rate;
     this.notesByTrack = Array.from({ length: noteData.numTracks }, () => []);
     this.notes = [];
 
@@ -144,13 +152,17 @@ export class Judge {
     this.notes.sort((a, b) => a.time - b.time || a.track - b.track);
   }
 
+  /** Effective (rate-scaled) window in chart-seconds. */
+  private win(key: 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll'): number {
+    return windowSeconds(this.windows, key) * this.rate;
+  }
+
   private classify(err: number): TapNoteScore {
-    const w = this.windows;
-    if (err <= windowSeconds(w, 'w1')) return TapNoteScore.W1;
-    if (err <= windowSeconds(w, 'w2')) return TapNoteScore.W2;
-    if (err <= windowSeconds(w, 'w3')) return TapNoteScore.W3;
-    if (err <= windowSeconds(w, 'w4')) return TapNoteScore.W4;
-    if (err <= windowSeconds(w, 'w5')) return TapNoteScore.W5;
+    if (err <= this.win('w1')) return TapNoteScore.W1;
+    if (err <= this.win('w2')) return TapNoteScore.W2;
+    if (err <= this.win('w3')) return TapNoteScore.W3;
+    if (err <= this.win('w4')) return TapNoteScore.W4;
+    if (err <= this.win('w5')) return TapNoteScore.W5;
     return TapNoteScore.None;
   }
 
@@ -228,7 +240,7 @@ export class Judge {
 
     switch (cand.note.type) {
       case TapNoteType.Mine:
-        if (!release && err <= windowSeconds(this.windows, 'mine')) tns = TapNoteScore.HitMine;
+        if (!release && err <= this.win('mine')) tns = TapNoteScore.HitMine;
         break;
       case TapNoteType.Lift:
         if (release) tns = this.classify(err);
@@ -279,11 +291,11 @@ export class Judge {
       const down = held[n.track] ?? false;
       if (nowSeconds > n.time && nowSeconds < n.tailTime) {
         if (n.isRoll) {
-          n.holdLife = Math.max(0, n.holdLife - dt / windowSeconds(this.windows, 'roll'));
+          n.holdLife = Math.max(0, n.holdLife - dt / this.win('roll'));
         } else if (down) {
           n.holdLife = 1;
         } else {
-          n.holdLife = Math.max(0, n.holdLife - dt / windowSeconds(this.windows, 'hold'));
+          n.holdLife = Math.max(0, n.holdLife - dt / this.win('hold'));
         }
       }
       if (nowSeconds >= n.tailTime) {
