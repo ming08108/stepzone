@@ -154,6 +154,27 @@ export async function readSongAudio(entry: LibraryEntry): Promise<ArrayBuffer | 
   return f ? f.arrayBuffer() : null;
 }
 
+const BG_VIDEO_EXT = ['.mp4', '.webm', '.ogv', '.m4v'];
+const BG_IMG_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+
+export function isVideoFile(name: string): boolean {
+  return BG_VIDEO_EXT.includes(ext(name));
+}
+
+/** The song's background image/video File (browser-playable formats only), or null. */
+export function findBackgroundFile(entry: LibraryEntry): File | null {
+  const { files, song } = entry;
+  let file: File | undefined;
+  if (song.backgroundFile) {
+    const want = basename(song.backgroundFile);
+    file = files.find((f) => basename(f.name) === want);
+  }
+  if (!file) file = files.find((f) => /(?:-bg|background)\.[a-z0-9]+$/i.test(f.name));
+  if (!file) return null;
+  const e = ext(file.name);
+  return BG_VIDEO_EXT.includes(e) || BG_IMG_EXT.includes(e) ? file : null;
+}
+
 /** Min/max BPM of a song (from its timing), for display/filtering. */
 export function songBpmRange(song: Song): { min: number; max: number } {
   const bpms = song.timing.bpms.map((b) => b.bps * 60).filter((v) => v > 0);

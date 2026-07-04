@@ -3,6 +3,7 @@ import exampleSsc from '../dev/example.ssc?raw';
 import { parseSimfile } from '../parse/loader';
 import {
   filesFromDataTransfer,
+  findBackgroundFile,
   loadLibraryFromFiles,
   readSongAudio,
   songBpmRange,
@@ -99,7 +100,12 @@ export function SongSelect({
     const chart = entry.song.charts[chartIndex];
     if (!chart) return;
     const audio = await readSongAudio(entry);
-    onPlay({ song: entry.song, chart, encodedAudio: audio });
+    onPlay({
+      song: entry.song,
+      chart,
+      encodedAudio: audio,
+      backgroundFile: findBackgroundFile(entry),
+    });
   };
 
   const stepsTypes = useMemo(() => {

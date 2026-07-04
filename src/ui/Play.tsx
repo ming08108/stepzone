@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
+import { isVideoFile } from '../io/songFiles';
 import { keyToColumn } from '../input/keymap';
 import { readGamepad } from '../input/gamepad';
 import { difficultyToString } from '../song/difficulty';
@@ -24,8 +25,24 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
   const ctaRef = useRef<HTMLButtonElement>(null);
+  const bgUrlRef = useRef<string | null>(null);
+  const bgMediaRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
+
+  const cleanupBg = () => {
+    const m = bgMediaRef.current;
+    if (m instanceof HTMLVideoElement) {
+      m.pause();
+      m.removeAttribute('src');
+      m.load();
+    }
+    bgMediaRef.current = null;
+    if (bgUrlRef.current) {
+      URL.revokeObjectURL(bgUrlRef.current);
+      bgUrlRef.current = null;
+    }
+  };
 
   // Keep the latest keybindings available to the (mount-once) key handlers.
   const bindsRef = useRef(settings.keybindings);
@@ -65,7 +82,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     };
   }, []);
 
-  useEffect(() => () => sessionRef.current?.stop(), []);
+  useEffect(
+    () => () => {
+      sessionRef.current?.stop();
+      cleanupBg();
+    },
+    [],
+  );
 
   // Ready/done overlays: focus the primary button (Enter works) and accept
   // gamepad confirm (activate) / back (exit).
@@ -93,6 +116,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     const canvas = canvasRef.current;
     if (!canvas) return;
     sessionRef.current?.stop();
+    cleanupBg();
 
     const session = new GameSession(req.song, req.chart, canvas, {
       scrollMode: settings.scrollMode,
@@ -112,6 +136,27 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       setPhase('done');
     };
     sessionRef.current = session;
+
+    // Background image / video.
+    if (req.backgroundFile) {
+      const url = URL.createObjectURL(req.backgroundFile);
+      bgUrlRef.current = url;
+      if (isVideoFile(req.backgroundFile.name)) {
+        const v = document.createElement('video');
+        v.src = url;
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = 'auto';
+        bgMediaRef.current = v;
+        session.setBackground(v);
+      } else {
+        const img = new Image();
+        img.src = url;
+        bgMediaRef.current = img;
+        session.setBackground(img);
+      }
+    }
+
     if (import.meta.env.DEV) {
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
     }

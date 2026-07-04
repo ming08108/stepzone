@@ -84,6 +84,8 @@ export class NoteFieldRenderer {
   private scrollValue = 550;
   private nowSeconds = 0;
   private nowBeat = 0;
+  private columnAngles: number[] = [];
+  private background: HTMLVideoElement | HTMLImageElement | null = null;
 
   constructor(readonly numTracks: number) {}
 
@@ -94,6 +96,16 @@ export class NoteFieldRenderer {
   setScroll(mode: 'C' | 'X', value: number): void {
     this.scrollMode = mode;
     this.scrollValue = value;
+  }
+
+  /** Per-column arrow rotation (radians); see render/columns.ts. */
+  setColumnAngles(angles: number[]): void {
+    this.columnAngles = angles;
+  }
+
+  /** Background video/image drawn behind the field, or null. */
+  setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
+    this.background = media;
   }
 
   resize(width: number, height: number, dpr = 1): void {
@@ -112,7 +124,30 @@ export class NoteFieldRenderer {
   }
 
   private angle(track: number): number {
-    return ANGLES[track] ?? 0;
+    return this.columnAngles[track] ?? ANGLES[track] ?? 0;
+  }
+
+  private drawBackground(
+    ctx: CanvasRenderingContext2D,
+    bg: HTMLVideoElement | HTMLImageElement,
+  ): void {
+    let bw = 0;
+    let bh = 0;
+    if (bg instanceof HTMLVideoElement) {
+      bw = bg.videoWidth;
+      bh = bg.videoHeight;
+    } else {
+      bw = bg.naturalWidth;
+      bh = bg.naturalHeight;
+    }
+    if (bw <= 0 || bh <= 0) return;
+    const scale = Math.max(this.width / bw, this.height / bh);
+    const dw = bw * scale;
+    const dh = bh * scale;
+    ctx.drawImage(bg, (this.width - dw) / 2, (this.height - dh) / 2, dw, dh);
+    // Dim so arrows stay readable.
+    ctx.fillStyle = 'rgba(7,8,12,0.6)';
+    ctx.fillRect(0, 0, this.width, this.height);
   }
 
   private yOf(timeSeconds: number, beatValue: number): number {
@@ -164,10 +199,21 @@ export class NoteFieldRenderer {
     this.nowSeconds = now;
     this.nowBeat = beat;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.globalAlpha = 1;
 
-    // Background: dark with a slightly lit note highway.
-    ctx.fillStyle = '#07080c';
-    ctx.fillRect(0, 0, width, height);
+    // Background video/image (dimmed), or solid dark.
+    if (this.background) {
+      ctx.clearRect(0, 0, width, height);
+      try {
+        this.drawBackground(ctx, this.background);
+      } catch {
+        ctx.fillStyle = '#07080c';
+        ctx.fillRect(0, 0, width, height);
+      }
+    } else {
+      ctx.fillStyle = '#07080c';
+      ctx.fillRect(0, 0, width, height);
+    }
     const fieldW = this.numTracks * this.colW;
     const fieldL = (width - fieldW) / 2;
     const grad = ctx.createLinearGradient(0, 0, 0, height);

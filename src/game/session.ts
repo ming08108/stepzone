@@ -11,6 +11,7 @@ import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { readGamepad } from '../input/gamepad';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
+import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
@@ -57,6 +58,8 @@ export class GameSession {
   private lastSeq = 0;
   private readonly prevPad = [false, false, false, false];
   private readonly visualOffsetSeconds: number;
+  private readonly musicRate: number;
+  private bgVideo: HTMLVideoElement | null = null;
 
   onEnd?: (judge: Judge) => void;
 
@@ -72,9 +75,11 @@ export class GameSession {
     this.judge = new Judge(nd, this.timing, DEFAULT_WINDOWS, config.musicRate);
     this.renderer = new NoteFieldRenderer(nd.numTracks);
     this.renderer.setScroll(config.scrollMode, config.scrollValue);
+    this.renderer.setColumnAngles(columnAnglesFor(chart.stepsType, nd.numTracks));
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;
+    this.musicRate = config.musicRate;
     this.renderer.setMeta({
       title: song.title || 'Untitled',
       subtitle: song.artist,
@@ -108,6 +113,13 @@ export class GameSession {
   /** Current audible song position in seconds (dev/testing hook). */
   get songNow(): number {
     return this.clock.songSecondsNow();
+  }
+
+  /** Set (or clear) the background video/image drawn behind the field. */
+  setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
+    this.renderer.setBackground(media);
+    this.bgVideo = media instanceof HTMLVideoElement ? media : null;
+    if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;
   }
 
   /** Resize to a logical (CSS) size; the backing store is scaled by devicePixelRatio. */
@@ -178,6 +190,17 @@ export class GameSession {
       }
     }
 
+    // Keep a background video loosely synced to the song.
+    if (this.bgVideo && now >= 0) {
+      const v = this.bgVideo;
+      if (v.paused) {
+        v.currentTime = Math.max(0, now);
+        void v.play().catch(() => {});
+      } else if (Math.abs(v.currentTime - now) > 0.35) {
+        v.currentTime = Math.max(0, now);
+      }
+    }
+
     this.judge.update(now, this.held);
 
     if (this.judge.judgmentSeq !== this.lastSeq) {
@@ -208,5 +231,6 @@ export class GameSession {
     this.running = false;
     cancelAnimationFrame(this.raf);
     this.clock.stop();
+    this.bgVideo?.pause();
   }
 }

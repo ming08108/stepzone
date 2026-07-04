@@ -7,4 +7,6 @@ export interface PlayRequest {
   chart: Steps;
   /** Encoded audio bytes, or null to play the synthesized metronome. */
   encodedAudio: ArrayBuffer | null;
+  /** Background image/video File, or null. Play owns its object URL. */
+  backgroundFile: File | null;
 }
