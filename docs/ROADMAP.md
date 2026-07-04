@@ -55,16 +55,30 @@ polish, and a real audio file loader.
 Deferred: preview clips (sample start/length), multi-song pack browsing / a song
 wheel, and persisting a library across reloads (File System Access API).
 
-## M5 — Feature parity for play
+## M5 — Player features (mostly done)
 
-- Scroll-speed mods (X/C/M), reverse, mirror/turns.
-- Noteskins (quantization coloring is already wired).
-- Results screen (grade, judgment counts, life graph).
-- Offset calibration screen (audio + visual), the honest latency fix.
+Driven by `todo.txt`. Done:
+
+- **Options + settings** (persisted): C/X scroll speed, music-rate practice
+  slowdown, audio/visual sync offset, key rebinding. (#4, #5, #10)
+- **Auto-calibration** screen (tap a metronome → offset), AdjustSync-style. (#6)
+- **Full arrow + gamepad navigation** of all menus (Enter/Escape, dpad/A/B), and
+  **controller/dance-pad** input during play (Gamepad API). (#1, #3)
+- **Song library**: load a whole pack; **searchable/filterable table** (type,
+  meter, BPM, sort) with **favorites** (localStorage). (#7, #11, #12)
+- **Background image/video** behind the field, video loosely song-synced. (#9)
+- **Arcade look** + correct arrows for solo/double/pump modes. (#2, #8)
+
+Deferred here: mirror/turn mods; noteskins (quantization coloring is wired); a
+richer results screen (life graph); a GPU (PixiJS/WebGPU) renderer for the note
+field (advised over raw WebGPU — the renderer sits behind one interface, so it's
+a clean swap when perspective mods / dense charts arrive). (#8's WebGPU part)
 
 ## M6 — Edge-case completeness
 
-- `.sm` negative-BPM / negative-stop → warp conversion (spec doc 2 §2.5).
+- `.sm` negative-BPM / negative-stop → warp conversion (spec doc 2 §2.5) — needed
+  for DDR gimmick charts (e.g. PARANOiA-style).
 - Composite / routine (`&`-separated) charts.
+- Per-row chord-cohesion combo; roll re-tap polish.
 - Round-trip serialization + `ChartKey` hashing for validation (spec doc 10
   §10.7).

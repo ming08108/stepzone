@@ -10,6 +10,7 @@ import {
   type LibraryEntry,
 } from '../io/songFiles';
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
+import { chartKey, loadScores, totalStats } from '../app/scores';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
@@ -43,6 +44,8 @@ export function SongSelect({
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [scores] = useState(() => loadScores());
+  const [stats] = useState(() => totalStats());
   const folderRef = useRef<HTMLInputElement>(null);
   useMenuNav();
 
@@ -140,6 +143,9 @@ export function SongSelect({
       <header className="mb-5 flex items-center justify-between">
         <div className="text-xl font-bold">
           notefield <span className="pill">song select</span>
+          {stats.plays > 0 && (
+            <span className="ml-2 text-xs font-normal text-muted">{stats.plays} plays</span>
+          )}
         </div>
         <div className="flex gap-2">
           <button
@@ -303,15 +309,23 @@ export function SongSelect({
                   {entry.song.charts
                     .map((c, i) => ({ c, i }))
                     .sort((a, b) => a.c.difficulty - b.c.difficulty || a.c.meter - b.c.meter)
-                    .map(({ c, i }) => (
-                      <button key={i} className={CHART_BTN} onClick={() => void play(entry, i)}>
-                        <div className="text-xs text-muted">{c.stepsType}</div>
-                        <div className="font-semibold">
-                          {difficultyToString(c.difficulty)}{' '}
-                          <span className="text-accent">{c.meter}</span>
-                        </div>
-                      </button>
-                    ))}
+                    .map(({ c, i }) => {
+                      const best = scores[chartKey(entry.song, c)];
+                      return (
+                        <button key={i} className={CHART_BTN} onClick={() => void play(entry, i)}>
+                          <div className="text-xs text-muted">{c.stepsType}</div>
+                          <div className="font-semibold">
+                            {difficultyToString(c.difficulty)}{' '}
+                            <span className="text-accent">{c.meter}</span>
+                          </div>
+                          {best && (
+                            <div className="text-xs text-[#ffd94b]">
+                              {best.grade} · {(best.percent * 100).toFixed(1)}%
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
                 </div>
               )}
             </div>

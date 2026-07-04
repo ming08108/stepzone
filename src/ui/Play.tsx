@@ -4,6 +4,8 @@ import { isVideoFile } from '../io/songFiles';
 import { keyToColumn } from '../input/keymap';
 import { readGamepad } from '../input/gamepad';
 import { difficultyToString } from '../song/difficulty';
+import { TapNoteScore } from '../notes/noteTypes';
+import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 
@@ -14,7 +16,19 @@ interface Result {
   grade: string;
   maxCombo: number;
   failed: boolean;
+  counts: Record<number, number>;
+  best: ChartScore | null;
+  isNewRecord: boolean;
 }
+
+const JUDGMENT_ROWS: Array<[TapNoteScore, string]> = [
+  [TapNoteScore.W1, 'Marvelous'],
+  [TapNoteScore.W2, 'Perfect'],
+  [TapNoteScore.W3, 'Great'],
+  [TapNoteScore.W4, 'Good'],
+  [TapNoteScore.W5, 'Way Off'],
+  [TapNoteScore.Miss, 'Miss'],
+];
 
 const CTL_BTN =
   'rounded-lg border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-sm font-semibold text-white/75 hover:bg-white/15 hover:text-white';
@@ -127,11 +141,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
+      const counts = { ...judge.tapCounts };
+      const { best, isNewRecord } = recordPlay(chartKey(req.song, req.chart), {
+        percent: judge.percentDancePoints,
+        grade: judge.grade,
+        maxCombo: judge.maxCombo,
+        counts,
+      });
       setResult({
         percent: judge.percentDancePoints,
         grade: judge.grade,
         maxCombo: judge.maxCombo,
         failed: judge.failed,
+        counts,
+        best,
+        isNewRecord,
       });
       setPhase('done');
     };
@@ -215,7 +239,23 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               <div className="text-[3.5rem] font-black leading-none text-[#ffd94b]">
                 {result.grade}
               </div>
-              <div className="text-muted">max combo {result.maxCombo}</div>
+              {result.isNewRecord && (
+                <div className="text-lg font-bold text-accent">★ NEW RECORD</div>
+              )}
+              <div className="grid grid-cols-2 gap-x-8 gap-y-0.5 text-sm">
+                {JUDGMENT_ROWS.map(([tns, label]) => (
+                  <div key={tns} className="flex justify-between gap-6">
+                    <span className="text-muted">{label}</span>
+                    <span className="tabular-nums">{result.counts[tns] ?? 0}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="text-sm text-muted">
+                max combo {result.maxCombo}
+                {result.best
+                  ? ` · best ${(result.best.percent * 100).toFixed(2)}% · ${result.best.plays} plays`
+                  : ''}
+              </div>
               <div className="mt-2 flex gap-3">
                 <button ref={ctaRef} className="cta" onClick={start}>
                   ↻ Play again
