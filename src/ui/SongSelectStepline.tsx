@@ -32,7 +32,6 @@ const SORTS = ['title', 'artist', 'bpm', 'level'] as const;
 type Sort = (typeof SORTS)[number];
 
 const ROW_H = 44;
-const VIEW = 720 - 56 - 176 - 32 - 46 - 28 - 44; // stage minus header/detail/filter/cols/hint
 
 interface SongVM {
   entry: LibraryEntry;
@@ -94,7 +93,8 @@ export function SongSelect({
   onOptions: () => void;
 }) {
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
-  const [scale, setScale] = useState(1);
+  const [viewH, setViewH] = useState(400);
+  const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -108,12 +108,15 @@ export function SongSelect({
   const [osel, setOsel] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Scale the 1280×720 stage to fit the window.
+  // Measure the (fluid) list viewport for virtualization + centering.
   useEffect(() => {
-    const fit = () => setScale(Math.min(window.innerWidth / 1280, window.innerHeight / 720));
-    fit();
-    window.addEventListener('resize', fit);
-    return () => window.removeEventListener('resize', fit);
+    const el = listRef.current;
+    if (!el) return;
+    const measure = () => setViewH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // Auto-load the built-in local library (/songs) plus any saved external catalog.
@@ -273,13 +276,13 @@ export function SongSelect({
   // Virtualized window: center the selection, clamp at the ends.
   const total = filtered.length;
   const off = Math.max(
-    Math.min(VIEW - total * ROW_H, 0),
-    Math.min(0, VIEW / 2 - (selClamped + 0.5) * ROW_H),
+    Math.min(viewH - total * ROW_H, 0),
+    Math.min(0, viewH / 2 - (selClamped + 0.5) * ROW_H),
   );
   const first = Math.max(0, Math.floor(-off / ROW_H) - 4);
-  const last = Math.min(total, Math.ceil((-off + VIEW) / ROW_H) + 4);
+  const last = Math.min(total, Math.ceil((-off + viewH) / ROW_H) + 4);
   const topFade = off < 0;
-  const botFade = off + total * ROW_H > VIEW;
+  const botFade = off + total * ROW_H > viewH;
 
   const chips = DIFF_NAMES.map((name, i) => {
     const lv = song?.levels[i];
@@ -297,7 +300,7 @@ export function SongSelect({
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center overflow-hidden bg-[#050506]"
+      className="fixed inset-0 flex flex-col overflow-hidden bg-[#0b0c0e] font-grotesk text-[#ececec] [font-variant-numeric:tabular-nums]"
       onDragOver={(e) => {
         e.preventDefault();
         setDrag(true);
@@ -305,230 +308,221 @@ export function SongSelect({
       onDragLeave={() => setDrag(false)}
       onDrop={onDrop}
     >
-      <div
-        className="relative flex h-[720px] w-[1280px] flex-none flex-col overflow-hidden bg-[#0b0c0e] font-grotesk text-[#ececec] [font-variant-numeric:tabular-nums]"
-        style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}
-      >
-        {/* Header */}
-        <div className="flex h-[56px] flex-none items-center justify-between border-b border-white/[0.09] px-[28px]">
-          <div className="flex items-baseline gap-3">
-            <span className="text-[19px] font-bold tracking-[0.22em]">STEPLINE</span>
-            <span className="text-[13px] tracking-[0.18em]" style={{ color: AC }}>
-              MUSIC SELECT
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
-            <span>{filtered.length} SONGS</span>
-            <button onClick={onOptions} className="hover:text-[#ececec]" title="Options">
-              ⚙
-            </button>
-          </div>
+      {/* Header */}
+      <div className="flex h-[56px] flex-none items-center justify-between border-b border-white/[0.09] px-[28px]">
+        <div className="flex items-baseline gap-3">
+          <span className="text-[19px] font-bold tracking-[0.22em]">STEPLINE</span>
+          <span className="text-[13px] tracking-[0.18em]" style={{ color: AC }}>
+            MUSIC SELECT
+          </span>
         </div>
-
-        {/* Detail panel */}
-        <div className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]">
-          <div className="relative h-[144px] w-[256px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]">
-            {song?.entry.bannerUrl ? (
-              <img
-                src={song.entry.bannerUrl}
-                alt=""
-                loading="lazy"
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div
-                className="flex h-full w-full items-center justify-center text-[48px] font-bold tracking-[0.06em] text-white/90"
-                style={{
-                  background: `repeating-linear-gradient(135deg, #3a1d5e 0 20px, #57206e 20px 40px)`,
-                }}
-              >
-                {song ? initials(song.title) : ''}
-              </div>
-            )}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-            <div className="truncate text-[34px] font-bold leading-[1.15]">
-              {song?.title ?? '—'}
-            </div>
-            <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
-            <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
-              <span>BPM {song?.bpm ?? '—'}</span>
-              <span>
-                {song?.entry.remoteDir ? (song.entry.sourceName.split('/')[0] ?? '') : ''}
-              </span>
-              <span className="font-bold" style={{ color: AC }}>
-                {DIFF_NAMES[diff]} {song?.levels[diff] ?? '—'}
-              </span>
-            </div>
-          </div>
-          <div className="flex flex-none flex-col items-stretch gap-[5px]">
-            {chips.map((c, i) => (
-              <button
-                key={c.name}
-                onClick={() => setDiff(i)}
-                disabled={!c.has}
-                className="flex w-[158px] items-center gap-2 border px-[10px] py-[4px] text-[12px] tracking-[0.1em]"
-                style={{
-                  cursor: c.has ? 'pointer' : 'default',
-                  opacity: c.has ? 1 : 0.3,
-                  color: c.on ? '#ececec' : 'rgba(236,236,236,.55)',
-                  borderColor: c.on ? AC : 'rgba(255,255,255,.12)',
-                  background: c.on ? AC + '1a' : 'transparent',
-                }}
-              >
-                <span className="h-2 w-2 flex-none rounded-full" style={{ background: c.clr }} />
-                <span className="flex-1 text-left">{c.name}</span>
-                <span className="font-bold">{c.lv}</span>
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
+          <span>{filtered.length} SONGS</span>
+          <button onClick={onOptions} className="hover:text-[#ececec]" title="Options">
+            ⚙
+          </button>
         </div>
+      </div>
 
-        {/* Filter strip */}
-        <div className="flex h-[46px] flex-none items-center gap-2 border-b border-white/[0.09] px-[28px]">
-          <input
-            ref={searchRef}
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setSel(0);
-            }}
-            placeholder="SEARCH…"
-            className="w-[210px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none"
-          />
-          {overlayRows.map((o, i) => {
-            const on = overlay && i === osel;
-            return (
-              <button
-                key={o.label}
-                onClick={() => {
-                  setOsel(i);
-                  i === 3 ? reset() : adjust(i, 1);
-                }}
-                className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
-                style={{
-                  color: on ? '#ececec' : 'rgba(236,236,236,.55)',
-                  borderColor: on ? AC : 'rgba(255,255,255,.12)',
-                  background: on ? AC + '14' : 'transparent',
-                }}
-              >
-                <span className="opacity-60">{o.label}</span>
-                <span className="font-bold">{o.value}</span>
-              </button>
-            );
-          })}
-          <span className="flex-1" />
-          {overlay && (
-            <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
-              ◀▶ MOVE · ▲▼ ADJUST · SELECT DONE
-            </span>
-          )}
-          {busy && <span className="text-[12px] text-[#ececec]/50">Loading…</span>}
-        </div>
-
-        {/* Column headers */}
-        <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_90px_76px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
-          {(
-            [
-              ['TITLE', 'title', false],
-              ['ARTIST', 'artist', false],
-              ['BPM', 'bpm', true],
-              ['LV', 'level', true],
-            ] as const
-          ).map(([label, key, end]) => {
-            const on = sort === key;
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  setSort(key);
-                  setSel(0);
-                }}
-                className="text-[11px] tracking-[0.14em] whitespace-nowrap"
-                style={{
-                  justifySelf: end ? 'end' : 'start',
-                  color: on ? AC : 'rgba(236,236,236,.4)',
-                  fontWeight: on ? 700 : 400,
-                }}
-              >
-                {label}
-                {on ? ' ▾' : ''}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Virtualized song list */}
-        <div className="relative flex-1 overflow-hidden">
-          <div
-            className="absolute inset-0"
-            style={{
-              maskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
-              WebkitMaskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
-            }}
-          >
+      {/* Detail panel */}
+      <div className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]">
+        <div className="relative h-[144px] w-[256px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]">
+          {song?.entry.bannerUrl ? (
+            <img
+              src={song.entry.bannerUrl}
+              alt=""
+              loading="lazy"
+              className="h-full w-full object-cover"
+            />
+          ) : (
             <div
-              className="absolute inset-x-0 top-0"
+              className="flex h-full w-full items-center justify-center text-[48px] font-bold tracking-[0.06em] text-white/90"
               style={{
-                height: total * ROW_H,
-                transform: `translateY(${off}px)`,
-                transition: 'transform .16s ease-out',
+                background: `repeating-linear-gradient(135deg, #3a1d5e 0 20px, #57206e 20px 40px)`,
               }}
             >
-              {filtered.slice(first, last).map((s, k) => {
-                const i = first + k;
-                const on = i === selClamped;
-                const lv = s.levels[diff];
-                return (
-                  <div
-                    key={i}
-                    onClick={() => setSel(i)}
-                    onDoubleClick={() => {
-                      setSel(i);
-                      void start();
-                    }}
-                    className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_90px_76px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
-                    style={{
-                      top: i * ROW_H,
-                      height: ROW_H,
-                      fontSize: 16,
-                      fontWeight: on ? 700 : 400,
-                      color: on ? '#ececec' : 'rgba(236,236,236,.6)',
-                      background: on ? AC + '1a' : 'transparent',
-                      borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
-                    }}
-                  >
-                    <span className="overflow-hidden text-ellipsis">{s.title}</span>
-                    <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
-                    <span className="justify-self-end opacity-60">{s.bpm}</span>
-                    <span
-                      className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
-                      style={{ background: AC + '1f', color: AC }}
-                    >
-                      {lv == null ? '—' : lv}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          {drag && (
-            <div
-              className="absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
-              style={{ background: 'rgba(11,12,14,.85)', color: AC }}
-            >
-              DROP A SONG FOLDER / PACK
+              {song ? initials(song.title) : ''}
             </div>
           )}
         </div>
-
-        {/* Hint bar */}
-        <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">
-          <span>▲▼ SONG</span>
-          <span>◀▶ DIFFICULTY</span>
-          <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — CONFIRM</span>
-          <button onClick={() => setOverlay((v) => !v)}>SELECT — SORT / FILTER</button>
+        <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+          <div className="truncate text-[34px] font-bold leading-[1.15]">{song?.title ?? '—'}</div>
+          <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
+          <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
+            <span>BPM {song?.bpm ?? '—'}</span>
+            <span>{song?.entry.remoteDir ? (song.entry.sourceName.split('/')[0] ?? '') : ''}</span>
+            <span className="font-bold" style={{ color: AC }}>
+              {DIFF_NAMES[diff]} {song?.levels[diff] ?? '—'}
+            </span>
+          </div>
         </div>
+        <div className="flex flex-none flex-col items-stretch gap-[5px]">
+          {chips.map((c, i) => (
+            <button
+              key={c.name}
+              onClick={() => setDiff(i)}
+              disabled={!c.has}
+              className="flex w-[158px] items-center gap-2 border px-[10px] py-[4px] text-[12px] tracking-[0.1em]"
+              style={{
+                cursor: c.has ? 'pointer' : 'default',
+                opacity: c.has ? 1 : 0.3,
+                color: c.on ? '#ececec' : 'rgba(236,236,236,.55)',
+                borderColor: c.on ? AC : 'rgba(255,255,255,.12)',
+                background: c.on ? AC + '1a' : 'transparent',
+              }}
+            >
+              <span className="h-2 w-2 flex-none rounded-full" style={{ background: c.clr }} />
+              <span className="flex-1 text-left">{c.name}</span>
+              <span className="font-bold">{c.lv}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Filter strip */}
+      <div className="flex h-[46px] flex-none items-center gap-2 border-b border-white/[0.09] px-[28px]">
+        <input
+          ref={searchRef}
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setSel(0);
+          }}
+          placeholder="SEARCH…"
+          className="w-[210px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none"
+        />
+        {overlayRows.map((o, i) => {
+          const on = overlay && i === osel;
+          return (
+            <button
+              key={o.label}
+              onClick={() => {
+                setOsel(i);
+                i === 3 ? reset() : adjust(i, 1);
+              }}
+              className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
+              style={{
+                color: on ? '#ececec' : 'rgba(236,236,236,.55)',
+                borderColor: on ? AC : 'rgba(255,255,255,.12)',
+                background: on ? AC + '14' : 'transparent',
+              }}
+            >
+              <span className="opacity-60">{o.label}</span>
+              <span className="font-bold">{o.value}</span>
+            </button>
+          );
+        })}
+        <span className="flex-1" />
+        {overlay && (
+          <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
+            ◀▶ MOVE · ▲▼ ADJUST · SELECT DONE
+          </span>
+        )}
+        {busy && <span className="text-[12px] text-[#ececec]/50">Loading…</span>}
+      </div>
+
+      {/* Column headers */}
+      <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_90px_76px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
+        {(
+          [
+            ['TITLE', 'title', false],
+            ['ARTIST', 'artist', false],
+            ['BPM', 'bpm', true],
+            ['LV', 'level', true],
+          ] as const
+        ).map(([label, key, end]) => {
+          const on = sort === key;
+          return (
+            <button
+              key={key}
+              onClick={() => {
+                setSort(key);
+                setSel(0);
+              }}
+              className="text-[11px] tracking-[0.14em] whitespace-nowrap"
+              style={{
+                justifySelf: end ? 'end' : 'start',
+                color: on ? AC : 'rgba(236,236,236,.4)',
+                fontWeight: on ? 700 : 400,
+              }}
+            >
+              {label}
+              {on ? ' ▾' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Virtualized song list */}
+      <div ref={listRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={{
+            maskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
+            WebkitMaskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
+          }}
+        >
+          <div
+            className="absolute inset-x-0 top-0"
+            style={{
+              height: total * ROW_H,
+              transform: `translateY(${off}px)`,
+              transition: 'transform .16s ease-out',
+            }}
+          >
+            {filtered.slice(first, last).map((s, k) => {
+              const i = first + k;
+              const on = i === selClamped;
+              const lv = s.levels[diff];
+              return (
+                <div
+                  key={i}
+                  onClick={() => setSel(i)}
+                  onDoubleClick={() => {
+                    setSel(i);
+                    void start();
+                  }}
+                  className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_90px_76px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
+                  style={{
+                    top: i * ROW_H,
+                    height: ROW_H,
+                    fontSize: 16,
+                    fontWeight: on ? 700 : 400,
+                    color: on ? '#ececec' : 'rgba(236,236,236,.6)',
+                    background: on ? AC + '1a' : 'transparent',
+                    borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
+                  }}
+                >
+                  <span className="overflow-hidden text-ellipsis">{s.title}</span>
+                  <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
+                  <span className="justify-self-end opacity-60">{s.bpm}</span>
+                  <span
+                    className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
+                    style={{ background: AC + '1f', color: AC }}
+                  >
+                    {lv == null ? '—' : lv}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {drag && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
+            style={{ background: 'rgba(11,12,14,.85)', color: AC }}
+          >
+            DROP A SONG FOLDER / PACK
+          </div>
+        )}
+      </div>
+
+      {/* Hint bar */}
+      <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">
+        <span>▲▼ SONG</span>
+        <span>◀▶ DIFFICULTY</span>
+        <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — CONFIRM</span>
+        <button onClick={() => setOverlay((v) => !v)}>SELECT — SORT / FILTER</button>
       </div>
     </div>
   );
