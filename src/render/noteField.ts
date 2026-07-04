@@ -1,23 +1,24 @@
 /**
- * Canvas note-field renderer. Upscroll, constant-time (CMod) spacing, drawing
- * receptors, notes (colored by quantization), holds, and the HUD. See spec
- * doc 8. Purely presentational — reads the Judge, never mutates it.
+ * Arcade-style canvas note field (DDR/ITG look): directional arrows colored by
+ * quantization, pulsing receptors, hit flashes, holds, and a full-screen HUD.
+ * Upscroll, constant-time (CMod) spacing. See spec doc 8. Purely presentational
+ * — reads the Judge, never mutates it. Works in logical (CSS) pixels; the caller
+ * sets a devicePixelRatio transform via resize().
  */
 
-import { DANCE_SINGLE_LABELS } from '../input/keymap';
 import type { ActiveNote, Judge } from '../gameplay/judge';
 import { getNoteType, NoteType, TapNoteScore, TapNoteType } from '../notes/noteTypes';
 
 const QUANT_COLOR: Record<NoteType, string> = {
-  [NoteType.N4TH]: '#e64b4b',
-  [NoteType.N8TH]: '#4b7be6',
-  [NoteType.N12TH]: '#9b4be6',
-  [NoteType.N16TH]: '#e6cf4b',
-  [NoteType.N24TH]: '#e64bb4',
-  [NoteType.N32ND]: '#e6944b',
-  [NoteType.N48TH]: '#4be6c4',
-  [NoteType.N64TH]: '#9ce64b',
-  [NoteType.N192ND]: '#8a8a8a',
+  [NoteType.N4TH]: '#ff4d4d',
+  [NoteType.N8TH]: '#4d7bff',
+  [NoteType.N12TH]: '#b24dff',
+  [NoteType.N16TH]: '#ffd24d',
+  [NoteType.N24TH]: '#ff4dc4',
+  [NoteType.N32ND]: '#ff934d',
+  [NoteType.N48TH]: '#4de6c4',
+  [NoteType.N64TH]: '#9cff4d',
+  [NoteType.N192ND]: '#9aa0b0',
 };
 
 const JUDGMENT: Record<number, { label: string; color: string }> = {
@@ -26,177 +27,306 @@ const JUDGMENT: Record<number, { label: string; color: string }> = {
   [TapNoteScore.W3]: { label: 'GREAT', color: '#5be06a' },
   [TapNoteScore.W4]: { label: 'GOOD', color: '#4b8be6' },
   [TapNoteScore.W5]: { label: 'WAY OFF', color: '#a06ee6' },
-  [TapNoteScore.Miss]: { label: 'MISS', color: '#e64b4b' },
-  [TapNoteScore.HitMine]: { label: 'MINE!', color: '#e64b4b' },
+  [TapNoteScore.Miss]: { label: 'MISS', color: '#ff4d4d' },
+  [TapNoteScore.HitMine]: { label: 'MINE!', color: '#ff4d4d' },
 };
+
+/** Arrow rotation per dance-single column: Left, Down, Up, Right. */
+const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
+
+const PPS = 620; // pixels per second (CMod scroll)
+const HIT_FLASH = 0.18; // seconds
 
 export interface Feedback {
   lastJudgment: { tns: TapNoteScore; atSeconds: number } | null;
-  /** Per-column time (seconds) of the last press, for receptor glow. */
+  /** Per-column time (s) of the last press, for the receptor glow. */
   laneFlash: number[];
+  /** Per-column last successful hit, for the explosion. */
+  laneHit: Array<{ tns: TapNoteScore; atSeconds: number } | null>;
 }
 
-const RECEPTOR_Y = 120;
-const COL_W = 88;
-const NOTE_R = 30;
-const PPS = 520; // pixels per second (CMod scroll)
+export interface RenderMeta {
+  title: string;
+  subtitle: string;
+  difficulty: string;
+}
+
+function traceArrow(ctx: CanvasRenderingContext2D, s: number): void {
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.lineTo(-s, 0);
+  ctx.lineTo(-0.42 * s, 0);
+  ctx.lineTo(-0.42 * s, 0.78 * s);
+  ctx.lineTo(0.42 * s, 0.78 * s);
+  ctx.lineTo(0.42 * s, 0);
+  ctx.lineTo(s, 0);
+  ctx.closePath();
+}
 
 export class NoteFieldRenderer {
   width = 800;
   height = 720;
+  private dpr = 1;
+  private meta: RenderMeta = { title: '', subtitle: '', difficulty: '' };
+
+  private receptorY = 150;
+  private colW = 110;
+  private arrowS = 46;
 
   constructor(readonly numTracks: number) {}
 
-  resize(width: number, height: number): void {
+  setMeta(meta: RenderMeta): void {
+    this.meta = meta;
+  }
+
+  resize(width: number, height: number, dpr = 1): void {
     this.width = width;
     this.height = height;
+    this.dpr = dpr;
+    this.colW = Math.min(120, Math.max(64, (width * 0.86) / this.numTracks));
+    this.arrowS = this.colW * 0.42;
+    this.receptorY = Math.max(110, Math.min(180, height * 0.16));
   }
 
   private laneX(track: number): number {
-    const fieldW = this.numTracks * COL_W;
-    const left = (this.width - fieldW) / 2 + COL_W / 2;
-    return left + track * COL_W;
+    const fieldW = this.numTracks * this.colW;
+    const left = (this.width - fieldW) / 2 + this.colW / 2;
+    return left + track * this.colW;
+  }
+
+  private angle(track: number): number {
+    return ANGLES[track] ?? 0;
   }
 
   private yOf(noteTime: number, now: number): number {
-    return RECEPTOR_Y + (noteTime - now) * PPS;
+    return this.receptorY + (noteTime - now) * PPS;
   }
 
-  draw(ctx: CanvasRenderingContext2D, judge: Judge, now: number, fb: Feedback): void {
-    const { width, height } = this;
-    ctx.clearRect(0, 0, width, height);
-
-    // Background lanes.
-    ctx.fillStyle = '#0e1016';
-    ctx.fillRect(0, 0, width, height);
-    for (let t = 0; t < this.numTracks; t++) {
-      const x = this.laneX(t);
-      ctx.fillStyle = t % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)';
-      ctx.fillRect(x - COL_W / 2, 0, COL_W, height);
+  private arrow(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    track: number,
+    scale: number,
+    fill: string | null,
+    stroke: string | null,
+    lineWidth = 3,
+    alpha = 1,
+  ): void {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.rotate(this.angle(track));
+    ctx.scale(scale, scale);
+    traceArrow(ctx, this.arrowS);
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
     }
+    if (stroke) {
+      ctx.lineWidth = lineWidth;
+      ctx.strokeStyle = stroke;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-    // Holds first (behind arrows).
+  draw(
+    ctx: CanvasRenderingContext2D,
+    judge: Judge,
+    now: number,
+    beat: number,
+    progress: number,
+    fb: Feedback,
+  ): void {
+    const { width, height } = this;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    // Background: dark with a slightly lit note highway.
+    ctx.fillStyle = '#07080c';
+    ctx.fillRect(0, 0, width, height);
+    const fieldW = this.numTracks * this.colW;
+    const fieldL = (width - fieldW) / 2;
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, 'rgba(255,255,255,0.05)');
+    grad.addColorStop(1, 'rgba(255,255,255,0.015)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(fieldL, 0, fieldW, height);
+    // Receptor glow line.
+    ctx.fillStyle = 'rgba(120,150,255,0.06)';
+    ctx.fillRect(fieldL, this.receptorY - 44, fieldW, 88);
+
+    // Holds behind arrows.
     for (const n of judge.notes) {
       if (n.note.type !== TapNoteType.HoldHead || n.holdResolved) continue;
       this.drawHold(ctx, n, now);
     }
 
-    // Receptors.
+    // Receptors (pulse to the beat).
+    const frac = beat - Math.floor(beat);
+    const pulse = 1 + 0.12 * (1 - frac);
     for (let t = 0; t < this.numTracks; t++) {
       const x = this.laneX(t);
-      const flash = now - (fb.laneFlash[t] ?? -1);
-      const glow = flash >= 0 && flash < 0.12 ? 1 - flash / 0.12 : 0;
-      this.drawReceptor(ctx, x, RECEPTOR_Y, DANCE_SINGLE_LABELS[t] ?? '', glow);
+      const flashAge = now - (fb.laneFlash[t] ?? -1);
+      const pressed = flashAge >= 0 && flashAge < 0.1;
+      this.arrow(
+        ctx,
+        x,
+        this.receptorY,
+        t,
+        pulse,
+        pressed ? 'rgba(255,255,255,0.12)' : null,
+        `rgba(190,200,220,${pressed ? 0.95 : 0.5})`,
+        3,
+      );
     }
 
-    // Tap notes (and unhit hold heads).
-    for (const n of judge.notes) {
+    // Notes (and unhit hold heads), nearest last so closer arrows draw on top.
+    const drawList = judge.notes.filter((n) => {
       const isHold = n.note.type === TapNoteType.HoldHead;
-      if (isHold) {
-        if (n.holdResolved || n.tns !== TapNoteScore.None) continue; // held head sticks via hold body
-      } else if (n.hidden || n.note.type === TapNoteType.AutoKeysound) {
-        continue;
-      }
+      if (isHold) return !n.holdResolved && n.tns === TapNoteScore.None;
+      return !n.hidden && n.note.type !== TapNoteType.AutoKeysound;
+    });
+    for (let i = drawList.length - 1; i >= 0; i--) {
+      const n = drawList[i];
       const y = this.yOf(n.time, now);
-      if (y < -NOTE_R || y > height + NOTE_R) continue;
+      if (y < -80 || y > height + 80) continue;
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
-      else this.drawNote(ctx, this.laneX(n.track), y, QUANT_COLOR[getNoteType(n.row)], n.track);
+      else {
+        const c = QUANT_COLOR[getNoteType(n.row)];
+        this.arrow(ctx, this.laneX(n.track), y, n.track, 1, c, 'rgba(0,0,0,0.55)', 2);
+      }
     }
 
-    this.drawHud(ctx, judge, now, fb);
+    // Hit explosions.
+    for (let t = 0; t < this.numTracks; t++) {
+      const hit = fb.laneHit[t];
+      if (!hit) continue;
+      const age = now - hit.atSeconds;
+      if (age < 0 || age >= HIT_FLASH) continue;
+      const k = age / HIT_FLASH;
+      const j = JUDGMENT[hit.tns];
+      const color = j ? j.color : '#ffffff';
+      this.arrow(ctx, this.laneX(t), this.receptorY, t, 1 + k * 0.8, null, color, 4, 1 - k);
+    }
+
+    this.drawHud(ctx, judge, now, progress, fb);
   }
 
   private drawHold(ctx: CanvasRenderingContext2D, n: ActiveNote, now: number): void {
     const x = this.laneX(n.track);
     let headY = this.yOf(n.time, now);
     const tailY = this.yOf(n.tailTime, now);
-    if (n.holdInitiated && now >= n.time) headY = RECEPTOR_Y; // stick to receptor while held
+    if (n.holdInitiated && now >= n.time) headY = this.receptorY;
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;
-    ctx.fillStyle = alive ? 'rgba(90,224,106,0.35)' : 'rgba(120,120,120,0.25)';
-    const w = NOTE_R * 1.1;
-    ctx.beginPath();
-    ctx.roundRect(x - w / 2, top, w, Math.max(0, bottom - top), 8);
-    ctx.fill();
-  }
-
-  private drawReceptor(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    label: string,
-    glow: number,
-  ): void {
+    const w = this.arrowS * 0.9;
     ctx.save();
-    ctx.strokeStyle = `rgba(255,255,255,${0.35 + glow * 0.6})`;
-    ctx.lineWidth = 2 + glow * 3;
+    ctx.fillStyle = alive ? 'rgba(90,224,106,0.55)' : 'rgba(120,120,120,0.3)';
     ctx.beginPath();
-    ctx.roundRect(x - NOTE_R, y - NOTE_R, NOTE_R * 2, NOTE_R * 2, 10);
-    ctx.stroke();
-    if (glow > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${glow * 0.18})`;
-      ctx.fill();
-    }
-    ctx.fillStyle = `rgba(255,255,255,${0.4 + glow * 0.5})`;
-    ctx.font = '600 26px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, x, y + 1);
-    ctx.restore();
-  }
-
-  private drawNote(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    color: string,
-    track: number,
-  ): void {
-    ctx.save();
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.roundRect(x - NOTE_R, y - NOTE_R, NOTE_R * 2, NOTE_R * 2, 10);
+    ctx.roundRect(x - w / 2, top, w, Math.max(0, bottom - top), w / 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.font = '700 26px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(DANCE_SINGLE_LABELS[track] ?? '', x, y + 1);
     ctx.restore();
   }
 
   private drawMine(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const r = this.arrowS * 0.8;
     ctx.save();
-    ctx.strokeStyle = '#e64b4b';
-    ctx.fillStyle = 'rgba(230,75,75,0.2)';
+    ctx.translate(x, y);
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.fillStyle = 'rgba(255,77,77,0.18)';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x, y, NOTE_R * 0.85, 0, Math.PI * 2);
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#e64b4b';
-    ctx.font = '700 22px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('✳', x, y + 1);
+    // Spikes.
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.moveTo(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55);
+      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    ctx.stroke();
     ctx.restore();
   }
 
-  private drawHud(ctx: CanvasRenderingContext2D, judge: Judge, now: number, fb: Feedback): void {
-    const cx = this.width / 2;
+  private drawHud(
+    ctx: CanvasRenderingContext2D,
+    judge: Judge,
+    now: number,
+    progress: number,
+    fb: Feedback,
+  ): void {
+    const { width, height } = this;
+    const cx = width / 2;
 
-    // Judgment label (fades over 0.6s).
+    // Title / difficulty (top-left).
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#eef1f8';
+    ctx.font = '800 24px system-ui, sans-serif';
+    ctx.fillText(this.meta.title || 'notefield', 28, 42);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '600 14px system-ui, sans-serif';
+    ctx.fillText(this.meta.subtitle, 28, 62);
+    ctx.fillStyle = '#ffd24d';
+    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.fillText(this.meta.difficulty, 28, 84);
+    ctx.restore();
+
+    // Score % + grade (top-right).
+    ctx.save();
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#eef1f8';
+    ctx.font = '800 40px system-ui, sans-serif';
+    ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, width - 28, 48);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = '700 16px system-ui, sans-serif';
+    ctx.fillText(`GRADE ${judge.grade}`, width - 28, 72);
+    ctx.restore();
+
+    // Life gauge (centered under the header).
+    const gW = Math.min(460, width * 0.5);
+    const gX = cx - gW / 2;
+    const gY = 30;
+    const gH = 16;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath();
+    ctx.roundRect(gX, gY, gW, gH, 8);
+    ctx.fill();
+    const life = judge.failed ? 0 : judge.life;
+    const lifeGrad = ctx.createLinearGradient(gX, 0, gX + gW, 0);
+    lifeGrad.addColorStop(0, '#ff4d4d');
+    lifeGrad.addColorStop(0.5, '#ffd24d');
+    lifeGrad.addColorStop(1, '#5be06a');
+    ctx.fillStyle = life <= 0 ? '#552' : lifeGrad;
+    ctx.beginPath();
+    ctx.roundRect(gX, gY, Math.max(2, gW * life), gH, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(gX, gY, gW, gH, 8);
+    ctx.stroke();
+    ctx.restore();
+
+    // Judgment label (fades).
     if (fb.lastJudgment) {
       const age = now - fb.lastJudgment.atSeconds;
       const j = JUDGMENT[fb.lastJudgment.tns];
-      if (j && age >= 0 && age < 0.6) {
+      if (j && age >= 0 && age < 0.55) {
+        const pop = age < 0.08 ? 1 + (0.08 - age) * 3 : 1;
         ctx.save();
-        ctx.globalAlpha = 1 - age / 0.6;
+        ctx.globalAlpha = Math.min(1, 1 - (age - 0.35) / 0.2);
+        ctx.translate(cx, this.receptorY + height * 0.24);
+        ctx.scale(pop, pop);
         ctx.fillStyle = j.color;
-        ctx.font = '800 34px system-ui, sans-serif';
+        ctx.font = '900 44px system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(j.label, cx, RECEPTOR_Y + 150);
+        ctx.fillText(j.label, 0, 0);
         ctx.restore();
       }
     }
@@ -204,42 +334,22 @@ export class NoteFieldRenderer {
     // Combo.
     if (judge.combo > 1) {
       ctx.save();
-      ctx.fillStyle = '#fff';
-      ctx.font = '800 52px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(String(judge.combo), cx, RECEPTOR_Y + 230);
+      ctx.fillStyle = '#fff';
+      ctx.font = '900 68px system-ui, sans-serif';
+      ctx.fillText(String(judge.combo), cx, this.receptorY + height * 0.36);
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.font = '600 16px system-ui, sans-serif';
-      ctx.fillText('COMBO', cx, RECEPTOR_Y + 250);
+      ctx.font = '800 18px system-ui, sans-serif';
+      ctx.fillText('COMBO', cx, this.receptorY + height * 0.36 + 26);
       ctx.restore();
     }
 
-    // Score % + grade (top-right).
+    // Song progress (thin bar at the bottom).
     ctx.save();
-    ctx.fillStyle = '#e6e8ee';
-    ctx.font = '700 26px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, this.width - 20, 40);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '600 15px system-ui, sans-serif';
-    ctx.fillText(`grade ${judge.grade}`, this.width - 20, 62);
-    ctx.restore();
-
-    // Life bar (top-left).
-    ctx.save();
-    const barW = 200;
-    const barH = 14;
-    ctx.fillStyle = 'rgba(255,255,255,0.1)';
-    ctx.fillRect(20, 30, barW, barH);
-    const life = judge.failed ? 0 : judge.life;
-    ctx.fillStyle = life < 0.25 ? '#e64b4b' : life >= 1 ? '#7ff0ff' : '#5be06a';
-    ctx.fillRect(20, 30, barW * life, barH);
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.strokeRect(20, 30, barW, barH);
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = '600 13px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('LIFE', 20, 24);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, height - 6, width, 6);
+    ctx.fillStyle = '#6ea8fe';
+    ctx.fillRect(0, height - 6, width * Math.max(0, Math.min(1, progress)), 6);
     ctx.restore();
   }
 }

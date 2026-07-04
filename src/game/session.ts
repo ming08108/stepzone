@@ -8,10 +8,12 @@
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
-import { beatToNoteRow, noteRowToBeat } from '../notes/noteTypes';
+import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
+import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
+import type { TimingData } from '../timing/timingData';
 
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
@@ -21,11 +23,13 @@ export class GameSession {
   private readonly clock = new WebAudioClock();
   private readonly renderer: NoteFieldRenderer;
   private readonly ctx2d: CanvasRenderingContext2D;
+  private readonly timing: TimingData;
   private readonly held: boolean[];
   private readonly feedback: Feedback;
   private readonly clicks: Click[] = [];
   private readonly endSeconds: number;
 
+  private dpr = 1;
   private raf = 0;
   private running = false;
   private lastSeq = 0;
@@ -37,31 +41,39 @@ export class GameSession {
     chart: Steps,
     private readonly canvas: HTMLCanvasElement,
   ) {
-    const timing = chart.getTimingData(song.timing);
+    this.timing = chart.getTimingData(song.timing);
     const nd = chart.getNoteData();
 
-    this.judge = new Judge(nd, timing);
+    this.judge = new Judge(nd, this.timing);
     this.renderer = new NoteFieldRenderer(nd.numTracks);
+    this.renderer.setMeta({
+      title: song.title || 'Untitled',
+      subtitle: song.artist,
+      difficulty: `${chart.stepsType}  ·  ${difficultyToString(chart.difficulty).toUpperCase()} ${chart.meter}`,
+    });
+
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
     this.ctx2d = ctx;
     this.held = new Array<boolean>(nd.numTracks).fill(false);
-    this.feedback = { lastJudgment: null, laneFlash: new Array<number>(nd.numTracks).fill(-999) };
+    this.feedback = {
+      lastJudgment: null,
+      laneFlash: new Array<number>(nd.numTracks).fill(-999),
+      laneHit: new Array<Feedback['laneHit'][number]>(nd.numTracks).fill(null),
+    };
 
     // Metronome clicks on every beat, accented on downbeats.
     const lastBeat = noteRowToBeat(nd.lastRow());
     for (let beat = 0; beat <= Math.ceil(lastBeat); beat++) {
-      const t = timing.getElapsedTimeFromBeat(beat);
-      if (t >= 0 && beatToNoteRow(beat) >= 0) {
-        this.clicks.push({ time: t, accent: beat % 4 === 0 });
-      }
+      const t = this.timing.getElapsedTimeFromBeat(beat);
+      if (t >= 0) this.clicks.push({ time: t, accent: beat % 4 === 0 });
     }
 
     let end = 0;
     for (const n of this.judge.notes) end = Math.max(end, n.tailTime);
     this.endSeconds = end + TAIL_SECONDS;
 
-    this.resize(canvas.width, canvas.height);
+    this.resize(canvas.clientWidth || 800, canvas.clientHeight || 720);
   }
 
   /** Current audible song position in seconds (dev/testing hook). */
@@ -69,10 +81,12 @@ export class GameSession {
     return this.clock.songSecondsNow();
   }
 
+  /** Resize to a logical (CSS) size; the backing store is scaled by devicePixelRatio. */
   resize(width: number, height: number): void {
-    this.canvas.width = width;
-    this.canvas.height = height;
-    this.renderer.resize(width, height);
+    this.dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    this.canvas.width = Math.round(width * this.dpr);
+    this.canvas.height = Math.round(height * this.dpr);
+    this.renderer.resize(width, height, this.dpr);
   }
 
   async start(): Promise<void> {
@@ -89,7 +103,10 @@ export class GameSession {
     this.held[track] = true;
     const t = this.clock.songSecondsAtEvent(eventTimeStampMs);
     this.feedback.laneFlash[track] = t;
-    this.judge.step(track, t, false);
+    const ev = this.judge.step(track, t, false);
+    if (ev && ev.tns !== TapNoteScore.None) {
+      this.feedback.laneHit[track] = { tns: ev.tns, atSeconds: t };
+    }
   }
 
   release(track: number, eventTimeStampMs: number): void {
@@ -109,7 +126,9 @@ export class GameSession {
       this.feedback.lastJudgment = { tns: this.judge.lastTns, atSeconds: now };
     }
 
-    this.renderer.draw(this.ctx2d, this.judge, now, this.feedback);
+    const beat = this.timing.getBeatFromElapsedTime(now);
+    const progress = now <= 0 ? 0 : Math.min(1, now / this.endSeconds);
+    this.renderer.draw(this.ctx2d, this.judge, now, beat, progress, this.feedback);
 
     if (now >= this.endSeconds) {
       this.finish();

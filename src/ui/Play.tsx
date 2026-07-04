@@ -4,9 +4,6 @@ import { parseSimfile } from '../parse/loader';
 import { GameSession } from '../game/session';
 import { keyToColumn } from '../input/keymap';
 
-const CANVAS_W = 720;
-const CANVAS_H = 760;
-
 type Phase = 'ready' | 'playing' | 'done';
 
 interface Result {
@@ -16,11 +13,26 @@ interface Result {
   failed: boolean;
 }
 
-export function Play() {
+export function Play({ onInspect }: { onInspect: () => void }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
+
+  // Keep the canvas backing store matched to the (full-screen) element.
+  useEffect(() => {
+    const onResize = () => {
+      const c = canvasRef.current;
+      if (c) sessionRef.current?.resize(c.clientWidth, c.clientHeight);
+    };
+    window.addEventListener('resize', onResize);
+    document.addEventListener('fullscreenchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('fullscreenchange', onResize);
+    };
+  }, []);
 
   // Route keyboard to the active session, on the event's own timestamp.
   useEffect(() => {
@@ -44,7 +56,6 @@ export function Play() {
     };
   }, []);
 
-  // Stop the session if the component unmounts.
   useEffect(() => () => sessionRef.current?.stop(), []);
 
   const start = async () => {
@@ -57,7 +68,7 @@ export function Play() {
     if (!chart) return;
 
     const session = new GameSession(song, chart, canvas);
-    session.resize(CANVAS_W, CANVAS_H);
+    session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
       setResult({
         percent: judge.percentDancePoints,
@@ -76,32 +87,53 @@ export function Play() {
     await session.start();
   };
 
+  const toggleFullscreen = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void el.requestFullscreen?.();
+  };
+
   return (
-    <div className="stage">
-      <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} />
+    <div className="playwrap" ref={wrapRef}>
+      <canvas ref={canvasRef} className="playcanvas" />
+
+      <div className="playctl">
+        <button onClick={toggleFullscreen} title="Fullscreen">
+          ⛶
+        </button>
+        <button onClick={onInspect}>Inspect</button>
+      </div>
+
       {phase !== 'playing' && (
         <div className="overlay">
           {phase === 'ready' && (
             <>
+              <div className="logo">notefield</div>
               <h2>Example — dance-single (Hard)</h2>
               <p className="hint">
-                Hit each arrow as it reaches the receptors. Keys: <kbd>←</kbd> <kbd>↓</kbd>{' '}
-                <kbd>↑</kbd> <kbd>→</kbd> or <kbd>D</kbd> <kbd>F</kbd> <kbd>J</kbd> <kbd>K</kbd>.
+                Hit each arrow as it reaches the receptors.
+                <br />
+                <kbd>←</kbd> <kbd>↓</kbd> <kbd>↑</kbd> <kbd>→</kbd> &nbsp;or&nbsp; <kbd>D</kbd>{' '}
+                <kbd>F</kbd> <kbd>J</kbd> <kbd>K</kbd>
               </p>
+              <button className="cta" onClick={start}>
+                ▶ Play
+              </button>
               <p className="hint muted">
                 A metronome plays on each beat (the example has no audio).
               </p>
-              <button onClick={start}>▶ Play</button>
             </>
           )}
           {phase === 'done' && result && (
             <>
-              <h2>{result.failed ? 'Failed' : 'Cleared'}</h2>
+              <h2>{result.failed ? 'FAILED' : 'CLEARED'}</h2>
               <div className="bigscore">{(result.percent * 100).toFixed(2)}%</div>
-              <div className="hint">
-                grade <strong>{result.grade}</strong> · max combo {result.maxCombo}
-              </div>
-              <button onClick={start}>↻ Play again</button>
+              <div className="gradebadge">{result.grade}</div>
+              <div className="hint">max combo {result.maxCombo}</div>
+              <button className="cta" onClick={start}>
+                ↻ Play again
+              </button>
             </>
           )}
         </div>
