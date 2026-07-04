@@ -179,13 +179,19 @@ export function SongSelect({
       const key = songKey(e.song.title, e.song.artist);
       if (favOnly && !favs.has(key)) return false;
       if (q && !`${e.song.title} ${e.song.artist}`.toLowerCase().includes(q)) return false;
+      // A remote song's charts aren't loaded until opened, and the example has
+      // no files — keep both (they matched search/fav above); apply the chart
+      // filters only to songs whose charts we actually have.
+      const isRemoteUnloaded = !!e.remoteDir && e.song.charts.length === 0;
+      const isExample = e.files.length === 0 && !e.remoteDir;
+      if (isRemoteUnloaded || isExample) return true;
       const charts = e.song.charts.filter(
         (c) =>
           (stepsType === 'all' || c.stepsType === stepsType) &&
           c.meter >= minMeter &&
           c.meter <= maxMeter,
       );
-      return charts.length > 0 || (e.files.length === 0 && !favOnly && !q); // keep example visible
+      return charts.length > 0;
     });
     rows.sort((a, b) => {
       if (sort === 'bpm') return songBpmRange(a.song).min - songBpmRange(b.song).min;
