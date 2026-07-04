@@ -33,6 +33,7 @@ export interface SessionConfig {
   turn: Turn;
   reverse: boolean;
   appearance: 'visible' | 'hidden' | 'sudden';
+  bgMode: 'off' | 'dim' | 'full';
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -44,6 +45,7 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   turn: 'none',
   reverse: false,
   appearance: 'visible',
+  bgMode: 'dim',
 };
 
 export class GameSession {
@@ -105,6 +107,7 @@ export class GameSession {
     this.renderer.setColumnAngles(columnAnglesFor(chart.stepsType, nd.numTracks));
     this.renderer.setReverse(config.reverse);
     this.renderer.setAppearance(config.appearance);
+    this.renderer.setBgDim(config.bgMode === 'full' ? 0.25 : 0.6);
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;

@@ -12,12 +12,8 @@ import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
 
-const SPACING = [
-  { key: 'TIGHT', mult: 0.75 },
-  { key: 'NORMAL', mult: 1 },
-  { key: 'WIDE', mult: 1.3 },
-];
-const BG = ['OFF', 'DIM', 'FULL'];
+const BG = ['OFF', 'DIM', 'FULL'] as const;
+const BG_MODE = ['off', 'dim', 'full'] as const;
 const DIFF_COLOR: Record<string, string> = {
   Beginner: '#37d5ff',
   Easy: '#ffcf3d',
@@ -29,18 +25,16 @@ const DIFF_COLOR: Record<string, string> = {
 
 interface Opts {
   speed: number;
-  spacing: number;
   bg: number;
 }
 function loadOpts(): Opts {
   try {
     const o = JSON.parse(localStorage.getItem('stepline.options') || '');
-    if (o && typeof o.speed === 'number')
-      return { speed: o.speed, spacing: o.spacing | 0, bg: o.bg | 0 };
+    if (o && typeof o.speed === 'number') return { speed: o.speed, bg: o.bg | 0 };
   } catch {
     /* default below */
   }
-  return { speed: 2.25, spacing: 1, bg: 1 };
+  return { speed: 2, bg: 1 };
 }
 
 /** Small looping preview: notes scrolling up to receptors at the chosen speed. */
@@ -158,14 +152,14 @@ export function PlayerOptions({
     localStorage.setItem('stepline.options', JSON.stringify(opts));
   }, [opts]);
 
-  const mult = opts.speed * SPACING[opts.spacing].mult;
+  const mult = opts.speed;
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
   const diffName = difficultyToString(req.chart.difficulty);
   const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
 
   const go = () => {
-    update({ scrollMode: 'X', scrollValue: mult });
+    update({ scrollMode: 'X', scrollValue: opts.speed, bgMode: BG_MODE[opts.bg] });
     onStart();
   };
 
@@ -173,15 +167,13 @@ export function PlayerOptions({
     setOpts((o) => {
       if (row === 0)
         return { ...o, speed: Math.max(0.5, Math.min(3.5, +(o.speed + dir * 0.25).toFixed(2))) };
-      if (row === 1) return { ...o, spacing: (o.spacing + dir + 3) % 3 };
       return { ...o, bg: (o.bg + dir + 3) % 3 };
     });
   };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp') setRow((v) => (v + 2) % 3);
-      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % 3);
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') setRow((v) => (v + 1) % 2);
       else if (e.key === 'ArrowLeft') adjust(-1);
       else if (e.key === 'ArrowRight') adjust(1);
       else if (e.key === 'Enter') go();
@@ -194,9 +186,16 @@ export function PlayerOptions({
   });
 
   const rows = [
-    { label: 'SPEED MOD', value: `${opts.speed.toFixed(2)}×` },
-    { label: 'ARROW SPACING', value: SPACING[opts.spacing].key },
-    { label: 'BACKGROUND', value: BG[opts.bg] },
+    {
+      label: 'SPEED MOD',
+      value: `${opts.speed.toFixed(2)}×`,
+      help: `How fast the arrows scroll (multiple of the song's BPM). Higher = faster and more spread out — easier to read individual steps, less time on screen. ${bpm ? `≈ ${Math.round(bpm * opts.speed)} BPM on this song.` : ''}`,
+    },
+    {
+      label: 'BACKGROUND',
+      value: BG[opts.bg],
+      help: "The song's background art/video behind the arrows. OFF hides it, DIM darkens it so notes stay readable, FULL shows it brighter.",
+    },
   ];
 
   return (
@@ -235,46 +234,49 @@ export function PlayerOptions({
           {rows.map((r2, i) => {
             const on = i === row;
             return (
-              <div
-                key={r2.label}
-                onClick={() => setRow(i)}
-                className="flex h-[54px] cursor-pointer items-center gap-4 border border-l-[3px] px-4"
-                style={{
-                  borderColor: on ? AC : 'rgba(255,255,255,.1)',
-                  borderLeftColor: on ? AC : 'transparent',
-                  background: on ? AC + '14' : 'transparent',
-                }}
-              >
-                <span className="flex-1 text-[15px] tracking-[0.14em] text-[#ececec]/85">
-                  {r2.label}
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRow(i);
-                    adjust(-1);
+              <div key={r2.label} className="mb-1">
+                <div
+                  onClick={() => setRow(i)}
+                  className="flex h-[54px] cursor-pointer items-center gap-4 border border-l-[3px] px-4"
+                  style={{
+                    borderColor: on ? AC : 'rgba(255,255,255,.1)',
+                    borderLeftColor: on ? AC : 'transparent',
+                    background: on ? AC + '14' : 'transparent',
                   }}
-                  style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
                 >
-                  ◀
-                </button>
-                <span className="min-w-[130px] text-center text-[17px] font-bold">{r2.value}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRow(i);
-                    adjust(1);
-                  }}
-                  style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                >
-                  ▶
-                </button>
+                  <span className="flex-1 text-[15px] tracking-[0.14em] text-[#ececec]/85">
+                    {r2.label}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRow(i);
+                      adjust(-1);
+                    }}
+                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                  >
+                    ◀
+                  </button>
+                  <span className="min-w-[130px] text-center text-[17px] font-bold">
+                    {r2.value}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRow(i);
+                      adjust(1);
+                    }}
+                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                  >
+                    ▶
+                  </button>
+                </div>
+                <div className="mb-2 mt-1.5 px-1 text-[12px] leading-snug text-[#ececec]/45">
+                  {r2.help}
+                </div>
               </div>
             );
           })}
-          <div className="mt-1 text-[12px] tracking-[0.1em] text-[#ececec]/40">
-            EFFECTIVE SCROLL ≈ {bpm ? Math.round(bpm * mult) : '—'} BPM
-          </div>
           <button
             onClick={go}
             className="mt-4 h-[58px] w-full text-[18px] font-bold tracking-[0.3em]"

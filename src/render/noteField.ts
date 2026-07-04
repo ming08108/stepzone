@@ -114,6 +114,7 @@ export class NoteFieldRenderer {
   private nowBeat = 0;
   private columnAngles: number[] = [];
   private background: HTMLVideoElement | HTMLImageElement | null = null;
+  private bgDim = 0.6; // dark overlay alpha on the song background
   private transparentBg = false; // let a WebGPU layer behind show through
   private reverse = false; // downscroll: receptors at the bottom
   private appearance: 'visible' | 'hidden' | 'sudden' = 'visible';
@@ -142,6 +143,11 @@ export class NoteFieldRenderer {
   /** Background video/image drawn behind the field, or null. */
   setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
     this.background = media;
+  }
+
+  /** Dark-overlay alpha on the background (0 = full brightness, 1 = black). */
+  setBgDim(dim: number): void {
+    this.bgDim = Math.max(0, Math.min(1, dim));
   }
 
   /** When true (and no bg media), clear to transparent so a WebGPU layer shows. */
@@ -201,8 +207,8 @@ export class NoteFieldRenderer {
     const dw = bw * scale;
     const dh = bh * scale;
     ctx.drawImage(bg, (this.width - dw) / 2, (this.height - dh) / 2, dw, dh);
-    // Dim so arrows stay readable (design: rgba(5,6,8,.6)).
-    ctx.fillStyle = 'rgba(5,6,8,0.6)';
+    // Dim so arrows stay readable (configurable via bgMode; design default .6).
+    ctx.fillStyle = `rgba(5,6,8,${this.bgDim})`;
     ctx.fillRect(0, 0, this.width, this.height);
   }
 

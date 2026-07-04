@@ -198,6 +198,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       turn: settings.turn,
       reverse: settings.reverse,
       appearance: settings.appearance,
+      bgMode: settings.bgMode,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
@@ -236,8 +237,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       });
     }
 
-    // Background image / video.
-    if (req.backgroundFile) {
+    // Background image / video (unless the player turned it off).
+    if (req.backgroundFile && settings.bgMode !== 'off') {
       const url = URL.createObjectURL(req.backgroundFile);
       bgUrlRef.current = url;
       if (isVideoFile(req.backgroundFile.name)) {

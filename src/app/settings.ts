@@ -28,6 +28,8 @@ export interface Settings {
   appearance: 'visible' | 'hidden' | 'sudden';
   /** Use the experimental WebGPU renderer (falls back to Canvas). */
   webgpu: boolean;
+  /** Song background visibility during play. */
+  bgMode: 'off' | 'dim' | 'full';
 }
 
 export const DEFAULT_KEYBINDINGS: Record<string, number> = {
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reverse: false,
   appearance: 'visible',
   webgpu: true,
+  bgMode: 'dim',
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';
