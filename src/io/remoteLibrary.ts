@@ -13,22 +13,12 @@
  */
 
 import { parseSimfile } from '../parse/loader';
+import { Song } from '../song/song';
+import type { RemoteCatalog } from './catalog';
 import type { LibraryEntry } from './songFiles';
 
 const CACHE_NAME = 'notefield-songs-v1';
 const BG_OK = ['.mp4', '.webm', '.ogv', '.m4v', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
-
-export interface RemoteSong {
-  dir?: string;
-  sm: string;
-  title?: string;
-  artist?: string;
-  banner?: string;
-}
-export interface RemoteCatalog {
-  name?: string;
-  songs: RemoteSong[];
-}
 
 /** Fetch a URL, serving from (and populating) the local cache when possible. */
 export async function cachedFetch(url: string): Promise<Response> {
@@ -55,7 +45,12 @@ export async function isCached(url: string): Promise<boolean> {
   }
 }
 
-/** Load a server catalog into library entries (simfile + banner only). */
+/**
+ * Load a server catalog into lightweight library entries. Only the catalog is
+ * fetched (one request) — each song's simfile/banner/audio load lazily (see
+ * `ensureRemoteLoaded`), so a 2000-song library appears instantly. Rows render
+ * from the catalog's title/artist; charts/BPM fill in when a song is opened.
+ */
 export async function loadRemoteLibrary(
   catalogUrl: string,
 ): Promise<{ entries: LibraryEntry[]; warnings: string[]; name?: string }> {
@@ -68,37 +63,33 @@ export async function loadRemoteLibrary(
   const entries: LibraryEntry[] = [];
   for (const s of cat.songs) {
     if (!s || !s.sm) continue;
-    try {
-      // Resolve relative to the catalog's directory (URL replaces the
-      // trailing "catalog.json" segment); ensure a trailing slash so the
-      // simfile/audio names resolve inside the song folder.
-      const songDir = s.dir
-        ? new URL(s.dir.replace(/\/?$/, '/'), catalogUrl).href
-        : new URL('.', catalogUrl).href;
-      const simUrl = new URL(s.sm, songDir).href;
-      const simRes = await cachedFetch(simUrl);
-      if (!simRes.ok) {
-        warnings.push(`${s.sm}: HTTP ${simRes.status}`);
-        continue;
-      }
-      const song = parseSimfile(await simRes.text(), s.sm);
-      let bannerUrl: string | null = null;
-      const bannerName = s.banner ?? song.bannerFile;
-      if (bannerName) {
-        try {
-          const b = await cachedFetch(new URL(bannerName, songDir).href);
-          if (b.ok) bannerUrl = URL.createObjectURL(await b.blob());
-        } catch {
-          // banner is optional
-        }
-      }
-      entries.push({ song, files: [], sourceName: s.dir ?? s.sm, bannerUrl, remoteDir: songDir });
-    } catch (e) {
-      warnings.push(`${s.sm}: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    // Resolve relative to the catalog's directory (URL drops the trailing
+    // "catalog.json" segment); trailing slash keeps names inside the folder.
+    const songDir = s.dir
+      ? new URL(s.dir.replace(/\/?$/, '/'), catalogUrl).href
+      : new URL('.', catalogUrl).href;
+    const song = new Song();
+    song.title = s.title || s.dir?.split('/').pop() || s.sm;
+    song.artist = s.artist ?? '';
+    entries.push({
+      song, // charts empty until ensureRemoteLoaded()
+      files: [],
+      sourceName: s.dir ?? s.sm,
+      bannerUrl: s.banner ? new URL(s.banner, songDir).href : null,
+      remoteDir: songDir,
+      remoteSm: s.sm,
+    });
   }
-  if (entries.length === 0 && warnings.length === 0) warnings.push('Catalog listed no songs.');
+  if (entries.length === 0) warnings.push('Catalog listed no songs.');
   return { entries, warnings, name: cat.name };
+}
+
+/** Fetch + parse a remote entry's full simfile (charts/timing). Idempotent. */
+export async function ensureRemoteLoaded(entry: LibraryEntry): Promise<Song> {
+  if (!entry.remoteDir || !entry.remoteSm || entry.song.charts.length > 0) return entry.song;
+  const res = await cachedFetch(new URL(entry.remoteSm, entry.remoteDir).href);
+  if (!res.ok) throw new Error(`Simfile HTTP ${res.status}`);
+  return parseSimfile(await res.text(), entry.remoteSm);
 }
 
 /** Fetch (cached) the audio bytes for a remote entry, or null. */

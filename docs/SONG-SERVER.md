@@ -36,16 +36,33 @@ catalog's own URL:
 - The audio and background come from the simfile's `#MUSIC` / `#BACKGROUND`
   filenames, resolved inside `dir`.
 
-## Generating a catalog
+## Running a server (easiest)
+
+A ready-made server (TypeScript, run directly by Node ≥ 22.6 — no build step)
+scans a Songs library (packs of song folders, nested), serves it with CORS +
+HTTP Range, and generates the catalog dynamically:
 
 ```
-node scripts/make-catalog.mjs "/path/to/Songs/My Pack"
+npm run song-server                       # serves C:/Games/ITGmania/Songs on :8760
+npm run song-server -- "D:/Songs" 9000    # custom dir + port
 ```
 
-writes `catalog.json` into that folder. Then serve the folder with any static
-host. If the host is a **different origin** than the app, it must send
-`Access-Control-Allow-Origin` (CORS) headers, or the browser will block the
-fetches.
+It prints the URL to paste (`http://localhost:8760/catalog.json`). The catalog
+includes each song's title/artist so a multi-thousand-song library lists
+instantly; simfiles/audio/backgrounds are fetched only when you open or play a
+song.
+
+## Static hosting (no Node at serve time)
+
+To host on GitHub Pages / S3 / any static host, pre-generate the catalog:
+
+```
+npm run make-catalog -- "/path/to/Songs"
+```
+
+writes `catalog.json` into that folder. Then serve the folder statically. If the
+host is a **different origin** than the app, it must send
+`Access-Control-Allow-Origin` (CORS) headers, or the browser blocks the fetches.
 
 ## Notes & limits
 

@@ -113,6 +113,8 @@ export interface LibraryEntry {
   bannerUrl: string | null;
   /** Base URL of the song folder when loaded from a server (see remoteLibrary). */
   remoteDir?: string;
+  /** Simfile filename for a remote entry (loaded lazily on open/play). */
+  remoteSm?: string;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */

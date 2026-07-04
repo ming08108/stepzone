@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "song-server": "node scripts/song-server.ts",
+    "make-catalog": "node scripts/make-catalog.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

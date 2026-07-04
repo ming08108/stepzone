@@ -9,7 +9,12 @@ import {
   songBpmRange,
   type LibraryEntry,
 } from '../io/songFiles';
-import { fetchRemoteBackground, loadRemoteLibrary, readRemoteAudio } from '../io/remoteLibrary';
+import {
+  ensureRemoteLoaded,
+  fetchRemoteBackground,
+  loadRemoteLibrary,
+  readRemoteAudio,
+} from '../io/remoteLibrary';
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { chartKey, loadScores, totalStats } from '../app/scores';
 import { difficultyToString } from '../song/difficulty';
@@ -45,6 +50,7 @@ export function SongSelect({
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [scores] = useState(() => loadScores());
   const [stats] = useState(() => totalStats());
   const [catalogUrl, setCatalogUrl] = useState(
@@ -65,12 +71,34 @@ export function SongSelect({
     if (folderRef.current) folderRef.current.webkitdirectory = true;
   }, []);
 
-  // Revoke banner URLs when the library is replaced / unmounts.
+  // Revoke object-URL banners when the library is replaced / unmounts.
+  // (Remote banners are plain URLs — nothing to revoke.)
   useEffect(() => {
     return () => {
-      for (const e of entries) if (e.bannerUrl) URL.revokeObjectURL(e.bannerUrl);
+      for (const e of entries)
+        if (e.bannerUrl?.startsWith('blob:')) URL.revokeObjectURL(e.bannerUrl);
     };
   }, [entries]);
+
+  // Open a song row, lazily loading a remote song's charts on first open.
+  const openSong = async (entry: LibraryEntry, key: string) => {
+    if (expanded === key) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(key);
+    if (entry.remoteDir && entry.song.charts.length === 0) {
+      setLoadingKey(key);
+      try {
+        const full = await ensureRemoteLoaded(entry);
+        setEntries((prev) => prev.map((e) => (e === entry ? { ...e, song: full } : e)));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoadingKey(null);
+      }
+    }
+  };
 
   const handleFiles = async (files: File[]) => {
     if (files.length === 0) return;
@@ -128,13 +156,15 @@ export function SongSelect({
   };
 
   const play = async (entry: LibraryEntry, chartIndex: number) => {
-    const chart = entry.song.charts[chartIndex];
+    let e = entry;
+    if (entry.remoteDir && entry.song.charts.length === 0) {
+      e = { ...entry, song: await ensureRemoteLoaded(entry) };
+    }
+    const chart = e.song.charts[chartIndex];
     if (!chart) return;
-    const audio = entry.remoteDir ? await readRemoteAudio(entry) : await readSongAudio(entry);
-    const backgroundFile = entry.remoteDir
-      ? await fetchRemoteBackground(entry)
-      : findBackgroundFile(entry);
-    onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile });
+    const audio = e.remoteDir ? await readRemoteAudio(e) : await readSongAudio(e);
+    const backgroundFile = e.remoteDir ? await fetchRemoteBackground(e) : findBackgroundFile(e);
+    onPlay({ song: e.song, chart, encodedAudio: audio, backgroundFile });
   };
 
   const stepsTypes = useMemo(() => {
@@ -324,11 +354,16 @@ export function SongSelect({
                   {isFav ? '★' : '☆'}
                 </button>
                 <button
-                  onClick={() => setExpanded(isOpen ? null : key)}
+                  onClick={() => void openSong(entry, key)}
                   className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
                   {entry.bannerUrl && (
-                    <img src={entry.bannerUrl} alt="" className="h-8 w-20 rounded object-cover" />
+                    <img
+                      src={entry.bannerUrl}
+                      alt=""
+                      loading="lazy"
+                      className="h-8 w-20 rounded object-cover"
+                    />
                   )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-semibold">
@@ -351,7 +386,12 @@ export function SongSelect({
                   </span>
                 </button>
               </div>
-              {isOpen && (
+              {isOpen && entry.song.charts.length === 0 && (
+                <div className="px-4 pb-3 text-sm text-muted">
+                  {loadingKey === key ? 'Loading charts…' : 'No charts.'}
+                </div>
+              )}
+              {isOpen && entry.song.charts.length > 0 && (
                 <div className="grid grid-cols-2 gap-2 px-4 pb-3 sm:grid-cols-3 md:grid-cols-4">
                   {entry.song.charts
                     .map((c, i) => ({ c, i }))
