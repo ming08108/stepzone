@@ -76,9 +76,9 @@ a clean swap when perspective mods / dense charts arrive). (#8's WebGPU part)
 
 ## M6 — Edge-case completeness
 
-- `.sm` negative-BPM / negative-stop → warp conversion (spec doc 2 §2.5) — needed
-  for DDR gimmick charts (e.g. PARANOiA-style).
+- ✅ `.sm` negative-BPM / negative-stop → warp conversion (spec doc 2 §2.5) —
+  ported from `ProcessBPMsAndStops`; DDR gimmick `.sm` charts now time correctly.
 - Composite / routine (`&`-separated) charts.
-- Per-row chord-cohesion combo; roll re-tap polish.
+- Per-row chord-cohesion combo; roll re-tap polish; life-delta modifiers.
 - Round-trip serialization + `ChartKey` hashing for validation (spec doc 10
   §10.7).

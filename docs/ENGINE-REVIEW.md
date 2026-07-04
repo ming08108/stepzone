@@ -52,6 +52,8 @@ The **data path (parse → timing → notes) and the core judgment/scoring/life
 math are faithful** to ITGmania and are covered by tests, including the spec's
 worked example and its input trace reproduced number-for-number. The remaining
 differences are two bounded gameplay simplifications (per-note combo, raw life
-deltas) and two unimplemented input features (`.sm` negative-BPM warps,
-composite charts) — all tracked in `ROADMAP.md` M6, and none affecting the
-constant-BPM DDR songs tested so far.
+deltas) and composite/routine charts — all tracked in `ROADMAP.md` M6.
+
+**Update:** `.sm` negative-BPM / negative-stop → warp conversion has since been
+implemented (`parse/negativeBpm.ts`, a faithful port of `ProcessBPMsAndStops`)
+and unit-tested, so the "❌" row above is now ✅.

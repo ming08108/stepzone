@@ -1,17 +1,17 @@
 /**
  * `.sm` parser. Song tags plus 6-field `#NOTES` charts. See spec doc 1 (§1.2–1.3).
  *
- * Limitation (tracked for a later milestone): negative BPMs / negative stops are
- * NOT yet converted to warps (spec doc 2 §2.5). They are dropped with a warning,
- * so `.sm` charts that use negative-BPM gimmicks will mis-time. `.ssc` (with
- * explicit `#WARPS`) is fully supported.
+ * Negative BPMs / negative stops (and "infinite" BPMs) are converted to warps
+ * after parsing, via processBpmsAndStops (spec doc 2 §2.5), so DDR gimmick
+ * charts time correctly.
  */
 
 import { Song, type DisplayBpmType } from '../song/song';
 import { Steps } from '../song/steps';
 import { oldStyleStringToDifficulty } from '../song/difficulty';
 import { param, tagName, tokenizeMsd } from './msd';
-import { hhmmssToSeconds, parseBpms, parseDelays, parsePairs, parseStops } from './timingTags';
+import { hhmmssToSeconds, parseDelays } from './timingTags';
+import { processBpmsAndStops, rawPairs } from './negativeBpm';
 
 function parseDisplayBpm(
   v1: string,
@@ -23,13 +23,13 @@ function parseDisplayBpm(
   return { type: 'specified', min, max: min };
 }
 
-function hasNegativeTiming(s: string): boolean {
-  return parsePairs(s).some((p) => p.values[0] < 0);
-}
-
 export function parseSm(text: string, warnings: string[] = []): Song {
   const song = new Song();
   const values = tokenizeMsd(text, true);
+
+  // BPMs/stops are processed together at the end (negative -> warp conversion).
+  let rawBpms: Array<[number, number]> = [];
+  let rawStops: Array<[number, number]> = [];
 
   for (const value of values) {
     const tag = tagName(value);
@@ -92,17 +92,11 @@ export function parseSm(text: string, warnings: string[] = []): Song {
         break;
       }
       case 'BPMS':
-        if (hasNegativeTiming(v1)) {
-          warnings.push('Negative BPMs present; warp conversion not yet implemented.');
-        }
-        song.timing.bpms = parseBpms(v1);
+        rawBpms = rawPairs(v1);
         break;
       case 'STOPS':
       case 'FREEZES':
-        if (hasNegativeTiming(v1)) {
-          warnings.push('Negative stops present; warp conversion not yet implemented.');
-        }
-        song.timing.stops = parseStops(v1);
+        rawStops = rawPairs(v1);
         break;
       case 'DELAYS':
         song.timing.delays = parseDelays(v1);
@@ -129,6 +123,13 @@ export function parseSm(text: string, warnings: string[] = []): Song {
         break;
     }
   }
+
+  // Convert BPMs/stops (incl. negatives) into positive BPMs + warps + stops.
+  const processed = processBpmsAndStops(rawBpms, rawStops);
+  song.timing.bpms = processed.bpms;
+  song.timing.stops = processed.stops;
+  song.timing.warps = processed.warps;
+  song.timing.offsetSeconds += processed.offsetDelta;
 
   song.timing.tidy();
   return song;
