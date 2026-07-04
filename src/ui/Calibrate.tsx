@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
+import { Stage, STEP_AC as AC } from './Stage';
 import { useSettings } from './SettingsContext';
 
 const BPM = 120;
@@ -92,74 +93,76 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
   const flash = now >= 0 && phase < 0.15;
 
   return (
-    <div className="mx-auto max-w-[560px] px-6 pb-16 pt-8 text-center">
-      <header className="mb-6 flex items-center justify-between">
-        <div className="text-xl font-bold">
-          notefield <span className="pill">calibrate</span>
-        </div>
+    <Stage
+      label="CALIBRATE"
+      footer={
         <button
           onClick={() => {
             stop();
             onBack();
           }}
-          className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
+          className="hover:text-[#ececec]"
         >
-          ← Options
+          SELECT — BACK TO OPTIONS
         </button>
-      </header>
-
-      <section className="card">
-        <p className="text-muted">
-          Press <kbd className="kbd">Space</kbd> (or any key) exactly on each metronome beat. After
-          ~16 taps, hit Apply.
+      }
+    >
+      <div className="flex h-full flex-col items-center justify-center gap-6 px-6 text-center">
+        <p className="max-w-[460px] text-[14px] tracking-[0.06em] text-[#ececec]/60">
+          Press any key exactly on each metronome beat. After ~16 taps, hit Apply.
         </p>
 
-        <div className="my-8 flex items-center justify-center">
-          <div
-            className="h-28 w-28 rounded-full border-4 transition-none"
-            style={{
-              borderColor: flash ? 'var(--color-accent)' : 'rgba(255,255,255,0.15)',
-              background: flash ? 'rgba(110,168,254,0.35)' : 'transparent',
-              transform: `scale(${flash ? 1.1 : 1})`,
-            }}
-          />
-        </div>
+        <div
+          className="h-28 w-28 rounded-full border-4"
+          style={{
+            borderColor: flash ? AC : 'rgba(255,255,255,0.15)',
+            background: flash ? 'rgba(255,77,61,0.3)' : 'transparent',
+            transform: `scale(${flash ? 1.1 : 1})`,
+          }}
+        />
 
-        <div className="text-3xl font-extrabold tabular-nums">{count} taps</div>
+        <div className="text-[40px] font-bold tabular-nums">
+          {count} <span className="text-[16px] tracking-[0.1em] text-[#ececec]/50">TAPS</span>
+        </div>
         {measured !== null && (
-          <div className="mt-2 text-accent">
-            Applied audio offset: {measured > 0 ? '+' : ''}
-            {measured} ms
+          <div className="text-[14px] tracking-[0.1em]" style={{ color: AC }}>
+            APPLIED OFFSET {measured > 0 ? '+' : ''}
+            {measured} MS
           </div>
         )}
 
-        <div className="mt-6 flex justify-center gap-3">
+        <div className="flex gap-3">
           {!running ? (
-            <button className="cta" onClick={start}>
-              ▶ Start
+            <button
+              onClick={start}
+              className="border px-6 py-2 text-[14px] tracking-[0.1em]"
+              style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+            >
+              ▶ START
             </button>
           ) : (
             <button
-              className="rounded-xl border border-line px-6 py-2 text-muted hover:text-ink"
               onClick={stop}
+              className="border border-white/15 px-6 py-2 text-[14px] tracking-[0.1em] text-[#ececec]/60"
             >
-              Stop
+              STOP
             </button>
           )}
           <button
-            className="rounded-xl bg-accent px-6 py-2 font-bold text-night hover:brightness-110 disabled:opacity-40"
             onClick={apply}
             disabled={count < 6}
+            className="border px-6 py-2 text-[14px] font-bold tracking-[0.1em] disabled:opacity-40"
+            style={{ borderColor: AC, background: AC, color: '#0b0c0e' }}
           >
-            Apply
+            APPLY
           </button>
         </div>
 
-        <p className="mt-4 text-sm text-muted">
-          Current audio offset: {settings.audioOffsetMs > 0 ? '+' : ''}
-          {settings.audioOffsetMs} ms
+        <p className="text-[12px] tracking-[0.12em] text-[#ececec]/45">
+          CURRENT OFFSET {settings.audioOffsetMs > 0 ? '+' : ''}
+          {settings.audioOffsetMs} MS
         </p>
-      </section>
-    </div>
+      </div>
+    </Stage>
   );
 }
