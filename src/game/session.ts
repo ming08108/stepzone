@@ -11,6 +11,7 @@ import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { readGamepad } from '../input/gamepad';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
+import { remapTracks, turnPermutation, type Turn } from '../notes/transforms';
 import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
@@ -28,6 +29,7 @@ export interface SessionConfig {
   musicRate: number;
   audioOffsetMs: number;
   visualOffsetMs: number;
+  turn: Turn;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -36,6 +38,7 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   musicRate: 1,
   audioOffsetMs: 0,
   visualOffsetMs: 0,
+  turn: 'none',
 };
 
 export class GameSession {
@@ -71,8 +74,20 @@ export class GameSession {
   ) {
     this.timing = chart.getTimingData(song.timing);
     const nd = chart.getNoteData();
+    // Apply the turn mod to a copy for play; the parsed chart is untouched.
+    const playNd =
+      config.turn === 'none'
+        ? nd
+        : remapTracks(
+            nd,
+            turnPermutation(
+              config.turn,
+              nd.numTracks,
+              `${song.title}${chart.stepsType}${chart.meter}`,
+            ),
+          );
 
-    this.judge = new Judge(nd, this.timing, DEFAULT_WINDOWS, config.musicRate);
+    this.judge = new Judge(playNd, this.timing, DEFAULT_WINDOWS, config.musicRate);
     this.renderer = new NoteFieldRenderer(nd.numTracks);
     const maxBpm = this.timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
     this.renderer.setScroll(config.scrollMode, config.scrollValue, maxBpm);

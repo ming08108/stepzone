@@ -3,6 +3,8 @@
  * Pure data + load/save; the React layer wraps this in a context.
  */
 
+import type { Turn } from '../notes/transforms';
+
 export type ScrollMode = 'C' | 'X' | 'M';
 
 export interface Settings {
@@ -18,6 +20,10 @@ export interface Settings {
   visualOffsetMs: number;
   /** KeyboardEvent.code -> dance-single column (0..3). */
   keybindings: Record<string, number>;
+  /** Column-remap play modifier (mirror/left/right/shuffle). */
+  turn: Turn;
+  /** Use the experimental WebGPU renderer (falls back to Canvas). */
+  webgpu: boolean;
 }
 
 export const DEFAULT_KEYBINDINGS: Record<string, number> = {
@@ -38,6 +44,8 @@ export const DEFAULT_SETTINGS: Settings = {
   audioOffsetMs: 0,
   visualOffsetMs: 0,
   keybindings: { ...DEFAULT_KEYBINDINGS },
+  turn: 'none',
+  webgpu: true,
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';

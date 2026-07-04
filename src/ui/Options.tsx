@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { DEFAULT_KEYBINDINGS, type Settings } from '../app/settings';
+import { TURNS } from '../notes/transforms';
 import { useSettings } from './SettingsContext';
 import { useMenuNav } from './useMenuNav';
 
@@ -140,6 +141,25 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
         <p className="mt-1 text-sm text-muted">
           Slows/speeds the music; judgment windows scale too.
         </p>
+      </Section>
+
+      <Section title="Mods">
+        <div className="flex flex-wrap gap-2">
+          {TURNS.map((t) => (
+            <button
+              key={t}
+              onClick={() => update({ turn: t })}
+              className={`rounded-lg border px-4 py-1.5 capitalize ${
+                settings.turn === t
+                  ? 'border-accent bg-accent/10 text-ink'
+                  : 'border-line text-muted'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+          <span className="self-center text-sm text-muted">remap the columns</span>
+        </div>
       </Section>
 
       <Section title="Sync / offset">
