@@ -27,7 +27,7 @@ function keyLabel(code: string): string {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="card">
-      <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">{title}</h2>
+      <h2 className="mb-3 font-display text-xs uppercase tracking-[0.2em] text-accent">{title}</h2>
       {children}
     </section>
   );
@@ -81,8 +81,8 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
   return (
     <div className="mx-auto max-w-[720px] px-6 pb-16 pt-8">
       <header className="mb-6 flex items-center justify-between">
-        <div className="text-xl font-bold">
-          notefield <span className="pill">options</span>
+        <div className="text-2xl">
+          <span className="brand">notefield</span> <span className="pill">options</span>
         </div>
         <button
           onClick={onBack}

@@ -22,7 +22,19 @@ import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
 const CHART_BTN =
-  'rounded-lg border border-line bg-white/[0.03] px-3 py-2 text-left hover:border-accent hover:bg-accent/10';
+  'rounded-lg border border-l-[3px] border-line bg-white/[0.03] px-3 py-2 text-left transition-colors hover:bg-white/[0.06]';
+
+// Canonical DDR/ITG difficulty colors — instantly readable to players.
+const DIFF_COLOR: Record<string, string> = {
+  beginner: '#3fb6ff',
+  easy: '#ffce3f',
+  medium: '#ff4d6d',
+  hard: '#4ee06a',
+  challenge: '#b56bff',
+  edit: '#9aa0b0',
+};
+const diffColor = (d: number): string =>
+  DIFF_COLOR[difficultyToString(d).toLowerCase()] ?? '#8b8ca4';
 
 function exampleEntry(): LibraryEntry {
   return {
@@ -404,12 +416,18 @@ export function SongSelect({
                     .sort((a, b) => a.c.difficulty - b.c.difficulty || a.c.meter - b.c.meter)
                     .map(({ c, i }) => {
                       const best = scores[chartKey(entry.song, c)];
+                      const color = diffColor(c.difficulty);
                       return (
-                        <button key={i} className={CHART_BTN} onClick={() => void play(entry, i)}>
+                        <button
+                          key={i}
+                          className={CHART_BTN}
+                          style={{ borderLeftColor: color }}
+                          onClick={() => void play(entry, i)}
+                        >
                           <div className="text-xs text-muted">{c.stepsType}</div>
-                          <div className="font-semibold">
+                          <div className="font-display font-semibold" style={{ color }}>
                             {difficultyToString(c.difficulty)}{' '}
-                            <span className="text-accent">{c.meter}</span>
+                            <span className="tabular-nums">{c.meter}</span>
                           </div>
                           {best && (
                             <div className="text-xs text-[#ffd94b]">

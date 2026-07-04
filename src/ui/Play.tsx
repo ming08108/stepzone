@@ -279,9 +279,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         <div className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
           {phase === 'ready' && (
             <>
-              <div className="text-2xl font-extrabold tracking-tight text-accent">notefield</div>
-              <h2 className="m-0 text-3xl tracking-wide">{title}</h2>
-              <p className="m-0 text-muted">{diff}</p>
+              <div className="brand text-2xl">notefield</div>
+              <h2 className="m-0 font-display text-4xl tracking-wide">{title}</h2>
+              <p className="m-0 font-display uppercase tracking-wider text-muted">{diff}</p>
               <p className="m-0 max-w-[30rem] text-ink">
                 <kbd className="kbd">←</kbd> <kbd className="kbd">↓</kbd>{' '}
                 <kbd className="kbd">↑</kbd> <kbd className="kbd">→</kbd> &nbsp;or&nbsp;{' '}
@@ -295,11 +295,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           )}
           {phase === 'done' && result && (
             <>
-              <h2 className="m-0 text-2xl tracking-wide">{result.failed ? 'FAILED' : 'CLEARED'}</h2>
-              <div className="text-5xl font-extrabold tabular-nums">
+              <h2
+                className={`m-0 font-display text-3xl uppercase tracking-[0.2em] ${
+                  result.failed ? 'text-accent' : 'text-[color:var(--color-accent2)]'
+                }`}
+              >
+                {result.failed ? 'FAILED' : 'CLEARED'}
+              </h2>
+              <div className="font-display text-6xl font-bold tabular-nums">
                 {(result.percent * 100).toFixed(2)}%
               </div>
-              <div className="text-[3.5rem] font-black leading-none text-[#ffd94b]">
+              <div className="font-display text-[3.5rem] font-bold leading-none text-[#ffd94b]">
                 {result.grade}
               </div>
               {result.isNewRecord && (

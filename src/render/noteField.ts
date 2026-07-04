@@ -273,9 +273,9 @@ export class NoteFieldRenderer {
     grad.addColorStop(1, 'rgba(255,255,255,0.015)');
     ctx.fillStyle = grad;
     ctx.fillRect(fieldL, 0, fieldW, height);
-    // Receptor glow line.
+    // Receptor glow line (cyan, matching the UI accent).
     const recY = this.recY();
-    ctx.fillStyle = 'rgba(120,150,255,0.06)';
+    ctx.fillStyle = 'rgba(33,230,214,0.06)';
     ctx.fillRect(fieldL, recY - 44, fieldW, 88);
 
     // Advance the visible-window cursor past notes that have scrolled off the
@@ -406,13 +406,13 @@ export class NoteFieldRenderer {
     ctx.save();
     ctx.textAlign = 'left';
     ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 24px system-ui, sans-serif';
+    ctx.font = '800 24px "Chakra Petch", system-ui, sans-serif';
     ctx.fillText(this.meta.title || 'notefield', 28, 42);
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '600 14px system-ui, sans-serif';
+    ctx.font = '600 14px "Chakra Petch", system-ui, sans-serif';
     ctx.fillText(this.meta.subtitle, 28, 62);
     ctx.fillStyle = '#ffd24d';
-    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.font = '700 14px "Chakra Petch", system-ui, sans-serif';
     ctx.fillText(this.meta.difficulty, 28, 84);
     ctx.restore();
 
@@ -420,10 +420,10 @@ export class NoteFieldRenderer {
     ctx.save();
     ctx.textAlign = 'right';
     ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 40px system-ui, sans-serif';
+    ctx.font = '800 40px "Chakra Petch", system-ui, sans-serif';
     ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, width - 28, 48);
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = '700 16px system-ui, sans-serif';
+    ctx.font = '700 16px "Chakra Petch", system-ui, sans-serif';
     ctx.fillText(`GRADE ${judge.grade}`, width - 28, 72);
     ctx.restore();
 
@@ -464,7 +464,7 @@ export class NoteFieldRenderer {
         ctx.translate(cx, this.receptorY + height * 0.24);
         ctx.scale(pop, pop);
         ctx.fillStyle = j.color;
-        ctx.font = '900 44px system-ui, sans-serif';
+        ctx.font = '900 44px "Chakra Petch", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(j.label, 0, 0);
         ctx.restore();
@@ -476,10 +476,10 @@ export class NoteFieldRenderer {
       ctx.save();
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff';
-      ctx.font = '900 68px system-ui, sans-serif';
+      ctx.font = '900 68px "Chakra Petch", system-ui, sans-serif';
       ctx.fillText(String(judge.combo), cx, this.receptorY + height * 0.36);
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.font = '800 18px system-ui, sans-serif';
+      ctx.font = '800 18px "Chakra Petch", system-ui, sans-serif';
       ctx.fillText('COMBO', cx, this.receptorY + height * 0.36 + 26);
       ctx.restore();
     }
