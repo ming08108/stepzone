@@ -40,6 +40,11 @@ export class WebAudioClock {
     this.buffer = await this.ctx.decodeAudioData(encoded);
   }
 
+  /** Use a pre-made buffer (e.g. a synthesized click track). */
+  setBuffer(buffer: AudioBuffer): void {
+    this.buffer = buffer;
+  }
+
   get durationSeconds(): number {
     return this.buffer?.duration ?? 0;
   }
