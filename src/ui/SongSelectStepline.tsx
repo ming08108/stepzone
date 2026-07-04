@@ -24,6 +24,7 @@ import {
 } from '../io/remoteLibrary';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
+import { previewSong, stopPreview } from '../audio/songPreview';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 
@@ -212,6 +213,12 @@ export function SongSelect({
     savedFilters.sel = selClamped;
     savedFilters.diff = diff;
   });
+
+  // Loop the highlighted song's sample snippet (#5); stop when leaving.
+  useEffect(() => {
+    if (song?.entry) previewSong(song.entry);
+  }, [song?.entry]);
+  useEffect(() => () => stopPreview(), []);
 
   const start = useCallback(async () => {
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];

@@ -1,10 +1,12 @@
 /**
  * STEPLINE Player Options — the per-play screen between song select and
- * gameplay: SPEED MOD / ARROW SPACING / BACKGROUND with a live scrolling note
- * preview, then START. Options persist to localStorage["stepline.options"].
- * Applies the chosen speed to the shared settings (X-mod) on START.
+ * gameplay: SPEED MOD / DIFFICULTY / BACKGROUND with a live scrolling note
+ * preview, then START. Speed + background persist to localStorage
+ * ["stepline.options"]; on START they apply to the shared settings (X-mod) and
+ * the chosen difficulty's chart is handed back to play.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { previewEncoded, stopPreview } from '../audio/songPreview';
 import { songBpmRange } from '../io/songFiles';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
@@ -156,6 +158,13 @@ export function PlayerOptions({
   useEffect(() => {
     localStorage.setItem('stepline.options', JSON.stringify(opts));
   }, [opts]);
+
+  // Loop the song sample while choosing options (#5); stop on leave/START.
+  useEffect(() => {
+    if (req.encodedAudio)
+      previewEncoded(req.song.title || req.song.musicFile, req.encodedAudio, req.song);
+    return () => stopPreview();
+  }, [req]);
 
   // Charts available for this song, one per difficulty slot, ordered by slot (#8).
   const charts = useMemo(() => {
