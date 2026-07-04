@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { DEFAULT_KEYBINDINGS, type Settings } from '../app/settings';
 import { TURNS } from '../notes/transforms';
+import { Stage, STEP_AC as AC } from './Stage';
 import { useSettings } from './SettingsContext';
 import { useMenuNav } from './useMenuNav';
 
@@ -26,29 +27,63 @@ function keyLabel(code: string): string {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="card">
-      <h2 className="mb-3 font-display text-xs uppercase tracking-[0.2em] text-accent">{title}</h2>
+    <div className="mb-5">
+      <div className="mb-2 text-[11px] tracking-[0.2em] text-[#ececec]/40">{title}</div>
       {children}
-    </section>
+    </div>
   );
 }
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="mb-2 flex min-h-[52px] items-center gap-5 border border-l-[3px] border-white/10 border-l-transparent px-4 py-2.5">
+      <span className="w-[180px] flex-none text-[13px] tracking-[0.12em] text-[#ececec]/85">
+        {label}
+      </span>
+      <div className="flex flex-1 items-center gap-3">{children}</div>
+    </div>
+  );
+}
+
+function Toggle({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="border px-4 py-1.5 text-[13px] tracking-wide capitalize"
+      style={
+        active
+          ? { borderColor: AC, background: AC + '1a', color: '#ececec' }
+          : { borderColor: 'rgba(255,255,255,.15)', color: 'rgba(236,236,236,.55)' }
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+const val =
+  'ml-auto w-[92px] flex-none text-right text-[15px] font-bold [font-variant-numeric:tabular-nums]';
+const slider = 'h-1 flex-1 accent-[#ff4d3d]';
 
 export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibrate: () => void }) {
   const { settings, update } = useSettings();
   const [rebinding, setRebinding] = useState<number | null>(null);
   useMenuNav(onBack);
 
-  // Capture the next key press while rebinding a column.
   useEffect(() => {
     if (rebinding === null) return;
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
-      if (e.code === 'Escape') {
-        setRebinding(null);
-        return;
-      }
-      const kb = { ...settings.keybindings, [e.code]: rebinding };
-      update({ keybindings: kb });
+      if (e.code === 'Escape') return setRebinding(null);
+      update({ keybindings: { ...settings.keybindings, [e.code]: rebinding } });
       setRebinding(null);
     };
     window.addEventListener('keydown', onKey, { once: true });
@@ -59,7 +94,6 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
     Object.entries(settings.keybindings)
       .filter(([, c]) => c === col)
       .map(([code]) => code);
-
   const clearKey = (code: string) => {
     const kb = { ...settings.keybindings };
     delete kb[code];
@@ -68,214 +102,168 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
 
   const mode = settings.scrollMode;
   const isX = mode === 'X';
-  const scrollDesc =
-    mode === 'C'
-      ? 'constant speed (BPM-independent)'
-      : mode === 'M'
-        ? "scaled to the song's fastest BPM"
-        : 'multiple of the song BPM';
   const scrollLabel = isX
     ? `${settings.scrollValue.toFixed(2)}×`
     : `${mode}${Math.round(settings.scrollValue)}`;
 
   return (
-    <div className="mx-auto max-w-[720px] px-6 pb-16 pt-8">
-      <header className="mb-6 flex items-center justify-between">
-        <div className="text-2xl">
-          <span className="brand">notefield</span> <span className="pill">options</span>
-        </div>
-        <button
-          onClick={onBack}
-          className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
-        >
-          ← Menu
-        </button>
-      </header>
-
-      <Section title="Scroll">
-        <div className="mb-3 flex gap-2">
-          {(['C', 'X', 'M'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => update({ scrollMode: m, scrollValue: m === 'X' ? 2 : 550 })}
-              className={`rounded-lg border px-4 py-1.5 ${
-                settings.scrollMode === m
-                  ? 'border-accent bg-accent/10 text-ink'
-                  : 'border-line text-muted'
-              }`}
-            >
-              {m}Mod
-            </button>
-          ))}
-          <span className="self-center text-sm text-muted">{scrollDesc}</span>
-        </div>
-        <label className="flex items-center gap-4">
-          <input
-            type="range"
-            min={isX ? 0.5 : 100}
-            max={isX ? 8 : 1200}
-            step={isX ? 0.25 : 10}
-            value={settings.scrollValue}
-            onChange={(e) => update({ scrollValue: Number(e.target.value) })}
-            className="flex-1 accent-[var(--color-accent)]"
-          />
-          <span className="w-24 text-right font-mono tabular-nums">{scrollLabel}</span>
-        </label>
-      </Section>
-
-      <Section title="Speed (practice)">
-        <label className="flex items-center gap-4">
-          <input
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.05}
-            value={settings.musicRate}
-            onChange={(e) => update({ musicRate: Number(e.target.value) })}
-            className="flex-1 accent-[var(--color-accent)]"
-          />
-          <span className="w-24 text-right font-mono tabular-nums">
-            {settings.musicRate.toFixed(2)}×
-          </span>
-        </label>
-        <p className="mt-1 text-sm text-muted">
-          Slows/speeds the music; judgment windows scale too.
-        </p>
-      </Section>
-
-      <Section title="Mods">
-        <div className="mb-3 flex flex-wrap gap-2">
-          {TURNS.map((t) => (
-            <button
-              key={t}
-              onClick={() => update({ turn: t })}
-              className={`rounded-lg border px-4 py-1.5 capitalize ${
-                settings.turn === t
-                  ? 'border-accent bg-accent/10 text-ink'
-                  : 'border-line text-muted'
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-          <span className="self-center text-sm text-muted">remap the columns</span>
-        </div>
-        <div className="mb-3 flex flex-wrap gap-2">
-          <button
-            onClick={() => update({ reverse: !settings.reverse })}
-            className={`rounded-lg border px-4 py-1.5 ${
-              settings.reverse ? 'border-accent bg-accent/10 text-ink' : 'border-line text-muted'
-            }`}
-          >
-            Reverse
+    <Stage
+      label="OPTIONS"
+      footer={
+        <>
+          <span>▲▼ SCROLL</span>
+          <button onClick={onBack} className="hover:text-[#ececec]">
+            SELECT — BACK TO SONGS
           </button>
-          <span className="self-center text-sm text-muted">downscroll</span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(['visible', 'hidden', 'sudden'] as const).map((a) => (
-            <button
-              key={a}
-              onClick={() => update({ appearance: a })}
-              className={`rounded-lg border px-4 py-1.5 capitalize ${
-                settings.appearance === a
-                  ? 'border-accent bg-accent/10 text-ink'
-                  : 'border-line text-muted'
-              }`}
-            >
-              {a}
-            </button>
-          ))}
-          <span className="self-center text-sm text-muted">fade near / far</span>
-        </div>
-      </Section>
+        </>
+      }
+    >
+      <div className="h-full overflow-y-auto px-[28px] py-6">
+        <div className="mx-auto max-w-[760px]">
+          <Section title="SCROLL">
+            <Row label="SPEED MOD">
+              {(['C', 'X', 'M'] as const).map((m) => (
+                <Toggle
+                  key={m}
+                  active={mode === m}
+                  onClick={() => update({ scrollMode: m, scrollValue: m === 'X' ? 2 : 550 })}
+                >
+                  {m}Mod
+                </Toggle>
+              ))}
+              <input
+                type="range"
+                min={isX ? 0.5 : 100}
+                max={isX ? 8 : 1200}
+                step={isX ? 0.25 : 10}
+                value={settings.scrollValue}
+                onChange={(e) => update({ scrollValue: Number(e.target.value) })}
+                className={slider}
+              />
+              <span className={val}>{scrollLabel}</span>
+            </Row>
+          </Section>
 
-      <Section title="Visuals">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={settings.webgpu}
-            onChange={(e) => update({ webgpu: e.target.checked })}
-          />
-          <span>WebGPU aurora background</span>
-        </label>
-        <p className="mt-1 text-sm text-muted">
-          Beat-reactive GPU shader behind the arrows (shown when a song has no background image;
-          falls back to plain if WebGPU is unavailable).
-        </p>
-      </Section>
+          <Section title="GAMEPLAY">
+            <Row label="MUSIC RATE">
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={settings.musicRate}
+                onChange={(e) => update({ musicRate: Number(e.target.value) })}
+                className={slider}
+              />
+              <span className={val}>{settings.musicRate.toFixed(2)}×</span>
+            </Row>
+            <Row label="TURN">
+              {TURNS.map((t) => (
+                <Toggle key={t} active={settings.turn === t} onClick={() => update({ turn: t })}>
+                  {t}
+                </Toggle>
+              ))}
+            </Row>
+            <Row label="SCROLL DIR">
+              <Toggle active={!settings.reverse} onClick={() => update({ reverse: false })}>
+                Normal
+              </Toggle>
+              <Toggle active={settings.reverse} onClick={() => update({ reverse: true })}>
+                Reverse
+              </Toggle>
+            </Row>
+            <Row label="APPEARANCE">
+              {(['visible', 'hidden', 'sudden'] as const).map((a) => (
+                <Toggle
+                  key={a}
+                  active={settings.appearance === a}
+                  onClick={() => update({ appearance: a })}
+                >
+                  {a}
+                </Toggle>
+              ))}
+            </Row>
+            <Row label="WEBGPU AURORA">
+              <Toggle active={settings.webgpu} onClick={() => update({ webgpu: !settings.webgpu })}>
+                {settings.webgpu ? 'On' : 'Off'}
+              </Toggle>
+              <span className="text-[12px] text-[#ececec]/40">
+                beat-reactive GPU shader (no bg image)
+              </span>
+            </Row>
+          </Section>
 
-      <Section title="Sync / offset">
-        {(
-          [
-            ['audioOffsetMs', 'Audio offset', 'shifts judgment + visuals'],
-            ['visualOffsetMs', 'Visual offset', 'shifts only the arrows'],
-          ] as const
-        ).map(([key, label, hint]) => (
-          <label key={key} className="mb-2 flex items-center gap-4">
-            <span className="w-28 text-sm text-muted">{label}</span>
-            <input
-              type="range"
-              min={-150}
-              max={150}
-              step={1}
-              value={settings[key]}
-              onChange={(e) => update({ [key]: Number(e.target.value) } as Partial<Settings>)}
-              className="flex-1 accent-[var(--color-accent)]"
-            />
-            <span className="w-20 text-right font-mono tabular-nums">
-              {settings[key] > 0 ? '+' : ''}
-              {settings[key]} ms
-            </span>
-            <span className="hidden w-40 text-xs text-muted sm:block">{hint}</span>
-          </label>
-        ))}
-        <button
-          onClick={onCalibrate}
-          className="mt-2 rounded-lg border border-accent bg-accent/10 px-4 py-1.5 text-ink hover:bg-accent/20"
-        >
-          Auto-calibrate audio offset…
-        </button>
-      </Section>
-
-      <Section title="Keys">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {COLS.map(({ i, label, glyph }) => (
-            <div key={i} className="rounded-lg border border-line p-3">
-              <div className="text-sm text-muted">
-                {glyph} {label}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {keysFor(i).map((code) => (
-                  <button
-                    key={code}
-                    onClick={() => clearKey(code)}
-                    title="click to remove"
-                    className="kbd hover:border-[#ff6b6b] hover:text-[#ff6b6b]"
-                  >
-                    {keyLabel(code)}
-                  </button>
-                ))}
-              </div>
+          <Section title="SYNC / OFFSET">
+            {(
+              [
+                ['audioOffsetMs', 'AUDIO OFFSET'],
+                ['visualOffsetMs', 'VISUAL OFFSET'],
+              ] as const
+            ).map(([key, label]) => (
+              <Row key={key} label={label}>
+                <input
+                  type="range"
+                  min={-150}
+                  max={150}
+                  step={1}
+                  value={settings[key]}
+                  onChange={(e) => update({ [key]: Number(e.target.value) } as Partial<Settings>)}
+                  className={slider}
+                />
+                <span className={val}>
+                  {settings[key] > 0 ? '+' : ''}
+                  {settings[key]} ms
+                </span>
+              </Row>
+            ))}
+            <Row label="CALIBRATE">
               <button
-                onClick={() => setRebinding(i)}
-                className="mt-2 w-full rounded border border-line py-1 text-xs text-muted hover:border-accent hover:text-ink"
+                onClick={onCalibrate}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
               >
-                {rebinding === i ? 'press a key…' : '+ bind key'}
+                Auto-calibrate audio offset ▸
               </button>
+            </Row>
+          </Section>
+
+          <Section title="KEYS">
+            <div className="grid grid-cols-4 gap-2">
+              {COLS.map(({ i, label, glyph }) => (
+                <div key={i} className="border border-white/10 p-3">
+                  <div className="text-[12px] tracking-[0.1em] text-[#ececec]/60">
+                    {glyph} {label.toUpperCase()}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {keysFor(i).map((code) => (
+                      <button
+                        key={code}
+                        onClick={() => clearKey(code)}
+                        title="click to remove"
+                        className="border border-white/15 px-1.5 text-[13px] hover:border-[#ff4d3d] hover:text-[#ff4d3d]"
+                      >
+                        {keyLabel(code)}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setRebinding(i)}
+                    className="mt-2 w-full border border-white/10 py-1 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff4d3d] hover:text-[#ececec]"
+                  >
+                    {rebinding === i ? 'press a key…' : '+ bind'}
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
+            <button
+              onClick={() => update({ keybindings: { ...DEFAULT_KEYBINDINGS } })}
+              className="mt-3 border border-white/10 px-4 py-1.5 text-[12px] tracking-wide text-[#ececec]/60 hover:text-[#ececec]"
+            >
+              Reset keys to default
+            </button>
+          </Section>
         </div>
-        <button
-          onClick={() => update({ keybindings: { ...DEFAULT_KEYBINDINGS } })}
-          className="mt-3 rounded-lg border border-line px-4 py-1.5 text-sm text-muted hover:text-ink"
-        >
-          Reset keys to default
-        </button>
-        <p className="mt-2 text-xs text-muted">
-          Add your pad's keys with “+ bind key”. For a gamepad/dance pad, plug it in and press a
-          panel — buttons are auto-detected while playing.
-        </p>
-      </Section>
-    </div>
+      </div>
+    </Stage>
   );
 }
