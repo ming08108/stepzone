@@ -87,6 +87,10 @@ export class Judge {
   private readonly rate: number;
   private readonly maxWindow: number;
   private lastUpdate = 0;
+  // Perf: advance a cursor over the time-sorted notes instead of scanning all
+  // of them each frame, and track only the currently-active holds (todo #14).
+  private missCursor = 0;
+  private readonly activeHolds: ActiveNote[] = [];
 
   constructor(
     noteData: NoteData,
@@ -258,6 +262,7 @@ export class Judge {
     if (cand.note.type === TapNoteType.HoldHead) {
       cand.holdInitiated = true;
       cand.holdLife = 1;
+      if (!this.activeHolds.includes(cand)) this.activeHolds.push(cand);
     }
     return { track, tns, offset, combo: this.combo };
   }
@@ -266,11 +271,14 @@ export class Judge {
   update(nowSeconds: number, held: boolean[] = []): void {
     const dt = Math.max(0, nowSeconds - this.lastUpdate);
     this.lastUpdate = nowSeconds;
+    const horizon = nowSeconds - this.maxWindow;
 
-    // Age unjudged notes past the miss horizon.
-    for (const n of this.notes) {
+    // Age notes past the miss horizon. Notes are time-sorted, so a forward-only
+    // cursor visits each note once over the whole song.
+    while (this.missCursor < this.notes.length && this.notes[this.missCursor].time < horizon) {
+      const n = this.notes[this.missCursor];
+      this.missCursor++;
       if (n.tns !== TapNoteScore.None || !n.judgable) continue;
-      if (n.time >= nowSeconds - this.maxWindow) continue;
       if (n.note.type === TapNoteType.Mine) {
         n.tns = TapNoteScore.AvoidMine;
         n.hidden = true;
@@ -285,9 +293,13 @@ export class Judge {
       }
     }
 
-    // Hold / roll life.
-    for (const n of this.notes) {
-      if (n.note.type !== TapNoteType.HoldHead || n.holdResolved || !n.holdInitiated) continue;
+    // Hold / roll life — only the holds currently in progress.
+    for (let i = this.activeHolds.length - 1; i >= 0; i--) {
+      const n = this.activeHolds[i];
+      if (n.holdResolved) {
+        this.activeHolds.splice(i, 1);
+        continue;
+      }
       const down = held[n.track] ?? false;
       if (nowSeconds > n.time && nowSeconds < n.tailTime) {
         if (n.isRoll) {
@@ -299,12 +311,12 @@ export class Judge {
         }
       }
       if (nowSeconds >= n.tailTime) {
-        const held2 = n.holdLife > 0;
-        n.hns = held2 ? HoldNoteScore.Held : HoldNoteScore.LetGo;
+        n.hns = n.holdLife > 0 ? HoldNoteScore.Held : HoldNoteScore.LetGo;
         n.holdResolved = true;
         this.countHold(n.hns);
         if (!this.failed) this.actualDance += holdDancePoints(n.hns);
         this.changeLife(holdLifeDelta(n.hns));
+        this.activeHolds.splice(i, 1);
       }
     }
   }

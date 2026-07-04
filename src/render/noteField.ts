@@ -42,6 +42,7 @@ const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 
 const SPACING = 64; // base pixels per beat (ITG ARROW_SPACING)
 const HIT_FLASH = 0.18; // seconds
+const DRAW_CULL = 100; // px beyond the field before a note is culled
 
 export interface Feedback {
   lastJudgment: { tns: TapNoteScore; atSeconds: number } | null;
@@ -86,6 +87,7 @@ export class NoteFieldRenderer {
   private nowBeat = 0;
   private columnAngles: number[] = [];
   private background: HTMLVideoElement | HTMLImageElement | null = null;
+  private firstVisibleIdx = 0; // forward-only cursor into the time-sorted notes
 
   constructor(readonly numTracks: number) {}
 
@@ -225,10 +227,25 @@ export class NoteFieldRenderer {
     ctx.fillStyle = 'rgba(120,150,255,0.06)';
     ctx.fillRect(fieldL, this.receptorY - 44, fieldW, 88);
 
-    // Holds behind arrows.
-    for (const n of judge.notes) {
-      if (n.note.type !== TapNoteType.HoldHead || n.holdResolved) continue;
-      this.drawHold(ctx, n);
+    // Advance the visible-window cursor past notes that have scrolled off the
+    // top (their tail included). Notes are time-sorted and scroll is monotonic,
+    // so this only moves forward — O(visible) drawing per frame (todo #14).
+    const notes = judge.notes;
+    while (this.firstVisibleIdx < notes.length) {
+      const n = notes[this.firstVisibleIdx];
+      const endY =
+        n.note.type === TapNoteType.HoldHead
+          ? this.yOf(n.tailTime, noteRowToBeat(n.tailRow))
+          : this.yOf(n.time, n.beat);
+      if (endY < -DRAW_CULL) this.firstVisibleIdx++;
+      else break;
+    }
+
+    // Holds behind arrows (windowed).
+    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
+      if (this.yOf(n.time, n.beat) > height + DRAW_CULL) break;
+      if (n.note.type === TapNoteType.HoldHead && !n.holdResolved) this.drawHold(ctx, n);
     }
 
     // Receptors (pulse to the beat).
@@ -250,16 +267,17 @@ export class NoteFieldRenderer {
       );
     }
 
-    // Notes (and unhit hold heads), nearest last so closer arrows draw on top.
-    const drawList = judge.notes.filter((n) => {
-      const isHold = n.note.type === TapNoteType.HoldHead;
-      if (isHold) return !n.holdResolved && n.tns === TapNoteScore.None;
-      return !n.hidden && n.note.type !== TapNoteType.AutoKeysound;
-    });
-    for (let i = drawList.length - 1; i >= 0; i--) {
-      const n = drawList[i];
+    // Notes and unhit hold heads (windowed).
+    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
       const y = this.yOf(n.time, n.beat);
-      if (y < -80 || y > height + 80) continue;
+      if (y > height + DRAW_CULL) break;
+      if (y < -DRAW_CULL) continue;
+      if (n.note.type === TapNoteType.HoldHead) {
+        if (n.holdResolved || n.tns !== TapNoteScore.None) continue;
+      } else if (n.hidden || n.note.type === TapNoteType.AutoKeysound) {
+        continue;
+      }
       if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
       else {
         const c = QUANT_COLOR[getNoteType(n.row)];
