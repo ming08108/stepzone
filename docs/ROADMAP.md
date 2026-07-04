@@ -14,28 +14,34 @@ The pure data foundation.
 - Pure `SyncMap` clock math.
 - 29 unit tests, including the spec doc-9 worked example reproduced exactly.
 
-## M2 — Gameplay logic (pure, testable)
+## M2 — Gameplay logic (pure, testable) ✅ (done)
 
 Judgment/scoring/life as pure functions over `NoteData` + a timeline of input
-events. No audio or DOM yet, so it's unit-testable.
+events. No audio or DOM, so it's unit-tested.
 
-- Timing windows (W1–W5, mine, hold, roll) and `GetWindowSeconds`.
-- `Step()`: closest-note search, offset → score, warp/fake exclusion.
+- Timing windows (W1–W5, mine, hold, roll) and `windowSeconds` (scale/add).
+- `Judge.step()`: closest-note search, offset → score, warp/fake exclusion,
+  lift-on-release, mine detonation.
 - Miss aging, combo rules (W3 keeps / breaks), hold/roll life.
 - Dance-point %, grade, life meter deltas (verified metric defaults).
-- **Test:** the spec doc-9 input trace (W1 / W3 / Miss / Held / HitMine →
-  53.3%) becomes an assertion.
+- **Test (passing):** the spec doc-9 input trace reproduces exactly —
+  W1 / W3 / Miss / Held / HitMine → 53.3%, max combo 2, life 0.288.
 
-## M3 — First playable slice
+## M3 — First playable slice ✅ (done)
 
-Wire the browser layers around the M1/M2 core.
+The browser layers around the M1/M2 core — the example chart plays end to end.
 
-- `WebAudioClock` playing a decoded `AudioBuffer`, anchored via
+- `WebAudioClock` driving a synthesized metronome `AudioBuffer`, anchored via
   `getOutputTimestamp` (see [LATENCY.md](LATENCY.md)).
-- Keyboard input → column via a Style table; timestamped judging.
-- Canvas note field: CMod first (immune to BPM/scroll gimmicks), then XMod +
-  scroll/speed segments.
-- Play the bundled example end to end.
+- Keyboard input → column via the Style keymap; judged on `event.timeStamp`.
+- Canvas note field (CMod, upscroll): receptors, quantization-colored notes,
+  holds, and an on-canvas HUD (combo, judgment, life, score %, grade).
+- Game loop + Play/Results UI. Verified in a headless browser: full clear,
+  100% / AAA, with the hold and mine handled correctly.
+
+Deferred from the playable slice (tracked): per-row chord cohesion for combo,
+XMod/MMod + scroll/speed-segment rendering, life-delta modifiers, roll re-tap
+polish, and a real audio file loader.
 
 ## M4 — Real songs
 

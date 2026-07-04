@@ -12,17 +12,22 @@ here cites the spec doc it implements.
 
 ## Status
 
-**Milestone 1 — Parse & Time (done).** The pure engine can tokenize a simfile,
-parse `.ssc` (and basic `.sm`) into a Song + charts, and convert beats ⇄ seconds
-exactly (BPM changes, stops, delays, warps). Verified by 29 unit tests,
-including the spec's worked example reproduced number-for-number.
+**Milestone 3 — Playable (done).** The bundled example chart plays end to end in
+the browser: a Web Audio metronome clock, keyboard input judged on the event
+timestamp, a scrolling canvas note field, and combo/score/life/grade with a
+results screen. The pure layers underneath (parsing, timing, and the judgment
+engine) are covered by 34 unit tests, including the spec's worked example and
+its input trace reproduced number-for-number.
 
 ```
 npm install     # Node 18+ required (this repo was built on Node 24 LTS)
-npm test        # 29 tests: MSD parser, timing engine, note grid, sync clock
-npm run dev     # dev server — a temporary "engine inspector" page
+npm run dev     # dev server → http://localhost:5173  (Play tab)
+npm test        # 34 tests: MSD parser, timing, note grid, sync clock, judgment
 npm run build   # strict typecheck + production build
 ```
+
+Play with <kbd>←</kbd> <kbd>↓</kbd> <kbd>↑</kbd> <kbd>→</kbd> (or D F J K). The
+"Inspect" tab shows the parsed song/timing/notes.
 
 ## Architecture
 
