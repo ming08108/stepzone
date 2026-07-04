@@ -20,6 +20,45 @@ interface Result {
   counts: Record<number, number>;
   best: ChartScore | null;
   isNewRecord: boolean;
+  offsets: number[];
+}
+
+/** Early/late timing distribution of the just-played taps. */
+function OffsetGraph({ offsets }: { offsets: number[] }) {
+  if (offsets.length === 0) return null;
+  const ms = offsets.map((o) => o * 1000);
+  const N = 25;
+  const range = 180; // ±180 ms
+  const buckets = new Array<number>(N).fill(0);
+  for (const m of ms) {
+    const idx = Math.round(
+      ((Math.max(-range, Math.min(range, m)) + range) / (2 * range)) * (N - 1),
+    );
+    buckets[idx]++;
+  }
+  const max = Math.max(1, ...buckets);
+  const mean = ms.reduce((a, b) => a + b, 0) / ms.length;
+  return (
+    <div className="w-[24rem] max-w-full">
+      <div className="flex h-16 items-end justify-center gap-[2px]">
+        {buckets.map((c, i) => (
+          <div
+            key={i}
+            className={`flex-1 rounded-sm ${i === (N - 1) / 2 ? 'bg-white/40' : 'bg-accent'}`}
+            style={{ height: `${Math.max(2, (c / max) * 100)}%`, opacity: 0.35 + 0.65 * (c / max) }}
+          />
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-xs text-muted">
+        <span>early</span>
+        <span className={mean < -5 ? 'text-[#4b8be6]' : mean > 5 ? 'text-[#ffd94b]' : 'text-ink'}>
+          avg {mean >= 0 ? '+' : ''}
+          {mean.toFixed(1)} ms {mean < -5 ? '(early)' : mean > 5 ? '(late)' : '(on time)'}
+        </span>
+        <span>late</span>
+      </div>
+    </div>
+  );
 }
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string]> = [
@@ -164,6 +203,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         counts,
         best,
         isNewRecord,
+        offsets: [...session.offsets],
       });
       setPhase('done');
     };
@@ -279,6 +319,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                   ? ` · best ${(result.best.percent * 100).toFixed(2)}% · ${result.best.plays} plays`
                   : ''}
               </div>
+              <OffsetGraph offsets={result.offsets} />
               <div className="mt-2 flex gap-3">
                 <button ref={ctaRef} className="cta" onClick={start}>
                   ↻ Play again
