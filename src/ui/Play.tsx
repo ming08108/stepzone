@@ -3,7 +3,7 @@ import { GameSession } from '../game/session';
 import { ShaderBackground } from '../render/shaderBackground';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { keyToColumn } from '../input/keymap';
-import { readGamepad } from '../input/gamepad';
+import { readControllers } from '../input/controllers';
 import { difficultyToString } from '../song/difficulty';
 import { TapNoteScore } from '../notes/noteTypes';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
@@ -167,7 +167,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     let prevC = false;
     let prevB = false;
     const poll = () => {
-      const g = readGamepad();
+      const g = readControllers();
       if (g.connected) {
         if (g.confirm && !prevC) ctaRef.current?.click();
         if (g.back && !prevB) onExit();

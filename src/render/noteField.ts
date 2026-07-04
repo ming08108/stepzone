@@ -78,9 +78,14 @@ export class NoteFieldRenderer {
   private dpr = 1;
   private meta: RenderMeta = { title: '', subtitle: '', difficulty: '' };
 
-  private receptorY = 150;
+  private receptorY = 90;
   private colW = 110;
   private arrowS = 46;
+  // STEPLINE: left-aligned arcade P1 playfield, scaled to the canvas height.
+  private ds = 1;
+  private fieldLeft = 144;
+  private panelLeft = 132;
+  private panelWidth = 400;
 
   // Scroll: C = constant px/sec, X = px/beat * multiplier, M = X scaled to the
   // song's peak BPM (so the fastest section scrolls at the target rate).
@@ -137,15 +142,20 @@ export class NoteFieldRenderer {
     this.width = width;
     this.height = height;
     this.dpr = dpr;
-    this.colW = Math.min(120, Math.max(64, (width * 0.86) / this.numTracks));
-    this.arrowS = this.colW * 0.42;
-    this.receptorY = Math.max(110, Math.min(180, height * 0.16));
+    // STEPLINE: a left-aligned arcade P1 playfield, scaled to the canvas height
+    // (design reference is 1280×720). Clamp so it never overruns a narrow canvas.
+    const ds = Math.max(0.5, Math.min(height / 720, width / 720));
+    this.ds = ds;
+    this.colW = 88 * ds; // lane width (design: 88)
+    this.arrowS = 40 * ds; // 80px arrow, half-extent
+    this.panelLeft = 132 * ds;
+    this.fieldLeft = this.panelLeft + 12 * ds; // lanes inset 12 into the panel
+    this.panelWidth = (this.numTracks * 88 + 24) * ds;
+    this.receptorY = 96 * ds;
   }
 
   private laneX(track: number): number {
-    const fieldW = this.numTracks * this.colW;
-    const left = (this.width - fieldW) / 2 + this.colW / 2;
-    return left + track * this.colW;
+    return this.fieldLeft + this.colW / 2 + track * this.colW;
   }
 
   private angle(track: number): number {
@@ -276,17 +286,23 @@ export class NoteFieldRenderer {
       ctx.fillStyle = '#07080c';
       ctx.fillRect(0, 0, width, height);
     }
-    const fieldW = this.numTracks * this.colW;
-    const fieldL = (width - fieldW) / 2;
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, 'rgba(255,255,255,0.05)');
-    grad.addColorStop(1, 'rgba(255,255,255,0.015)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(fieldL, 0, fieldW, height);
-    // Receptor glow line (cyan, matching the UI accent).
+    // STEPLINE left-aligned playfield panel: translucent dark with hairline sides.
+    const pL = this.panelLeft;
+    const pR = this.panelLeft + this.panelWidth;
+    ctx.fillStyle = 'rgba(5,6,8,0.55)';
+    ctx.fillRect(pL, 0, this.panelWidth, height);
+    ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pL + 0.5, 0);
+    ctx.lineTo(pL + 0.5, height);
+    ctx.moveTo(pR - 0.5, 0);
+    ctx.lineTo(pR - 0.5, height);
+    ctx.stroke();
+    // Receptor glow line.
     const recY = this.recY();
-    ctx.fillStyle = 'rgba(33,230,214,0.06)';
-    ctx.fillRect(fieldL, recY - 44, fieldW, 88);
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.fillRect(pL, recY - 44 * this.ds, this.panelWidth, 88 * this.ds);
 
     // Advance the visible-window cursor past notes that have scrolled off the
     // exit side (their tail included). Notes are time-sorted and scroll is
@@ -371,12 +387,17 @@ export class NoteFieldRenderer {
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;
-    const w = this.arrowS * 0.9;
+    const w = this.arrowS;
     ctx.save();
-    ctx.fillStyle = alive ? 'rgba(90,224,106,0.55)' : 'rgba(120,120,120,0.3)';
+    ctx.fillStyle = alive ? 'rgba(89,240,127,0.35)' : 'rgba(120,120,120,0.3)';
     ctx.beginPath();
     ctx.roundRect(x - w / 2, top, w, Math.max(0, bottom - top), w / 2);
     ctx.fill();
+    if (alive) {
+      ctx.strokeStyle = 'rgba(89,240,127,0.6)';
+      ctx.lineWidth = 2 * this.ds;
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -409,97 +430,93 @@ export class NoteFieldRenderer {
     progress: number,
     fb: Feedback,
   ): void {
-    const { width, height } = this;
-    const cx = width / 2;
+    const { width, height, ds } = this;
+    const font = (w: number, px: number) =>
+      `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
+    const pL = this.panelLeft;
+    const pW = this.panelWidth;
+    const pR = pL + pW;
+    const pcx = pL + pW / 2;
+    const lx = pL + 14 * ds;
+    const lw = pW - 28 * ds;
 
-    // Title / difficulty (top-left).
+    // Life bar (top of the playfield panel).
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(lx, 14 * ds, lw, 8 * ds);
+    const life = judge.failed ? 0 : judge.life;
+    if (life > 0) {
+      if (life < 0.25) ctx.fillStyle = '#ff4d3d';
+      else {
+        const g = ctx.createLinearGradient(lx, 0, lx + lw, 0);
+        g.addColorStop(0, '#ff4d3d');
+        g.addColorStop(1, '#ffd23d');
+        ctx.fillStyle = g;
+      }
+      ctx.fillRect(lx, 14 * ds, Math.max(2, lw * life), 8 * ds);
+    }
+    // Song progress (bottom of the panel).
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(lx, height - 14 * ds, lw, 4 * ds);
+    ctx.fillStyle = '#ff4d3d';
+    ctx.fillRect(lx, height - 14 * ds, lw * Math.max(0, Math.min(1, progress)), 4 * ds);
+    ctx.restore();
+
+    // Song info (to the right of the panel).
+    const ix = pR + 40 * ds;
     ctx.save();
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 24px "Space Grotesk", system-ui, sans-serif';
-    ctx.fillText(this.meta.title || 'notefield', 28, 42);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '600 14px "Space Grotesk", system-ui, sans-serif';
-    ctx.fillText(this.meta.subtitle, 28, 62);
-    ctx.fillStyle = '#ffd24d';
-    ctx.font = '700 14px "Space Grotesk", system-ui, sans-serif';
-    ctx.fillText(this.meta.difficulty, 28, 84);
+    ctx.fillStyle = '#ececec';
+    ctx.font = font(700, 19);
+    ctx.fillText(this.meta.title || 'notefield', ix, 30 * ds);
+    ctx.fillStyle = 'rgba(236,236,236,0.6)';
+    ctx.font = font(400, 13);
+    ctx.fillText(this.meta.subtitle, ix, 50 * ds);
+    ctx.fillStyle = '#ff4d3d';
+    ctx.font = font(700, 12);
+    ctx.fillText(this.meta.difficulty, ix, 70 * ds);
     ctx.restore();
 
-    // Score % + grade (top-right).
+    // Score (top-right).
     ctx.save();
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#eef1f8';
-    ctx.font = '800 40px "Space Grotesk", system-ui, sans-serif';
-    ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, width - 28, 48);
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = '700 16px "Space Grotesk", system-ui, sans-serif';
-    ctx.fillText(`GRADE ${judge.grade}`, width - 28, 72);
+    ctx.fillStyle = '#ececec';
+    ctx.font = font(700, 34);
+    ctx.fillText(`${(judge.percentDancePoints * 100).toFixed(2)}%`, width - 28 * ds, 42 * ds);
+    ctx.fillStyle = 'rgba(236,236,236,0.5)';
+    ctx.font = font(700, 11);
+    ctx.fillText(`SCORE · GRADE ${judge.grade}`, width - 28 * ds, 60 * ds);
+    ctx.fillStyle = 'rgba(236,236,236,0.6)';
+    ctx.font = font(400, 13);
+    ctx.fillText(`MAX COMBO ${judge.maxCombo}`, width - 28 * ds, 82 * ds);
     ctx.restore();
 
-    // Life gauge (centered under the header).
-    const gW = Math.min(460, width * 0.5);
-    const gX = cx - gW / 2;
-    const gY = 30;
-    const gH = 16;
-    ctx.save();
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.beginPath();
-    ctx.roundRect(gX, gY, gW, gH, 8);
-    ctx.fill();
-    const life = judge.failed ? 0 : judge.life;
-    const lifeGrad = ctx.createLinearGradient(gX, 0, gX + gW, 0);
-    lifeGrad.addColorStop(0, '#ff4d4d');
-    lifeGrad.addColorStop(0.5, '#ffd24d');
-    lifeGrad.addColorStop(1, '#5be06a');
-    ctx.fillStyle = life <= 0 ? '#552' : lifeGrad;
-    ctx.beginPath();
-    ctx.roundRect(gX, gY, Math.max(2, gW * life), gH, 8);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(gX, gY, gW, gH, 8);
-    ctx.stroke();
-    ctx.restore();
-
-    // Judgment label (fades).
+    // Judgment (centered over the panel, pops).
     if (fb.lastJudgment) {
       const age = now - fb.lastJudgment.atSeconds;
       const j = JUDGMENT[fb.lastJudgment.tns];
-      if (j && age >= 0 && age < 0.55) {
-        const pop = age < 0.08 ? 1 + (0.08 - age) * 3 : 1;
+      if (j && age >= 0 && age < 0.7) {
+        const pop = age < 0.08 ? 1.4 - (age / 0.08) * 0.4 : 1;
         ctx.save();
-        ctx.globalAlpha = Math.min(1, 1 - (age - 0.35) / 0.2);
-        ctx.translate(cx, this.receptorY + height * 0.24);
+        ctx.globalAlpha = age > 0.5 ? Math.max(0, 1 - (age - 0.5) / 0.2) : 1;
+        ctx.translate(pcx, height * 0.42);
         ctx.scale(pop, pop);
         ctx.fillStyle = j.color;
-        ctx.font = '900 44px "Space Grotesk", system-ui, sans-serif';
+        ctx.font = font(700, 38);
         ctx.textAlign = 'center';
         ctx.fillText(j.label, 0, 0);
         ctx.restore();
       }
     }
 
-    // Combo.
-    if (judge.combo > 1) {
+    // Combo (centered over the panel).
+    if (judge.combo > 3) {
       ctx.save();
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#fff';
-      ctx.font = '900 68px "Space Grotesk", system-ui, sans-serif';
-      ctx.fillText(String(judge.combo), cx, this.receptorY + height * 0.36);
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.font = '800 18px "Space Grotesk", system-ui, sans-serif';
-      ctx.fillText('COMBO', cx, this.receptorY + height * 0.36 + 26);
+      ctx.fillStyle = '#ececec';
+      ctx.font = font(700, 52);
+      ctx.fillText(String(judge.combo), pcx, height * 0.5);
       ctx.restore();
     }
-
-    // Song progress (thin bar at the bottom).
-    ctx.save();
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, height - 6, width, 6);
-    ctx.fillStyle = '#6ea8fe';
-    ctx.fillRect(0, height - 6, width * Math.max(0, Math.min(1, progress)), 6);
-    ctx.restore();
   }
 }
