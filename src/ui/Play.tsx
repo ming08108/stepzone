@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { keyToColumn } from '../input/keymap';
+import { readGamepad } from '../input/gamepad';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
@@ -22,6 +23,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
+  const ctaRef = useRef<HTMLButtonElement>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
 
@@ -64,6 +66,28 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   }, []);
 
   useEffect(() => () => sessionRef.current?.stop(), []);
+
+  // Ready/done overlays: focus the primary button (Enter works) and accept
+  // gamepad confirm (activate) / back (exit).
+  useEffect(() => {
+    if (phase === 'playing') return;
+    ctaRef.current?.focus();
+    let raf = 0;
+    let prevC = false;
+    let prevB = false;
+    const poll = () => {
+      const g = readGamepad();
+      if (g.connected) {
+        if (g.confirm && !prevC) ctaRef.current?.click();
+        if (g.back && !prevB) onExit();
+      }
+      prevC = g.connected && g.confirm;
+      prevB = g.connected && g.back;
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(raf);
+  }, [phase, onExit]);
 
   const start = async () => {
     const canvas = canvasRef.current;
@@ -132,7 +156,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                 <kbd className="kbd">D</kbd> <kbd className="kbd">F</kbd>{' '}
                 <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd>
               </p>
-              <button className="cta" onClick={start}>
+              <button ref={ctaRef} className="cta" onClick={start}>
                 ▶ Play
               </button>
             </>
@@ -148,7 +172,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               </div>
               <div className="text-muted">max combo {result.maxCombo}</div>
               <div className="mt-2 flex gap-3">
-                <button className="cta" onClick={start}>
+                <button ref={ctaRef} className="cta" onClick={start}>
                   ↻ Play again
                 </button>
                 <button className={CTL_BTN} onClick={onExit}>

@@ -5,6 +5,7 @@ import { SongSelect } from './SongSelect';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import type { PlayRequest } from './playRequest';
+import { useMenuNav } from './useMenuNav';
 
 type View = 'menu' | 'play' | 'inspect' | 'options' | 'calibrate';
 
@@ -17,6 +18,7 @@ function Chrome({
   onBack: () => void;
   children: ReactNode;
 }) {
+  useMenuNav(onBack);
   return (
     <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
       <header className="mb-6 flex items-center justify-between">

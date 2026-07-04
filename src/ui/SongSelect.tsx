@@ -6,6 +6,7 @@ import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 import type { PlayRequest } from './playRequest';
+import { useMenuNav } from './useMenuNav';
 
 const CHART_BTN =
   'rounded-lg border border-line bg-white/[0.03] px-3 py-2 text-left hover:border-accent hover:bg-accent/10';
@@ -25,6 +26,7 @@ export function SongSelect({
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
   const folderRef = useRef<HTMLInputElement>(null);
+  useMenuNav();
 
   // Make the file input pick a whole directory.
   useEffect(() => {

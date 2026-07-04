@@ -9,6 +9,7 @@ import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
+import { readGamepad } from '../input/gamepad';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
@@ -54,6 +55,7 @@ export class GameSession {
   private raf = 0;
   private running = false;
   private lastSeq = 0;
+  private readonly prevPad = [false, false, false, false];
   private readonly visualOffsetSeconds: number;
 
   onEnd?: (judge: Judge) => void;
@@ -164,6 +166,18 @@ export class GameSession {
   private loop = (): void => {
     if (!this.running) return;
     const now = this.clock.songSecondsNow();
+
+    // Gamepad / dance pad (poll-only; frame-quantized timing).
+    const pad = readGamepad();
+    if (pad.connected) {
+      const ts = performance.now();
+      for (let c = 0; c < this.prevPad.length && c < this.held.length; c++) {
+        if (pad.columns[c] && !this.prevPad[c]) this.press(c, ts);
+        else if (!pad.columns[c] && this.prevPad[c]) this.release(c, ts);
+        this.prevPad[c] = pad.columns[c];
+      }
+    }
+
     this.judge.update(now, this.held);
 
     if (this.judge.judgmentSeq !== this.lastSeq) {

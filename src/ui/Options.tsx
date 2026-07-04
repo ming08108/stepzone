@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { DEFAULT_KEYBINDINGS, type Settings } from '../app/settings';
 import { useSettings } from './SettingsContext';
+import { useMenuNav } from './useMenuNav';
 
 const COLS = [
   { i: 0, label: 'Left', glyph: '←' },
@@ -34,6 +35,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibrate: () => void }) {
   const { settings, update } = useSettings();
   const [rebinding, setRebinding] = useState<number | null>(null);
+  useMenuNav(onBack);
 
   // Capture the next key press while rebinding a column.
   useEffect(() => {
