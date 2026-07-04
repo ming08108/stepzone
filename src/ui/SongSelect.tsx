@@ -18,8 +18,39 @@ import {
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { chartKey, loadScores, totalStats } from '../app/scores';
 import { difficultyToString } from '../song/difficulty';
+import type { Steps } from '../song/steps';
+import { PadIcon, prettyType } from './PadIcon';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
+
+const TYPE_ORDER = [
+  'dance-single',
+  'dance-double',
+  'dance-solo',
+  'dance-couple',
+  'dance-routine',
+  'dance-threepanel',
+  'pump-single',
+  'pump-halfdouble',
+  'pump-double',
+];
+
+/** Group a song's charts by steps-type, ordered, with each type's charts sorted. */
+function groupCharts(charts: Steps[]): Array<[string, Array<{ c: Steps; i: number }>]> {
+  const by = new Map<string, Array<{ c: Steps; i: number }>>();
+  charts.forEach((c, i) => {
+    const g = by.get(c.stepsType) ?? [];
+    g.push({ c, i });
+    by.set(c.stepsType, g);
+  });
+  for (const g of by.values())
+    g.sort((a, b) => a.c.difficulty - b.c.difficulty || a.c.meter - b.c.meter);
+  return [...by.entries()].sort((a, b) => {
+    const ia = TYPE_ORDER.indexOf(a[0]);
+    const ib = TYPE_ORDER.indexOf(b[0]);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a[0].localeCompare(b[0]);
+  });
+}
 
 const CHART_BTN =
   'rounded-lg border border-l-[3px] border-line bg-white/[0.03] px-3 py-2 text-left transition-colors hover:bg-white/[0.06]';
@@ -432,33 +463,41 @@ export function SongSelect({
                 </div>
               )}
               {isOpen && entry.song.charts.length > 0 && (
-                <div className="grid grid-cols-2 gap-2 px-4 pb-3 sm:grid-cols-3 md:grid-cols-4">
-                  {entry.song.charts
-                    .map((c, i) => ({ c, i }))
-                    .sort((a, b) => a.c.difficulty - b.c.difficulty || a.c.meter - b.c.meter)
-                    .map(({ c, i }) => {
-                      const best = scores[chartKey(entry.song, c)];
-                      const color = diffColor(c.difficulty);
-                      return (
-                        <button
-                          key={i}
-                          className={CHART_BTN}
-                          style={{ borderLeftColor: color }}
-                          onClick={() => void play(entry, i)}
-                        >
-                          <div className="text-xs text-muted">{c.stepsType}</div>
-                          <div className="font-display font-semibold" style={{ color }}>
-                            {difficultyToString(c.difficulty)}{' '}
-                            <span className="tabular-nums">{c.meter}</span>
-                          </div>
-                          {best && (
-                            <div className="text-xs text-[#ffd94b]">
-                              {best.grade} · {(best.percent * 100).toFixed(1)}%
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
+                <div className="space-y-3 px-4 pb-3">
+                  {groupCharts(entry.song.charts).map(([type, group]) => (
+                    <div key={type}>
+                      <div className="mb-1.5 flex items-center gap-2 text-[color:var(--color-accent2)]">
+                        <PadIcon stepsType={type} />
+                        <span className="font-display text-[0.7rem] uppercase tracking-[0.15em]">
+                          {prettyType(type)}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+                        {group.map(({ c, i }) => {
+                          const best = scores[chartKey(entry.song, c)];
+                          const color = diffColor(c.difficulty);
+                          return (
+                            <button
+                              key={i}
+                              className={CHART_BTN}
+                              style={{ borderLeftColor: color }}
+                              onClick={() => void play(entry, i)}
+                            >
+                              <div className="font-display font-semibold" style={{ color }}>
+                                {difficultyToString(c.difficulty)}{' '}
+                                <span className="tabular-nums">{c.meter}</span>
+                              </div>
+                              {best && (
+                                <div className="text-xs text-[#ffd94b]">
+                                  {best.grade} · {(best.percent * 100).toFixed(1)}%
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
