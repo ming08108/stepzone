@@ -40,11 +40,13 @@ Legend: ✅ matches · ⚠️ simplified (bounded, documented) · ❌ not implem
 
 ## Rendering (informational — not "engine")
 
-| Area                                                        | Status | Notes                                      |
-| ----------------------------------------------------------- | ------ | ------------------------------------------ |
-| Quantization colors, CMod/XMod, receptors, holds            | ✅     | Matches spec doc 8 for the modeled subset. |
-| Per-steps-type arrow directions (single/solo/double/pump)   | ✅     | `render/columns.ts`.                       |
-| MMod, reverse/turn mods, scroll/speed segments, perspective | ❌     | Not modeled. Tracked M5/M8.                |
+| Area                                                       | Status | Notes                                         |
+| ---------------------------------------------------------- | ------ | --------------------------------------------- |
+| Quantization colors, CMod/XMod, receptors, holds           | ✅     | Matches spec doc 8 for the modeled subset.    |
+| Per-steps-type arrow directions (single/solo/double/pump)  | ✅     | `render/columns.ts`.                          |
+| MMod scroll; turn mods (mirror/left/right/shuffle)         | ✅     | `render/noteField.ts`, `notes/transforms.ts`. |
+| WebGPU aurora background (beat-reactive shader) + fallback | ✅     | `render/shaderBackground.ts`.                 |
+| Reverse/hidden/sudden, scroll/speed segments, perspective  | ❌     | Not modeled. Tracked M6/M8.                   |
 
 ## Verdict
 
@@ -56,4 +58,6 @@ deltas) and composite/routine charts — all tracked in `ROADMAP.md` M6.
 
 **Update:** `.sm` negative-BPM / negative-stop → warp conversion has since been
 implemented (`parse/negativeBpm.ts`, a faithful port of `ProcessBPMsAndStops`)
-and unit-tested, so the "❌" row above is now ✅.
+and unit-tested; MMod scroll, turn mods, and a WebGPU shader background were also
+added. See `ITG-FEATURE-GAP.md` for the full remaining feature surface vs
+ITGmania.

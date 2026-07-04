@@ -162,6 +162,21 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
         </div>
       </Section>
 
+      <Section title="Visuals">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={settings.webgpu}
+            onChange={(e) => update({ webgpu: e.target.checked })}
+          />
+          <span>WebGPU aurora background</span>
+        </label>
+        <p className="mt-1 text-sm text-muted">
+          Beat-reactive GPU shader behind the arrows (shown when a song has no background image;
+          falls back to plain if WebGPU is unavailable).
+        </p>
+      </Section>
+
       <Section title="Sync / offset">
         {(
           [

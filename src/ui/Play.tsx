@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
+import { ShaderBackground } from '../render/shaderBackground';
 import { isVideoFile } from '../io/songFiles';
 import { keyToColumn } from '../input/keymap';
 import { readGamepad } from '../input/gamepad';
@@ -41,6 +42,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const ctaRef = useRef<HTMLButtonElement>(null);
   const bgUrlRef = useRef<string | null>(null);
   const bgMediaRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null);
+  const bgCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fxRef = useRef<ShaderBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
 
@@ -56,6 +59,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       URL.revokeObjectURL(bgUrlRef.current);
       bgUrlRef.current = null;
     }
+    fxRef.current?.destroy();
+    fxRef.current = null;
   };
 
   // Keep the latest keybindings available to the (mount-once) key handlers.
@@ -162,6 +167,20 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     };
     sessionRef.current = session;
 
+    // WebGPU aurora layer (behind the transparent field). Non-blocking: the game
+    // starts immediately and the shader attaches whenever the device is ready
+    // (or never, on unsupported/headless GPUs) — it must not stall gameplay.
+    if (settings.webgpu && bgCanvasRef.current && !req.backgroundFile) {
+      void ShaderBackground.create(bgCanvasRef.current).then((sb) => {
+        if (sb && sessionRef.current === session) {
+          fxRef.current = sb;
+          session.enableFx(sb);
+        } else {
+          sb?.destroy();
+        }
+      });
+    }
+
     // Background image / video.
     if (req.backgroundFile) {
       const url = URL.createObjectURL(req.backgroundFile);
@@ -202,7 +221,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
   return (
     <div ref={wrapRef} className="fixed inset-0 overflow-hidden bg-night">
-      <canvas ref={canvasRef} className="block h-full w-full" />
+      <canvas ref={bgCanvasRef} className="absolute inset-0 block h-full w-full" />
+      <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
       <div className="absolute bottom-4 left-3.5 z-[3] flex gap-2">
         <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
@@ -214,7 +234,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       </div>
 
       {phase !== 'playing' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
+        <div className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
           {phase === 'ready' && (
             <>
               <div className="text-2xl font-extrabold tracking-tight text-accent">notefield</div>

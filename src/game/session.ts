@@ -14,6 +14,7 @@ import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation, type Turn } from '../notes/transforms';
 import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
+import type { FieldFx } from '../render/shaderBackground';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
@@ -63,6 +64,10 @@ export class GameSession {
   private readonly visualOffsetSeconds: number;
   private readonly musicRate: number;
   private bgVideo: HTMLVideoElement | null = null;
+  private fx: FieldFx | null = null;
+  private energy = 0;
+  private logicalW = 800;
+  private logicalH = 720;
 
   onEnd?: (judge: Judge) => void;
 
@@ -138,12 +143,22 @@ export class GameSession {
     if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;
   }
 
+  /** Attach (or clear) a WebGPU background effect layer. */
+  enableFx(fx: FieldFx | null): void {
+    this.fx = fx;
+    this.renderer.setTransparentBg(!!fx);
+    fx?.resize(this.logicalW, this.logicalH, this.dpr);
+  }
+
   /** Resize to a logical (CSS) size; the backing store is scaled by devicePixelRatio. */
   resize(width: number, height: number): void {
     this.dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    this.logicalW = width;
+    this.logicalH = height;
     this.canvas.width = Math.round(width * this.dpr);
     this.canvas.height = Math.round(height * this.dpr);
     this.renderer.resize(width, height, this.dpr);
+    this.fx?.resize(width, height, this.dpr);
   }
 
   /**
@@ -219,15 +234,20 @@ export class GameSession {
 
     this.judge.update(now, this.held);
 
+    this.energy *= 0.9;
     if (this.judge.judgmentSeq !== this.lastSeq) {
       this.lastSeq = this.judge.judgmentSeq;
       this.feedback.lastJudgment = { tns: this.judge.lastTns, atSeconds: now };
+      this.energy = Math.min(1, this.energy + 0.55);
     }
 
     // Rendering uses a visually-offset clock (judgment stays on the raw `now`).
     const visualNow = now - this.visualOffsetSeconds;
     const beat = this.timing.getBeatFromElapsedTime(visualNow);
     const progress = now <= 0 ? 0 : Math.min(1, now / this.endSeconds);
+    // WebGPU aurora behind the (transparent) field, if attached.
+    const fxEnergy = Math.max(this.energy, Math.min(0.55, this.judge.combo / 90));
+    this.fx?.render(Math.max(0, visualNow), beat, fxEnergy);
     this.renderer.draw(this.ctx2d, this.judge, visualNow, beat, progress, this.feedback);
 
     if (now >= this.endSeconds) {

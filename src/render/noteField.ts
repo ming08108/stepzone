@@ -89,6 +89,7 @@ export class NoteFieldRenderer {
   private nowBeat = 0;
   private columnAngles: number[] = [];
   private background: HTMLVideoElement | HTMLImageElement | null = null;
+  private transparentBg = false; // let a WebGPU layer behind show through
   private firstVisibleIdx = 0; // forward-only cursor into the time-sorted notes
 
   constructor(readonly numTracks: number) {}
@@ -111,6 +112,11 @@ export class NoteFieldRenderer {
   /** Background video/image drawn behind the field, or null. */
   setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
     this.background = media;
+  }
+
+  /** When true (and no bg media), clear to transparent so a WebGPU layer shows. */
+  setTransparentBg(v: boolean): void {
+    this.transparentBg = v;
   }
 
   resize(width: number, height: number, dpr = 1): void {
@@ -208,7 +214,7 @@ export class NoteFieldRenderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.globalAlpha = 1;
 
-    // Background video/image (dimmed), or solid dark.
+    // Background: dimmed media, transparent (WebGPU layer behind), or solid dark.
     if (this.background) {
       ctx.clearRect(0, 0, width, height);
       try {
@@ -217,6 +223,8 @@ export class NoteFieldRenderer {
         ctx.fillStyle = '#07080c';
         ctx.fillRect(0, 0, width, height);
       }
+    } else if (this.transparentBg) {
+      ctx.clearRect(0, 0, width, height);
     } else {
       ctx.fillStyle = '#07080c';
       ctx.fillRect(0, 0, width, height);
