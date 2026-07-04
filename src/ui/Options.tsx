@@ -1,7 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import { DEFAULT_KEYBINDINGS, type Settings } from '../app/settings';
 import { TURNS } from '../notes/transforms';
-import { HidControllerSettings } from './HidControllerSettings';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useSettings } from './SettingsContext';
 import { useMenuNav } from './useMenuNav';
@@ -262,9 +261,11 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
             >
               Reset keys to default
             </button>
+            <p className="mt-2 text-[12px] text-[#ececec]/40">
+              Controllers &amp; dance pads work automatically via the Gamepad API — plug in and
+              press a panel while playing.
+            </p>
           </Section>
-
-          <HidControllerSettings />
         </div>
       </div>
     </Stage>

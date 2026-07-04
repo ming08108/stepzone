@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { readControllers } from '../input/controllers';
+import { readGamepad } from '../input/gamepad';
 
 /**
  * Makes a screen fully navigable with the 4 arrows + Enter (select) + Escape/
@@ -68,7 +68,7 @@ export function useMenuNav(onBack?: () => void): void {
     let raf = 0;
     let prev = { u: false, d: false, l: false, r: false, c: false, b: false };
     const poll = () => {
-      const g = readControllers();
+      const g = readGamepad();
       if (g.connected) {
         if ((g.left && !prev.l) || (g.up && !prev.u)) moveFocus(-1);
         if ((g.right && !prev.r) || (g.down && !prev.d)) moveFocus(1);
