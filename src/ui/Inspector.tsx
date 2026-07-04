@@ -37,6 +37,12 @@ const QUANT_COLOR: Record<NoteType, string> = {
   [NoteType.N192ND]: '#8a8a8a',
 };
 
+const TH = 'border-b border-line px-2 py-1.5 text-left text-xs font-medium uppercase text-muted';
+const TD = 'border-b border-line px-2 py-1.5 text-left tabular-nums';
+const DT = 'text-xs text-muted';
+const DD = 'mt-0.5 tabular-nums';
+const SWATCH = 'mr-2 inline-block h-[0.7em] w-[0.7em] rounded-[2px] align-baseline';
+
 interface FlatNote {
   track: number;
   row: number;
@@ -75,27 +81,27 @@ export function Inspector() {
   return (
     <>
       <section className="card">
-        <h2>Song</h2>
-        <dl>
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">Song</h2>
+        <dl className="m-0 grid gap-x-6 gap-y-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
           <div>
-            <dt>Title</dt>
-            <dd>{song.title || '—'}</dd>
+            <dt className={DT}>Title</dt>
+            <dd className={DD}>{song.title || '—'}</dd>
           </div>
           <div>
-            <dt>Artist</dt>
-            <dd>{song.artist || '—'}</dd>
+            <dt className={DT}>Artist</dt>
+            <dd className={DD}>{song.artist || '—'}</dd>
           </div>
           <div>
-            <dt>Music</dt>
-            <dd>{song.musicFile || '—'}</dd>
+            <dt className={DT}>Music</dt>
+            <dd className={DD}>{song.musicFile || '—'}</dd>
           </div>
           <div>
-            <dt>Offset</dt>
-            <dd>{song.timing.offsetSeconds.toFixed(3)} s</dd>
+            <dt className={DT}>Offset</dt>
+            <dd className={DD}>{song.timing.offsetSeconds.toFixed(3)} s</dd>
           </div>
           <div>
-            <dt>BPMs</dt>
-            <dd>
+            <dt className={DT}>BPMs</dt>
+            <dd className={DD}>
               {song.timing.bpms.map((b) => `${noteRowToBeat(b.row)}=${b.bps * 60}`).join(', ')}
             </dd>
           </div>
@@ -104,23 +110,23 @@ export function Inspector() {
 
       {chart && (
         <section className="card">
-          <h2>
-            Chart <span className="tag">{chart.stepsType}</span>
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
+            Chart <span className="pill normal-case">{chart.stepsType}</span>
           </h2>
-          <dl>
+          <dl className="m-0 grid gap-x-6 gap-y-3 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
             <div>
-              <dt>Difficulty</dt>
-              <dd>
+              <dt className={DT}>Difficulty</dt>
+              <dd className={DD}>
                 {difficultyToString(chart.difficulty)} ({chart.meter})
               </dd>
             </div>
             <div>
-              <dt>Columns</dt>
-              <dd>{chart.numTracks}</dd>
+              <dt className={DT}>Columns</dt>
+              <dd className={DD}>{chart.numTracks}</dd>
             </div>
             <div>
-              <dt>Counts</dt>
-              <dd>
+              <dt className={DT}>Counts</dt>
+              <dd className={DD}>
                 {(() => {
                   const c = chart.getNoteData().computeCounts();
                   return `${c.taps} taps · ${c.holdHeads} holds · ${c.rollHeads} rolls · ${c.mines} mines`;
@@ -131,33 +137,37 @@ export function Inspector() {
         </section>
       )}
 
-      <div className="columns">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         <section className="card">
-          <h2>Notes (beat → time)</h2>
-          <table>
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
+            Notes (beat → time)
+          </h2>
+          <table className="w-full border-collapse text-sm tabular-nums">
             <thead>
               <tr>
-                <th>col</th>
-                <th>beat</th>
-                <th>time</th>
-                <th>type</th>
-                <th>dur</th>
+                <th className={TH}>col</th>
+                <th className={TH}>beat</th>
+                <th className={TH}>time</th>
+                <th className={TH}>type</th>
+                <th className={TH}>dur</th>
               </tr>
             </thead>
             <tbody>
               {notes.map((n, i) => (
                 <tr key={i}>
-                  <td>{n.track}</td>
-                  <td>
+                  <td className={TD}>{n.track}</td>
+                  <td className={TD}>
                     <span
-                      className="swatch"
+                      className={SWATCH}
                       style={{ background: QUANT_COLOR[getNoteType(n.row)] }}
                     />
                     {n.beat}
                   </td>
-                  <td>{n.seconds.toFixed(3)}s</td>
-                  <td>{NOTE_TYPE_NAME[n.note.type]}</td>
-                  <td>{n.note.durationRows ? `${noteRowToBeat(n.note.durationRows)}b` : '—'}</td>
+                  <td className={TD}>{n.seconds.toFixed(3)}s</td>
+                  <td className={TD}>{NOTE_TYPE_NAME[n.note.type]}</td>
+                  <td className={TD}>
+                    {n.note.durationRows ? `${noteRowToBeat(n.note.durationRows)}b` : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -165,27 +175,29 @@ export function Inspector() {
         </section>
 
         <section className="card">
-          <h2>Timing table</h2>
-          <table>
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted">
+            Timing table
+          </h2>
+          <table className="w-full border-collapse text-sm tabular-nums">
             <thead>
               <tr>
-                <th>beat</th>
-                <th>audio time</th>
-                <th />
+                <th className={TH}>beat</th>
+                <th className={TH}>audio time</th>
+                <th className={TH} />
               </tr>
             </thead>
             <tbody>
               {timingTable.map((r) => (
                 <tr key={r.beat}>
-                  <td>
+                  <td className={TD}>
                     <span
-                      className="swatch"
+                      className={SWATCH}
                       style={{ background: QUANT_COLOR[beatToNoteType(r.beat)] }}
                     />
                     {r.beat}
                   </td>
-                  <td>{r.seconds.toFixed(3)}s</td>
-                  <td className="muted">{r.beat === 2 ? '← 0.5s stop here' : ''}</td>
+                  <td className={TD}>{r.seconds.toFixed(3)}s</td>
+                  <td className={`${TD} text-muted`}>{r.beat === 2 ? '← 0.5s stop here' : ''}</td>
                 </tr>
               ))}
             </tbody>

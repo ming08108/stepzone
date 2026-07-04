@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+
+/* CSS-first theme (Tailwind v4). These become utilities: bg-base, text-ink,
+   border-line, text-accent, bg-panel, etc. The canvas game colors live in
+   src/render/noteField.ts and are independent of this. */
+@theme {
+  --color-base: #12141a;
+  --color-panel: #1b1e27;
+  --color-line: #2a2e3a;
+  --color-ink: #e6e8ee;
+  --color-muted: #8b90a0;
+  --color-accent: #6ea8fe;
+  --color-night: #07080c;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-base text-ink m-0;
+    font-family:
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+  }
+}
+
+@layer components {
+  /* A few reused patterns kept as component classes for readable JSX. */
+  .card {
+    @apply bg-panel border border-line rounded-xl px-5 py-4 mb-5;
+  }
+  .pill {
+    @apply align-middle text-xs font-medium text-accent bg-accent/10 border border-accent/30 rounded-full px-2 py-0.5;
+  }
+  .cta {
+    @apply bg-accent text-night rounded-xl px-9 py-3 text-lg font-extrabold cursor-pointer shadow-[0_6px_24px_rgba(110,168,254,0.35)] hover:brightness-110;
+  }
+  .kbd {
+    @apply bg-white/10 border border-line border-b-2 rounded px-1.5 text-[0.9em];
+  }
+}

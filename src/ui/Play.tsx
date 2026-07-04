@@ -13,6 +13,9 @@ interface Result {
   failed: boolean;
 }
 
+const CTL_BTN =
+  'rounded-lg border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-sm font-semibold text-white/75 hover:bg-white/15 hover:text-white';
+
 export function Play({ onInspect }: { onInspect: () => void }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,42 +98,52 @@ export function Play({ onInspect }: { onInspect: () => void }) {
   };
 
   return (
-    <div className="playwrap" ref={wrapRef}>
-      <canvas ref={canvasRef} className="playcanvas" />
+    <div ref={wrapRef} className="fixed inset-0 overflow-hidden bg-night">
+      <canvas ref={canvasRef} className="block h-full w-full" />
 
-      <div className="playctl">
-        <button onClick={toggleFullscreen} title="Fullscreen">
+      <div className="absolute bottom-4 left-3.5 z-[3] flex gap-2">
+        <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
           ⛶
         </button>
-        <button onClick={onInspect}>Inspect</button>
+        <button onClick={onInspect} className={CTL_BTN}>
+          Inspect
+        </button>
       </div>
 
       {phase !== 'playing' && (
-        <div className="overlay">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-night/80 p-6 text-center backdrop-blur-sm">
           {phase === 'ready' && (
             <>
-              <div className="logo">notefield</div>
-              <h2>Example — dance-single (Hard)</h2>
-              <p className="hint">
+              <div className="text-[2.4rem] font-extrabold tracking-tight text-accent">
+                notefield
+              </div>
+              <h2 className="m-0 text-2xl tracking-wide">Example — dance-single (Hard)</h2>
+              <p className="m-0 max-w-[30rem] text-ink">
                 Hit each arrow as it reaches the receptors.
                 <br />
-                <kbd>←</kbd> <kbd>↓</kbd> <kbd>↑</kbd> <kbd>→</kbd> &nbsp;or&nbsp; <kbd>D</kbd>{' '}
-                <kbd>F</kbd> <kbd>J</kbd> <kbd>K</kbd>
+                <kbd className="kbd">←</kbd> <kbd className="kbd">↓</kbd>{' '}
+                <kbd className="kbd">↑</kbd> <kbd className="kbd">→</kbd> &nbsp;or&nbsp;{' '}
+                <kbd className="kbd">D</kbd> <kbd className="kbd">F</kbd>{' '}
+                <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd>
               </p>
               <button className="cta" onClick={start}>
                 ▶ Play
               </button>
-              <p className="hint muted">
+              <p className="m-0 max-w-[30rem] text-muted">
                 A metronome plays on each beat (the example has no audio).
               </p>
             </>
           )}
           {phase === 'done' && result && (
             <>
-              <h2>{result.failed ? 'FAILED' : 'CLEARED'}</h2>
-              <div className="bigscore">{(result.percent * 100).toFixed(2)}%</div>
-              <div className="gradebadge">{result.grade}</div>
-              <div className="hint">max combo {result.maxCombo}</div>
+              <h2 className="m-0 text-2xl tracking-wide">{result.failed ? 'FAILED' : 'CLEARED'}</h2>
+              <div className="text-5xl font-extrabold tabular-nums">
+                {(result.percent * 100).toFixed(2)}%
+              </div>
+              <div className="text-[3.5rem] font-black leading-none text-[#ffd94b]">
+                {result.grade}
+              </div>
+              <div className="m-0 max-w-[30rem] text-muted">max combo {result.maxCombo}</div>
               <button className="cta" onClick={start}>
                 ↻ Play again
               </button>
