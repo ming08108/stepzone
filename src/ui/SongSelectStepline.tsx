@@ -1,8 +1,9 @@
 /**
- * STEPLINE song select — a faithful build of the design handoff: a fixed
- * 1280×720 stage (scaled to fit, letterboxed), Space Grotesk, a selected-song
- * detail header with a difficulty-chip stack, a filter strip, sortable columns,
- * and a keyboard-navigated centered list (virtualized for large libraries).
+ * STEPLINE song select — a build of the design handoff, made fluid: a
+ * full-viewport layout (fixed-height bars + a flexing list) that fills any
+ * aspect ratio, Space Grotesk, a selected-song detail header with a
+ * difficulty-chip stack, a filter strip, sortable columns, and a
+ * keyboard-navigated centered list (virtualized for large libraries).
  */
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import exampleSsc from '../dev/example.ssc?raw';
