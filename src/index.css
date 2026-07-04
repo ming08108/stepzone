@@ -4,13 +4,14 @@
    border-line, text-accent, bg-panel, etc. The canvas game colors live in
    src/render/noteField.ts and are independent of this. */
 @theme {
-  --color-base: #12141a;
-  --color-panel: #1b1e27;
-  --color-line: #2a2e3a;
-  --color-ink: #e6e8ee;
-  --color-muted: #8b90a0;
-  --color-accent: #6ea8fe;
-  --color-night: #07080c;
+  --color-base: #0a0b11;
+  --color-panel: #14161f;
+  --color-line: #272b39;
+  --color-ink: #eef0f6;
+  --color-muted: #888fa4;
+  --color-accent: #7c9dff;
+  --color-accent2: #b57bff;
+  --color-night: #06070b;
 }
 
 @layer base {
@@ -19,32 +20,84 @@
   }
   body {
     @apply bg-base text-ink m-0;
+    min-height: 100vh;
     font-family:
       system-ui,
       -apple-system,
       'Segoe UI',
       Roboto,
       sans-serif;
+    background-image:
+      radial-gradient(1100px 560px at 50% -12%, rgba(124, 157, 255, 0.12), transparent 60%),
+      radial-gradient(820px 480px at 92% 6%, rgba(181, 123, 255, 0.08), transparent 55%);
+    background-attachment: fixed;
+  }
+  ::selection {
+    background: rgba(124, 157, 255, 0.32);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2b3040;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4157;
+    background-clip: content-box;
   }
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
-    border-radius: 6px;
+    border-radius: 8px;
   }
 }
 
 @layer components {
-  /* A few reused patterns kept as component classes for readable JSX. */
   .card {
-    @apply bg-panel border border-line rounded-xl px-5 py-4 mb-5;
+    @apply mb-5 rounded-2xl border border-line p-5;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 14px 40px -18px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+  }
+  .brand {
+    background: linear-gradient(120deg, var(--color-ink), var(--color-accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    letter-spacing: -0.02em;
   }
   .pill {
-    @apply align-middle text-xs font-medium text-accent bg-accent/10 border border-accent/30 rounded-full px-2 py-0.5;
+    @apply align-middle text-xs font-semibold uppercase tracking-wide text-accent;
+    background: rgba(124, 157, 255, 0.12);
+    border: 1px solid rgba(124, 157, 255, 0.28);
+    border-radius: 999px;
+    padding: 0.18em 0.7em;
   }
   .cta {
-    @apply bg-accent text-night rounded-xl px-9 py-3 text-lg font-extrabold cursor-pointer shadow-[0_6px_24px_rgba(110,168,254,0.35)] hover:brightness-110;
+    @apply cursor-pointer rounded-xl px-9 py-3 text-lg font-extrabold text-night;
+    background: linear-gradient(135deg, var(--color-accent), var(--color-accent2));
+    box-shadow: 0 10px 34px -10px rgba(124, 157, 255, 0.65);
+    transition:
+      transform 0.08s ease,
+      filter 0.15s ease;
+  }
+  .cta:hover {
+    filter: brightness(1.07);
+    transform: translateY(-1px);
+  }
+  .cta:active {
+    transform: translateY(0);
   }
   .kbd {
-    @apply bg-white/10 border border-line border-b-2 rounded px-1.5 text-[0.9em];
+    @apply rounded border border-line px-1.5 text-[0.9em];
+    background: rgba(255, 255, 255, 0.08);
+    border-bottom-width: 2px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
   }
 }

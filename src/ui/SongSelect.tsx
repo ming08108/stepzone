@@ -141,8 +141,8 @@ export function SongSelect({
   return (
     <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
       <header className="mb-5 flex items-center justify-between">
-        <div className="text-xl font-bold">
-          notefield <span className="pill">song select</span>
+        <div className="text-2xl font-extrabold">
+          <span className="brand">notefield</span> <span className="pill">song select</span>
           {stats.plays > 0 && (
             <span className="ml-2 text-xs font-normal text-muted">{stats.plays} plays</span>
           )}
@@ -267,7 +267,10 @@ export function SongSelect({
           const isOpen = expanded === key;
           const meters = [...new Set(entry.song.charts.map((c) => c.meter))].sort((a, b) => a - b);
           return (
-            <div key={key} className="border-b border-line last:border-0">
+            <div
+              key={key}
+              className="border-b border-line transition-colors last:border-0 hover:bg-white/[0.02]"
+            >
               <div className="flex items-center gap-3 px-4 py-2.5">
                 <button
                   onClick={() => toggleFav(key)}
