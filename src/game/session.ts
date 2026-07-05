@@ -34,6 +34,7 @@ export interface SessionConfig {
   reverse: boolean;
   appearance: 'visible' | 'hidden' | 'sudden';
   bgMode: 'off' | 'dim' | 'full';
+  noteSkin: 'arcade' | 'itg';
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -46,6 +47,7 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   reverse: false,
   appearance: 'visible',
   bgMode: 'dim',
+  noteSkin: 'itg',
 };
 
 export class GameSession {
@@ -108,6 +110,7 @@ export class GameSession {
     this.renderer.setReverse(config.reverse);
     this.renderer.setAppearance(config.appearance);
     this.renderer.setBgDim(config.bgMode === 'full' ? 0.25 : 0.6);
+    this.renderer.setStyle(config.noteSkin);
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;

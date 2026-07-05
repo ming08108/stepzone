@@ -173,6 +173,20 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
                 Reverse
               </Toggle>
             </Row>
+            <Row label="NOTE SKIN">
+              <Toggle
+                active={settings.noteSkin === 'arcade'}
+                onClick={() => update({ noteSkin: 'arcade' })}
+              >
+                Arcade
+              </Toggle>
+              <Toggle
+                active={settings.noteSkin === 'itg'}
+                onClick={() => update({ noteSkin: 'itg' })}
+              >
+                ITG
+              </Toggle>
+            </Row>
             <Row label="APPEARANCE">
               {(['visible', 'hidden', 'sudden'] as const).map((a) => (
                 <Toggle

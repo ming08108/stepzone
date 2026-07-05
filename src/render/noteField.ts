@@ -1,6 +1,8 @@
 /**
- * Arcade-style canvas note field (DDR/ITG look): directional arrows colored by
- * quantization, pulsing receptors, hit flashes, holds, and a full-screen HUD.
+ * Canvas note field: directional arrows colored by quantization, pulsing
+ * receptors, hit flashes, holds, and a full-screen HUD. Two selectable styles
+ * (setStyle): 'arcade' — the left-aligned STEPLINE panel — and 'itg' — a
+ * centered ITGmania/SM5 field with flat beveled arrows and a restrained HUD.
  * Upscroll, constant-time (CMod) spacing. See spec doc 8. Purely presentational
  * — reads the Judge, never mutates it. Works in logical (CSS) pixels; the caller
  * sets a devicePixelRatio transform via resize().
@@ -28,6 +30,19 @@ const QUANT_COLOR: Record<NoteType, string> = {
   [NoteType.N192ND]: '#ff9d3d',
 };
 
+// ITG note quantization palette (classic StepMania/ITG noteskin colors).
+const ITG_QUANT_COLOR: Record<NoteType, string> = {
+  [NoteType.N4TH]: '#ff2f2f',
+  [NoteType.N8TH]: '#3d7bff',
+  [NoteType.N12TH]: '#c44cff',
+  [NoteType.N16TH]: '#41d94b',
+  [NoteType.N24TH]: '#ff5fdd',
+  [NoteType.N32ND]: '#ffa93d',
+  [NoteType.N48TH]: '#3df0ff',
+  [NoteType.N64TH]: '#9aa0a8',
+  [NoteType.N192ND]: '#9aa0a8',
+};
+
 // STEPLINE judgment colors.
 const JUDGMENT: Record<number, { label: string; color: string }> = {
   [TapNoteScore.W1]: { label: 'FANTASTIC', color: '#38f0ff' },
@@ -39,12 +54,24 @@ const JUDGMENT: Record<number, { label: string; color: string }> = {
   [TapNoteScore.HitMine]: { label: 'MINE!', color: '#ff4d3d' },
 };
 
+// ITG judgment tiers: title-case labels in the Simply Love-style colors.
+const ITG_JUDGMENT: Record<number, { label: string; color: string }> = {
+  [TapNoteScore.W1]: { label: 'Fantastic', color: '#21cce8' },
+  [TapNoteScore.W2]: { label: 'Excellent', color: '#e2a71c' },
+  [TapNoteScore.W3]: { label: 'Great', color: '#66c955' },
+  [TapNoteScore.W4]: { label: 'Decent', color: '#b45cff' },
+  [TapNoteScore.W5]: { label: 'Way Off', color: '#c9855e' },
+  [TapNoteScore.Miss]: { label: 'Miss', color: '#ff3030' },
+  [TapNoteScore.HitMine]: { label: 'Mine!', color: '#ff3030' },
+};
+
 /** Arrow rotation per dance-single column: Left, Down, Up, Right. */
 const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 
 const SPACING = 64; // base pixels per beat (ITG ARROW_SPACING)
 const RECEPTOR_FLASH = 0.11; // seconds the receptor stays lit after a press
 const EXPLOSION = 0.26; // seconds for the hit explosion ring/glow
+const ITG_FLASH = 0.15; // seconds for the small ITG receptor hit flash
 const JUDGMENT_LIFE = 0.7; // seconds the judgment label shows (design keyframes)
 const DRAW_CULL = 100; // px beyond the field before a note is culled
 
@@ -118,6 +145,7 @@ export class NoteFieldRenderer {
   private transparentBg = false; // let a WebGPU layer behind show through
   private reverse = false; // downscroll: receptors at the bottom
   private appearance: 'visible' | 'hidden' | 'sudden' = 'visible';
+  private style: 'arcade' | 'itg' = 'arcade';
   private firstVisibleIdx = 0; // forward-only cursor into the time-sorted notes
   // Combo pop animation state (visual only).
   private lastCombo = 0;
@@ -165,6 +193,11 @@ export class NoteFieldRenderer {
     this.appearance = a;
   }
 
+  /** Note field style: 'arcade' (STEPLINE panel) or 'itg' (centered ITGmania). */
+  setStyle(style: 'arcade' | 'itg'): void {
+    this.style = style;
+  }
+
   resize(width: number, height: number, dpr = 1): void {
     this.width = width;
     this.height = height;
@@ -182,7 +215,10 @@ export class NoteFieldRenderer {
   }
 
   private laneX(track: number): number {
-    return this.fieldLeft + this.colW / 2 + track * this.colW;
+    // ITG centers a single playfield; arcade left-aligns it in a side panel.
+    const left =
+      this.style === 'itg' ? (this.width - this.numTracks * this.colW) / 2 : this.fieldLeft;
+    return left + this.colW / 2 + track * this.colW;
   }
 
   private angle(track: number): number {
@@ -335,6 +371,12 @@ export class NoteFieldRenderer {
     } else {
       ctx.fillStyle = '#0b0c0e';
       ctx.fillRect(0, 0, width, height);
+    }
+
+    // ITG style: centered field, flat arrows, restrained feedback.
+    if (this.style === 'itg') {
+      this.drawItg(ctx, judge, now, beat, progress, fb);
+      return;
     }
 
     // Sawtooth beat pulse: peaks on each beat, decays linearly to the next.
@@ -666,6 +708,269 @@ export class NoteFieldRenderer {
       ctx.shadowBlur = 12 * ds;
       ctx.shadowOffsetY = 2 * ds;
       ctx.fillText(String(judge.combo), 0, 0);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * ITGmania / SM5 style: a centered playfield over a plain dark filter, flat
+   * beveled arrows with hard outlines, and restrained hit feedback — a brief
+   * receptor flash instead of the arcade glow rings. Sharp and readable.
+   */
+  private drawItg(
+    ctx: CanvasRenderingContext2D,
+    judge: Judge,
+    now: number,
+    beat: number,
+    progress: number,
+    fb: Feedback,
+  ): void {
+    const { height, ds } = this;
+    const beatPulse = 1 - (beat - Math.floor(beat));
+    const recY = this.recY();
+    const fieldW = this.numTracks * this.colW;
+    const fieldL = (this.width - fieldW) / 2;
+
+    // Notefield filter: a plain dark strip behind the lanes (Simply Love style).
+    ctx.fillStyle = 'rgba(3,4,6,0.5)';
+    ctx.fillRect(fieldL - 8 * ds, 0, fieldW + 16 * ds, height);
+
+    // Advance the visible-window cursor (same forward-only scan as arcade).
+    const notes = judge.notes;
+    while (this.firstVisibleIdx < notes.length) {
+      const n = notes[this.firstVisibleIdx];
+      const endY =
+        n.note.type === TapNoteType.HoldHead
+          ? this.yOf(n.tailTime, noteRowToBeat(n.tailRow))
+          : this.yOf(n.time, n.beat);
+      if (this.passed(endY)) this.firstVisibleIdx++;
+      else break;
+    }
+
+    // Holds behind arrows (windowed).
+    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
+      if (this.notYet(this.yOf(n.time, n.beat))) break;
+      if (n.note.type === TapNoteType.HoldHead && !n.holdResolved) this.drawHold(ctx, n);
+    }
+
+    // Receptors: plain grey outline arrows that brighten on the beat; a press
+    // fills them white briefly. No glow.
+    const recStroke = `rgba(178,184,194,${(0.45 + 0.4 * beatPulse).toFixed(3)})`;
+    for (let t = 0; t < this.numTracks; t++) {
+      const x = this.laneX(t);
+      const flashAge = now - (fb.laneFlash[t] ?? -1);
+      const pressed = flashAge >= 0 && flashAge < RECEPTOR_FLASH;
+      this.arrow(ctx, x, recY, t, pressed ? 0.92 : 1, {
+        fill: pressed ? 'rgba(255,255,255,0.9)' : 'rgba(150,156,166,0.14)',
+        stroke: pressed ? '#f2f4f8' : recStroke,
+        lineWidth: 4,
+      });
+    }
+
+    // Notes and unhit hold heads (windowed): flat beveled ITG arrows.
+    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
+      const y = this.yOf(n.time, n.beat);
+      if (this.notYet(y)) break;
+      if (this.passed(y)) continue;
+      if (n.note.type === TapNoteType.HoldHead) {
+        if (n.holdResolved || n.tns !== TapNoteScore.None) continue;
+      } else if (n.hidden || n.note.type === TapNoteType.AutoKeysound) {
+        continue;
+      }
+      const a = this.appearanceAlpha(y);
+      if (a <= 0.01) continue;
+      if (n.note.type === TapNoteType.Mine) this.drawMine(ctx, this.laneX(n.track), y);
+      else {
+        this.itgArrow(ctx, this.laneX(n.track), y, n.track, ITG_QUANT_COLOR[getNoteType(n.row)], a);
+      }
+    }
+
+    // Hit flash: a small, brief judgment-tinted pop on the receptor — no
+    // additive glow or expanding rings in this style.
+    for (let t = 0; t < this.numTracks; t++) {
+      const hit = fb.laneHit[t];
+      if (!hit) continue;
+      const age = now - hit.atSeconds;
+      if (age < 0 || age >= ITG_FLASH) continue;
+      const k = age / ITG_FLASH;
+      const j = ITG_JUDGMENT[hit.tns];
+      this.arrow(ctx, this.laneX(t), recY, t, 1 + 0.08 * k, {
+        fill: j ? j.color : '#ffffff',
+        alpha: 0.45 * (1 - k),
+        stroke: 'rgba(255,255,255,0.8)',
+        lineWidth: 3,
+      });
+    }
+
+    this.drawItgHud(ctx, judge, now, progress, fb);
+  }
+
+  /**
+   * ITG note body: flat quantization fill lit toward the point, a hard dark
+   * rim, and a thin inner bevel line. Crisp — no glow, no drop shadow.
+   */
+  private itgArrow(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    track: number,
+    fill: string,
+    alpha: number,
+  ): void {
+    const s = this.arrowS;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.rotate(this.angle(track));
+    traceArrow(ctx, s);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    // Bevel shading: brighter toward the tip, darker toward the tail.
+    const g = ctx.createLinearGradient(0, -s, 0, 0.78 * s);
+    g.addColorStop(0, 'rgba(255,255,255,0.4)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.05)');
+    g.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = 5 * this.ds;
+    ctx.strokeStyle = '#14161a';
+    ctx.stroke();
+    // Thin inner highlight line sells the bevel.
+    ctx.scale(0.78, 0.78);
+    traceArrow(ctx, s);
+    ctx.lineWidth = (2 * this.ds) / 0.78;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawItgHud(
+    ctx: CanvasRenderingContext2D,
+    judge: Judge,
+    now: number,
+    progress: number,
+    fb: Feedback,
+  ): void {
+    const { width, ds } = this;
+    const font = (w: number, px: number) =>
+      `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
+    const cx = width / 2;
+    const recY = this.recY();
+    const beatPulse = 1 - (this.nowBeat - Math.floor(this.nowBeat));
+    const fieldW = this.numTracks * this.colW;
+
+    // Top strip: song title/artist left, difficulty + dance score right, with a
+    // thin song-progress line along its bottom edge.
+    const stripH = 34 * ds;
+    ctx.save();
+    ctx.fillStyle = 'rgba(3,4,6,0.72)';
+    ctx.fillRect(0, 0, width, stripH);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, stripH, width, 1);
+    const prog = Math.max(0, Math.min(1, progress));
+    ctx.fillStyle = 'rgba(236,236,236,0.55)';
+    ctx.fillRect(0, stripH - 2 * ds, width * prog, 2 * ds);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ececec';
+    ctx.font = font(700, 15);
+    const title = this.meta.title || 'notefield';
+    const titleW = ctx.measureText(title).width;
+    ctx.fillText(title, 16 * ds, stripH / 2);
+    if (this.meta.subtitle) {
+      ctx.fillStyle = 'rgba(236,236,236,0.5)';
+      ctx.font = font(400, 12);
+      ctx.fillText(this.meta.subtitle, 16 * ds + titleW + 10 * ds, stripH / 2);
+    }
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#ececec';
+    ctx.font = font(700, 17);
+    const pct = `${(judge.percentDancePoints * 100).toFixed(2)}%`;
+    const pctW = ctx.measureText(pct).width;
+    ctx.fillText(pct, width - 16 * ds, stripH / 2);
+    ctx.fillStyle = 'rgba(236,236,236,0.5)';
+    ctx.font = font(400, 12);
+    ctx.fillText(this.meta.difficulty, width - 16 * ds - pctW - 12 * ds, stripH / 2);
+    ctx.restore();
+
+    // Life bar: horizontal, top center over the field — green when healthy,
+    // amber then red (with a beat-synced danger pulse) as life drains.
+    const barW = fieldW;
+    const barX = cx - barW / 2;
+    const barY = stripH + 8 * ds;
+    const barH = 9 * ds;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(barX, barY, barW, barH);
+    const life = judge.failed ? 0 : judge.life;
+    if (life > 0) {
+      const fw = Math.max(2, (barW - 2) * life);
+      ctx.fillStyle = life < 0.25 ? '#ff3030' : life < 0.5 ? '#ffc63d' : '#3fe04f';
+      if (life < 0.25) ctx.globalAlpha = 0.55 + 0.45 * beatPulse; // danger pulse
+      ctx.fillRect(barX + 1, barY + 1, fw, barH - 2);
+      ctx.globalAlpha = 1;
+      if (life < 1) {
+        // Bright leading cap, like the ITG lifebar's moving edge.
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillRect(barX + 1 + fw - 1.5 * ds, barY + 1, 1.5 * ds, barH - 2);
+      }
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+    ctx.restore();
+
+    // Judgment above combo, anchored inside the field past the receptor line
+    // (flips under reverse so both stay on screen).
+    const anchorY = this.reverse ? recY - 215 * ds : recY + 215 * ds;
+    if (fb.lastJudgment) {
+      const age = now - fb.lastJudgment.atSeconds;
+      const j = ITG_JUDGMENT[fb.lastJudgment.tns];
+      if (j && age >= 0 && age < JUDGMENT_LIFE) {
+        const t = age / JUDGMENT_LIFE;
+        const pop = t < 0.12 ? 1.22 - (t / 0.12) * 0.22 : 1;
+        const alpha = t > 0.8 ? (1 - t) / 0.2 : 1;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, anchorY - 26 * ds);
+        ctx.scale(pop, pop);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = j.color;
+        ctx.font = font(700, 30);
+        if ('letterSpacing' in ctx) ctx.letterSpacing = `${(1.5 * ds).toFixed(2)}px`;
+        // Hard offset shadow (no blur) keeps it crisp over the background.
+        ctx.shadowColor = 'rgba(0,0,0,0.85)';
+        ctx.shadowOffsetY = 2 * ds;
+        ctx.fillText(j.label, 0, 0);
+        ctx.restore();
+      }
+    }
+
+    // Combo: a plain white count with a small label, subtle pop on increment.
+    if (judge.combo !== this.lastCombo) {
+      if (judge.combo > this.lastCombo) this.comboPopAt = now;
+      this.lastCombo = judge.combo;
+    }
+    if (judge.combo > 3) {
+      const k = Math.max(0, Math.min(1, (now - this.comboPopAt) / 0.13));
+      const pop = 1 + 0.1 * (1 - k);
+      ctx.save();
+      ctx.translate(cx, anchorY + 34 * ds);
+      ctx.scale(pop, pop);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(236,236,236,0.95)';
+      ctx.font = font(700, 44);
+      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.shadowOffsetY = 2 * ds;
+      ctx.fillText(String(judge.combo), 0, 0);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowOffsetY = 0;
+      ctx.fillStyle = 'rgba(236,236,236,0.55)';
+      ctx.font = font(700, 11);
+      if ('letterSpacing' in ctx) ctx.letterSpacing = `${(3 * ds).toFixed(2)}px`;
+      ctx.fillText('COMBO', 0, 18 * ds);
       ctx.restore();
     }
   }

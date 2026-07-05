@@ -30,6 +30,8 @@ export interface Settings {
   webgpu: boolean;
   /** Song background visibility during play. */
   bgMode: 'off' | 'dim' | 'full';
+  /** Note field renderer style: 'arcade' (STEPLINE) or 'itg' (ITGmania/SM5). */
+  noteSkin: 'arcade' | 'itg';
 }
 
 export const DEFAULT_KEYBINDINGS: Record<string, number> = {
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   appearance: 'visible',
   webgpu: true,
   bgMode: 'dim',
+  noteSkin: 'itg',
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';

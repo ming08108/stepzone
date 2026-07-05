@@ -225,6 +225,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       reverse: settings.reverse,
       appearance: settings.appearance,
       bgMode: settings.bgMode,
+      noteSkin: settings.noteSkin,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     session.onEnd = (judge) => {
