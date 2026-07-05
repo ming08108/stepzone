@@ -43,6 +43,10 @@ const KEEP_EXT = new Set([
   '.webm',
   '.ogv',
   '.m4v',
+  // Legacy background videos — unplayable natively, converted by io/bgVideo.ts.
+  '.avi',
+  '.mpg',
+  '.mpeg',
 ]);
 const MAX_DEPTH = 6; // Songs/Pack/Song is 3; headroom for nested collections
 
@@ -128,8 +132,7 @@ async function loadList(): Promise<StoredSource[]> {
   if (!legacyMigrated) {
     legacyMigrated = true;
     const legacy = (await idbRequest('readonly', (s) => s.get(LEGACY_KEY))) as
-      | FileSystemDirectoryHandle
-      | undefined;
+      FileSystemDirectoryHandle | undefined;
     if (legacy) {
       let dup = false;
       for (const s of list) if (await sameEntry(legacy, s.handle)) dup = true;
@@ -309,8 +312,7 @@ export async function saveCatalog(id: string, songs: CatalogSong[]): Promise<voi
 export async function loadCatalog(id: string): Promise<CatalogSong[] | null> {
   try {
     const cat = (await idbRequest('readonly', (s) => s.get(CATALOG_PREFIX + id))) as
-      | SourceCatalog
-      | undefined;
+      SourceCatalog | undefined;
     return cat && cat.v === 1 && Array.isArray(cat.songs) ? cat.songs : null;
   } catch {
     return null;

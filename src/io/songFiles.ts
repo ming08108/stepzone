@@ -187,17 +187,35 @@ export function isPlayableBackground(name: string): boolean {
   return BG_VIDEO_EXT.includes(e) || BG_IMG_EXT.includes(e);
 }
 
-/** The song's background image/video File (browser-playable formats only), or null. */
-export function findBackgroundFile(entry: LibraryEntry): File | null {
+// Legacy video containers browsers can't decode (DivX/XviD/MPEG-1/2 era);
+// playable only after conversion (io/bgVideo.ts).
+const BG_CONVERT_EXT = ['.avi', '.mpg', '.mpeg'];
+
+/** True for a background video that needs conversion before a browser can play it. */
+export function isConvertibleVideo(name: string): boolean {
+  return BG_CONVERT_EXT.includes(ext(name));
+}
+
+/** The simfile-named (or -bg/background-suffixed) file passing `ok`, if any. */
+function matchBackgroundFile(entry: LibraryEntry, ok: (name: string) => boolean): File | null {
   const { files, song } = entry;
   let file: File | undefined;
   if (song.backgroundFile) {
     const want = basename(song.backgroundFile);
-    file = files.find((f) => basename(f.name) === want);
+    file = files.find((f) => basename(f.name) === want && ok(f.name));
   }
-  if (!file) file = files.find((f) => /(?:-bg|background)\.[a-z0-9]+$/i.test(f.name));
-  if (!file) return null;
-  return isPlayableBackground(file.name) ? file : null;
+  if (!file) file = files.find((f) => /(?:-bg|background)\.[a-z0-9]+$/i.test(f.name) && ok(f.name));
+  return file ?? null;
+}
+
+/** The song's background image/video File (browser-playable formats only), or null. */
+export function findBackgroundFile(entry: LibraryEntry): File | null {
+  return matchBackgroundFile(entry, isPlayableBackground);
+}
+
+/** The song's legacy-format background video (needs conversion), or null. */
+export function findConvertibleBackground(entry: LibraryEntry): File | null {
+  return matchBackgroundFile(entry, isConvertibleVideo);
 }
 
 /** Min/max BPM of a song (from its timing), for display/filtering. */

@@ -9,12 +9,13 @@ import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { starterEntries } from '../starter';
 import {
   filesFromDataTransfer,
-  findBackgroundFile,
   loadLibraryFromFiles,
   readSongAudio,
   songBpmRange,
   type LibraryEntry,
 } from '../io/songFiles';
+import { resolveBackground, subscribeBgConvert, type BgConvertStatus } from '../io/bgVideo';
+import { clearVideoCache, videoCacheStats } from '../io/videoCache';
 import {
   addSourceFromDrop,
   addSourceFromPicker,
@@ -154,6 +155,16 @@ export function SongSelect({
   const [showSources, setShowSources] = useState(false);
   const restoring = useRef(false);
   const folderRef = useRef<HTMLInputElement>(null);
+  // Legacy-background conversion activity + converted-video cache size.
+  const [bgConvert, setBgConvert] = useState<BgConvertStatus | null>(null);
+  const [videoCache, setVideoCache] = useState<{ bytes: number; count: number } | null>(null);
+
+  useEffect(() => subscribeBgConvert(setBgConvert), []);
+  // Cache stats show in the FOLDERS panel; refresh when it opens and as
+  // conversions finish.
+  useEffect(() => {
+    if (showSources) void videoCacheStats().then(setVideoCache);
+  }, [showSources, bgConvert]);
 
   // Enabled sources the browser wants a fresh gesture for drive the reload
   // banner; they clear as grants succeed (sources refreshes after each pass).
@@ -255,25 +266,22 @@ export function SongSelect({
 
   // A catalog row being opened: read its song folder (one directory listing)
   // and parse the simfile, writing the result back onto the entry in place.
-  const ensureLoaded = useCallback(
-    async (entry: LibraryEntry): Promise<LibraryEntry> => {
-      if (!entry.lazyDir || !entry.sourceId || entry.song.charts.length > 0) return entry;
-      const files = await readSongFolder(entry.sourceId, entry.lazyDir);
-      if (!files || files.length === 0) return entry;
-      const { entries: parsed } = await loadLibraryFromFiles(files);
-      const full = parsed[0];
-      if (!full) return entry;
-      const merged: LibraryEntry = {
-        ...entry,
-        song: full.song,
-        files: full.files,
-        bannerUrl: full.bannerUrl,
-      };
-      setEntries((prev) => prev.map((e) => (e === entry ? merged : e)));
-      return merged;
-    },
-    [],
-  );
+  const ensureLoaded = useCallback(async (entry: LibraryEntry): Promise<LibraryEntry> => {
+    if (!entry.lazyDir || !entry.sourceId || entry.song.charts.length > 0) return entry;
+    const files = await readSongFolder(entry.sourceId, entry.lazyDir);
+    if (!files || files.length === 0) return entry;
+    const { entries: parsed } = await loadLibraryFromFiles(files);
+    const full = parsed[0];
+    if (!full) return entry;
+    const merged: LibraryEntry = {
+      ...entry,
+      song: full.song,
+      files: full.files,
+      bannerUrl: full.bannerUrl,
+    };
+    setEntries((prev) => prev.map((e) => (e === entry ? merged : e)));
+    return merged;
+  }, []);
 
   // Folder-walk progress ticks (the phase before any songs can be counted).
   const scanTick = useCallback(
@@ -402,8 +410,7 @@ export function SongSelect({
           bpm: b.text,
           bpmSort: b.sort,
           // Catalog rows carry cached levels until their simfile is parsed.
-          levels:
-            e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
+          levels: e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
         };
       }),
     [entries],
@@ -478,7 +485,9 @@ export function SongSelect({
       ) ?? use.find((c) => slotOf(difficultyToString(c.difficulty)) === diff);
     if (!chart) return;
     const audio = await readSongAudio(entry);
-    const bg = findBackgroundFile(entry);
+    // Playable background, cached conversion of a legacy .avi/.mpg, or null
+    // (which also queues a background conversion for next time).
+    const bg = await resolveBackground(entry);
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
   }, [filtered, sel, diff, onPlay, ensureLoaded]);
 
@@ -623,9 +632,7 @@ export function SongSelect({
             </button>
           </div>
           {sources.length === 0 && (
-            <div className="py-2 text-[#ececec]/40">
-              NONE YET — ADD YOUR SONGS FOLDER OR A PACK
-            </div>
+            <div className="py-2 text-[#ececec]/40">NONE YET — ADD YOUR SONGS FOLDER OR A PACK</div>
           )}
           {sources.map((s) => {
             const count = entries.filter((e) => e.sourceId === s.id).length;
@@ -677,6 +684,23 @@ export function SongSelect({
           >
             + ADD FOLDER
           </button>
+          {videoCache && videoCache.count > 0 && (
+            <div className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2 text-[#ececec]/40">
+              <span title="Legacy .avi/.mpg backgrounds converted for browser playback">
+                BG VIDEO CACHE — {(videoCache.bytes / 1048576).toFixed(0)} MB (
+                {videoCache.count})
+              </span>
+              <button
+                onClick={() =>
+                  void clearVideoCache().then(() => videoCacheStats().then(setVideoCache))
+                }
+                className="hover:text-[#ff5d47]"
+                title="Delete converted videos (they re-convert on next play)"
+              >
+                CLEAR
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -948,6 +972,12 @@ export function SongSelect({
         <span>◀▶ DIFFICULTY</span>
         <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — CONFIRM</span>
         <button onClick={() => setOverlay((v) => !v)}>SELECT — SORT / FILTER</button>
+        <span className="flex-1" />
+        {bgConvert && (
+          <span className="truncate" title="Converting a legacy background video for this browser">
+            CONVERTING BG — {bgConvert.name.toUpperCase()} {Math.round(bgConvert.progress * 100)}%
+          </span>
+        )}
       </div>
     </div>
   );
