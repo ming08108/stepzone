@@ -110,11 +110,19 @@ export class ShaderBackground implements FieldFx {
         entries: [{ binding: 0, resource: { buffer: uniform } }],
       });
 
-      // Surface device-loss so a lost context degrades to the Canvas fallback
-      // instead of throwing every frame.
-      device.lost.then(() => {}).catch(() => {});
+      const bg = new ShaderBackground(device, ctx, pipeline, uniform, bindGroup, canvas);
 
-      return new ShaderBackground(device, ctx, pipeline, uniform, bindGroup, canvas);
+      // Surface device-loss so a lost context degrades to the Canvas fallback
+      // instead of submitting dead work every frame.
+      device.lost
+        .then(() => {
+          bg.lost = true;
+        })
+        .catch(() => {
+          bg.lost = true;
+        });
+
+      return bg;
     } catch {
       return null;
     }
