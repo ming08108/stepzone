@@ -14,9 +14,17 @@ export type { Turn } from '../notes/transforms';
 export const SCROLL_MODES = ['C', 'X', 'M'] as const;
 export type ScrollMode = (typeof SCROLL_MODES)[number];
 
-/** Appearance mod (hidden/sudden fade notes near/far from the receptors). */
-export const APPEARANCES = ['visible', 'hidden', 'sudden'] as const;
-export type Appearance = (typeof APPEARANCES)[number];
+/**
+ * A practice-loop section, in beats (one measure = 4 beats). Chosen per play on
+ * the Player Options screen and carried on the PlayRequest / SessionConfig —
+ * intentionally NOT part of PlayOptions, so it never persists into Settings.
+ */
+export interface PracticeSection {
+  /** First beat of the loop (inclusive). */
+  startBeat: number;
+  /** Beat the loop ends on (exclusive — notes here belong to the next measure). */
+  endBeat: number;
+}
 
 /** Song background visibility during play. */
 export const BG_MODES = ['off', 'dim', 'full'] as const;
@@ -40,7 +48,6 @@ export type NoteSkin = (typeof NOTE_SKINS)[number];
  * | visualOffsetMs    | visualOffsetMs      | visualOffsetMs  |
  * | turn              | turn                | turn            |
  * | reverse           | reverse             | reverse         |
- * | appearance        | appearance          | appearance      |
  * | bgMode            | bgMode              | bgMode          |
  * | noteSkin          | noteSkin            | noteSkin        |
  */
@@ -59,8 +66,6 @@ export interface PlayOptions {
   turn: Turn;
   /** Reverse (downscroll): receptors at the bottom. */
   reverse: boolean;
-  /** Appearance mod. */
-  appearance: Appearance;
   /** Song background visibility during play. */
   bgMode: BgMode;
   /** Note field renderer style. */
@@ -75,7 +80,6 @@ export const DEFAULT_PLAY_OPTIONS: PlayOptions = {
   visualOffsetMs: 0,
   turn: 'none',
   reverse: false,
-  appearance: 'visible',
   bgMode: 'dim',
   noteSkin: 'arcade',
 };

@@ -85,7 +85,6 @@ describe('loadSettings validates persisted JSON (review #13)', () => {
       JSON.stringify({
         scrollMode: 'Z',
         turn: 'spin',
-        appearance: 'invisible',
         bgMode: 'strobe',
         noteSkin: 7,
       }),
@@ -93,7 +92,6 @@ describe('loadSettings validates persisted JSON (review #13)', () => {
     const s = loadSettings();
     expect(s.scrollMode).toBe(DEFAULT_SETTINGS.scrollMode);
     expect(s.turn).toBe(DEFAULT_SETTINGS.turn);
-    expect(s.appearance).toBe(DEFAULT_SETTINGS.appearance);
     expect(s.bgMode).toBe(DEFAULT_SETTINGS.bgMode);
     expect(s.noteSkin).toBe(DEFAULT_SETTINGS.noteSkin);
   });

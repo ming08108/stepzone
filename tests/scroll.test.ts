@@ -12,7 +12,6 @@ import {
   FALLBACK_MAX_BPM,
   SPACING,
   advanceCursor,
-  appearanceAlpha,
   holdHeadState,
   holdIsAlive,
   holdIsHeld,
@@ -32,7 +31,6 @@ function state(over: Partial<ScrollState> = {}): ScrollState {
     value: 600, // C600 => 640 px/sec at SPACING 64
     songMaxBpm: 200,
     reverse: false,
-    appearance: 'visible',
     receptorY: 100,
     height: 800,
     nowSeconds: 10,
@@ -105,31 +103,6 @@ describe('yOf', () => {
     const s = state({ mode: 'C', value: 600, reverse: true, receptorY: 700 });
     expect(yOf(s, s.nowSeconds, 0)).toBe(700);
     expect(yOf(s, s.nowSeconds + 1, 0)).toBe(700 - 640); // approaches from above
-  });
-});
-
-describe('appearanceAlpha', () => {
-  it('visible: always 1', () => {
-    const s = state({ appearance: 'visible' });
-    expect(appearanceAlpha(s, s.receptorY)).toBe(1);
-    expect(appearanceAlpha(s, s.receptorY + 5000)).toBe(1);
-  });
-
-  it('hidden: 0 at the receptor, fading in by 40% of the height away', () => {
-    const s = state({ appearance: 'hidden', receptorY: 100, height: 800 });
-    expect(appearanceAlpha(s, 100)).toBe(0);
-    expect(appearanceAlpha(s, 100 + 0.12 * 800)).toBe(0); // fade-in start
-    expect(appearanceAlpha(s, 100 + 0.26 * 800)).toBeCloseTo(0.5, 5); // midpoint
-    expect(appearanceAlpha(s, 100 + 0.4 * 800)).toBe(1); // fully visible
-    expect(appearanceAlpha(s, 100 - 0.4 * 800)).toBe(1); // symmetric above
-  });
-
-  it('sudden: 1 near the receptor, gone past 78% of the height away', () => {
-    const s = state({ appearance: 'sudden', receptorY: 100, height: 800 });
-    expect(appearanceAlpha(s, 100)).toBe(1);
-    expect(appearanceAlpha(s, 100 + 0.5 * 800)).toBe(1); // fade-out start
-    expect(appearanceAlpha(s, 100 + 0.64 * 800)).toBeCloseTo(0.5, 5);
-    expect(appearanceAlpha(s, 100 + 0.78 * 800)).toBe(0);
   });
 });
 

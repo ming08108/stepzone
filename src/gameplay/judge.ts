@@ -103,6 +103,12 @@ export class Judge {
     timing: TimingData,
     windows: TimingWindows = DEFAULT_WINDOWS,
     rate = 1,
+    /**
+     * Practice section in chart-seconds: notes outside [startSeconds,
+     * endSeconds) are kept (so they still render) but marked unjudgable, like
+     * fake notes — never hit, never missed, excluded from possible points.
+     */
+    section: { startSeconds: number; endSeconds: number } | null = null,
   ) {
     this.windows = windows;
     this.rate = rate;
@@ -115,12 +121,15 @@ export class Judge {
       for (const { row, note } of noteData.getTrack(track)) {
         if (note.type === TapNoteType.Empty) continue;
         const beat = noteRowToBeat(row);
+        const time = timing.getElapsedTimeFromBeat(beat);
         const scoreableType =
           note.type === TapNoteType.Tap ||
           note.type === TapNoteType.HoldHead ||
           note.type === TapNoteType.Mine ||
           note.type === TapNoteType.Lift;
-        const judgable = scoreableType && timing.isJudgableAtRow(row);
+        const inSection =
+          section === null || (time >= section.startSeconds && time < section.endSeconds);
+        const judgable = scoreableType && inSection && timing.isJudgableAtRow(row);
         const isHoldHead = note.type === TapNoteType.HoldHead;
         const tailRow = isHoldHead ? row + note.durationRows : row;
 
@@ -128,7 +137,7 @@ export class Judge {
           track,
           row,
           beat,
-          time: timing.getElapsedTimeFromBeat(beat),
+          time,
           note,
           judgable,
           tns: TapNoteScore.None,
@@ -160,6 +169,36 @@ export class Judge {
       }
     }
     this.notes.sort((a, b) => a.time - b.time || a.track - b.track);
+  }
+
+  /**
+   * Wipe every judgment and score back to a fresh state for another pass over
+   * the same notes (practice-loop replays). The note list and judgable flags
+   * are untouched; judgmentSeq deliberately keeps counting so UI layers that
+   * diff it don't see a stale match after the reset.
+   */
+  reset(): void {
+    for (const n of this.notes) {
+      n.tns = TapNoteScore.None;
+      n.offset = 0;
+      n.hidden = false;
+      n.holdInitiated = false;
+      n.holdLife = 1;
+      n.hns = HoldNoteScore.None;
+      n.holdResolved = false;
+    }
+    this.combo = 0;
+    this.maxCombo = 0;
+    this.missCombo = 0;
+    this.life = INITIAL_LIFE;
+    this.failed = false;
+    this.lastTns = TapNoteScore.None;
+    for (const k in this.tapCounts) delete this.tapCounts[k];
+    for (const k in this.holdCounts) delete this.holdCounts[k];
+    this.actualDance = 0;
+    this.lastUpdate = 0;
+    this.missCursor = 0;
+    this.activeHolds.length = 0;
   }
 
   /** Effective (rate-scaled) window in chart-seconds. */

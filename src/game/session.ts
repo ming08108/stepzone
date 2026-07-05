@@ -13,7 +13,7 @@ import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation } from '../notes/transforms';
-import { DEFAULT_PLAY_OPTIONS, type PlayOptions } from './playOptions';
+import { DEFAULT_PLAY_OPTIONS, type PlayOptions, type PracticeSection } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
@@ -25,13 +25,20 @@ import type { TimingData } from '../timing/timingData';
 
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
+/** Practice loop: how much music plays before the section on every pass. */
+const PRACTICE_PRE_ROLL_SECONDS = 1.5;
+/** Practice loop: play this far past the section so edge hits still judge. */
+const PRACTICE_POST_ROLL_SECONDS = 0.5;
 
 /**
- * Playback options applied to a session — exactly the shared PlayOptions shape
+ * Playback options applied to a session — the shared PlayOptions shape
  * (src/game/playOptions.ts), which the persisted Settings also extends, so the
- * two can't drift.
+ * two can't drift, plus the per-play (never persisted) practice section.
  */
-export type SessionConfig = PlayOptions;
+export type SessionConfig = PlayOptions & {
+  /** Loop this beat range over and over (practice mode); null = play through. */
+  practice?: PracticeSection | null;
+};
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = { ...DEFAULT_PLAY_OPTIONS };
 
@@ -57,6 +64,11 @@ export class GameSession {
   private lastSeq = 0;
   private readonly visualOffsetSeconds: number;
   private readonly musicRate: number;
+  /** Practice loop bounds in song-seconds; practice=false means play through. */
+  private readonly practice: boolean;
+  private readonly loopStartSeconds: number = 0;
+  private readonly loopEndSeconds: number = 0;
+  private loopCount = 1;
   private bgVideo: HTMLVideoElement | null = null;
   private fx: FieldFx | null = null;
   private energy = 0;
@@ -64,6 +76,8 @@ export class GameSession {
   private logicalH = 720;
 
   onEnd?: (judge: Judge) => void;
+  /** Practice mode: fired each time the loop restarts, with the new pass number. */
+  onLoop?: (count: number) => void;
 
   constructor(
     song: Song,
@@ -86,13 +100,25 @@ export class GameSession {
             ),
           );
 
-    this.judge = new Judge(playNd, this.timing, DEFAULT_WINDOWS, config.musicRate);
+    const practice = config.practice ?? null;
+    this.practice = practice !== null;
+    if (practice) {
+      this.loopStartSeconds = this.timing.getElapsedTimeFromBeat(practice.startBeat);
+      this.loopEndSeconds = this.timing.getElapsedTimeFromBeat(practice.endBeat);
+    }
+
+    this.judge = new Judge(
+      playNd,
+      this.timing,
+      DEFAULT_WINDOWS,
+      config.musicRate,
+      practice ? { startSeconds: this.loopStartSeconds, endSeconds: this.loopEndSeconds } : null,
+    );
     this.renderer = new NoteFieldRenderer(nd.numTracks, {
       scrollMode: config.scrollMode,
       scrollValue: config.scrollValue,
       songMaxBpm: songMaxBpm(this.timing.bpms),
       reverse: config.reverse,
-      appearance: config.appearance,
       noteSkin: config.noteSkin,
       bgDim: config.bgMode === 'full' ? 0.25 : 0.6,
       columnAngles: columnAnglesFor(chart.stepsType, nd.numTracks),
@@ -184,9 +210,30 @@ export class GameSession {
       const buffer = makeClickTrack(this.clock.ctx, this.clicks, this.endSeconds + 0.5);
       this.clock.setBuffer(buffer);
     }
-    this.clock.start(0, LEAD_IN_SECONDS); // negative song time during lead-in
+    // Practice starts just before the section; song time < the section start
+    // during the pre-roll (like the negative time of a normal lead-in).
+    this.clock.start(this.startOffsetSeconds(), LEAD_IN_SECONDS);
     this.running = true;
     this.raf = requestAnimationFrame(this.loop);
+  }
+
+  /** Where in the song playback (re)starts: 0, or just before the practice section. */
+  private startOffsetSeconds(): number {
+    return this.practice ? Math.max(0, this.loopStartSeconds - PRACTICE_PRE_ROLL_SECONDS) : 0;
+  }
+
+  /** Jump back to the section start for another practice pass, judging afresh. */
+  private restartLoop(): void {
+    this.loopCount++;
+    this.judge.reset();
+    this.lastSeq = this.judge.judgmentSeq;
+    this.feedback.lastJudgment = null;
+    this.feedback.laneFlash.fill(-999);
+    this.feedback.laneHit.fill(null);
+    this.offsets.length = 0;
+    this.energy = 0;
+    this.clock.start(this.startOffsetSeconds(), 0.25);
+    this.onLoop?.(this.loopCount);
   }
 
   press(track: number, eventTimeStampMs: number): void {
@@ -235,13 +282,30 @@ export class GameSession {
     // Rendering uses a visually-offset clock (judgment stays on the raw `now`).
     const visualNow = now - this.visualOffsetSeconds;
     const beat = this.timing.getBeatFromElapsedTime(visualNow);
-    const progress = now <= 0 ? 0 : Math.min(1, now / this.endSeconds);
+    // Practice: the HUD progress hairline tracks the loop, not the song.
+    const progress = this.practice
+      ? Math.min(
+          1,
+          Math.max(
+            0,
+            (now - this.loopStartSeconds) /
+              Math.max(0.001, this.loopEndSeconds - this.loopStartSeconds),
+          ),
+        )
+      : now <= 0
+        ? 0
+        : Math.min(1, now / this.endSeconds);
     // WebGPU aurora behind the (transparent) field, if attached.
     const fxEnergy = Math.max(this.energy, Math.min(0.55, this.judge.combo / 90));
     this.fx?.render(Math.max(0, visualNow), beat, fxEnergy);
     this.renderer.draw(this.ctx2d, this.judge, visualNow, beat, progress, this.feedback);
 
-    if (now >= this.endSeconds) {
+    if (this.practice) {
+      // Loop forever (until the player exits): past the section's post-roll —
+      // or the end of the audio, whichever comes first — jump back and rejudge.
+      const resetAt = Math.min(this.loopEndSeconds + PRACTICE_POST_ROLL_SECONDS, this.endSeconds);
+      if (now >= resetAt) this.restartLoop();
+    } else if (now >= this.endSeconds) {
       this.finish();
       return;
     }

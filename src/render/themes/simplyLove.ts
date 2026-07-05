@@ -314,13 +314,11 @@ export class SimplyLoveTheme implements Theme {
     track: number,
     y: number,
     quant: NoteType,
-    alpha: number,
     style: TapNoteStyle,
   ): void {
     const s = v.arrowS;
     const ds = v.ds;
     ctx.save();
-    ctx.globalAlpha = alpha;
     ctx.translate(v.laneX(track), y);
     ctx.rotate(v.angle(track));
     // Silhouette / dark rim, stroked over itself to soften the corners.

@@ -1,7 +1,7 @@
 /**
  * Canvas note field orchestrator. Owns the per-frame loop and everything the
  * themes share — background compositing, the design-grid layout, scroll math
- * (render/scroll.ts), appearance mods, the forward-only cull cursor, and the
+ * (render/scroll.ts), the forward-only cull cursor, and the
  * shared passes (holds, receptors, notes, explosions, combo pop-state) — and
  * delegates all styling to the active Theme (render/theme.ts): 'arcade' is the
  * DDR A3 look (render/themes/ddrA3.ts), 'itg' is Simply Love
@@ -18,7 +18,6 @@ import { getNoteType, noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { columnAnglesFor } from './columns';
 import {
   advanceCursor,
-  appearanceAlpha,
   FALLBACK_MAX_BPM,
   holdHeadState,
   holdIsAlive,
@@ -60,7 +59,7 @@ const ARROW_HALF = 40;
  */
 export interface NoteFieldConfig extends Pick<
   PlayOptions,
-  'scrollMode' | 'scrollValue' | 'reverse' | 'appearance' | 'noteSkin'
+  'scrollMode' | 'scrollValue' | 'reverse' | 'noteSkin'
 > {
   /** Peak BPM of the chart (drives MMod); see songMaxBpm() in render/scroll.ts. */
   songMaxBpm: number;
@@ -79,7 +78,6 @@ export const DEFAULT_NOTE_FIELD_CONFIG: NoteFieldConfig = {
   scrollMode: DEFAULT_PLAY_OPTIONS.scrollMode,
   scrollValue: DEFAULT_PLAY_OPTIONS.scrollValue,
   reverse: DEFAULT_PLAY_OPTIONS.reverse,
-  appearance: DEFAULT_PLAY_OPTIONS.appearance,
   noteSkin: DEFAULT_PLAY_OPTIONS.noteSkin,
   songMaxBpm: FALLBACK_MAX_BPM,
   bgDim: 0.6,
@@ -141,7 +139,6 @@ export class NoteFieldRenderer {
       value: this.cfg.scrollValue,
       songMaxBpm: this.cfg.songMaxBpm,
       reverse: this.cfg.reverse,
-      appearance: this.cfg.appearance,
       receptorY: 0,
       height: this.height,
       nowSeconds: 0,
@@ -179,7 +176,6 @@ export class NoteFieldRenderer {
       this.theme = createTheme(patch.noteSkin);
       resetCursor = true;
     }
-    if (patch.appearance !== undefined) c.appearance = patch.appearance;
     if (patch.bare !== undefined) c.bare = patch.bare;
     if (patch.bgDim !== undefined) c.bgDim = Math.max(0, Math.min(1, patch.bgDim));
     if (patch.transparentBg !== undefined) c.transparentBg = patch.transparentBg;
@@ -226,7 +222,6 @@ export class NoteFieldRenderer {
     s.value = this.cfg.scrollValue;
     s.songMaxBpm = this.cfg.songMaxBpm;
     s.reverse = this.cfg.reverse;
-    s.appearance = this.cfg.appearance;
     s.receptorY = v.receptorY;
     s.height = this.height;
   }
@@ -342,9 +337,6 @@ export class NoteFieldRenderer {
         if (passed(s, y)) continue;
       }
       if (!isHoldHead && !shouldDrawNote(n)) continue;
-      // A pinned head ignores hidden/sudden, like the body it caps.
-      const a = engaged ? 1 : appearanceAlpha(s, y);
-      if (a <= 0.01) continue;
       if (n.note.type === TapNoteType.Mine) theme.drawMine(ctx, v, v.laneX(n.track), y);
       else
         theme.drawTapNote(
@@ -353,7 +345,6 @@ export class NoteFieldRenderer {
           n.track,
           y,
           getNoteType(n.row),
-          a,
           isHoldHead ? (headState === 'dropped' ? 'deadHead' : 'holdHead') : 'tap',
         );
     }

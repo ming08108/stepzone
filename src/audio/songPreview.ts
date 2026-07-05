@@ -41,8 +41,28 @@ function cache(key: string, buf: AudioBuffer): void {
 }
 
 let token = 0; // bumped to cancel any in-flight / scheduled preview
-let current: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
+let current: {
+  src: AudioBufferSourceNode;
+  gain: GainNode;
+  /** Context time when the source started, plus its loop geometry — enough to
+   *  reconstruct the audible song position at any later moment. */
+  startedAt: number;
+  startOffset: number;
+  loopLen: number;
+} | null = null;
 let debounce: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * The song position (seconds into the audio file) the playing preview loop is
+ * at right now, or null when nothing is playing. Pure read — UI playheads
+ * poll this per frame.
+ */
+export function previewPositionSeconds(): number | null {
+  if (!current || !ctx) return null;
+  const elapsed = ctx.currentTime - current.startedAt;
+  if (elapsed <= 0) return current.startOffset;
+  return current.startOffset + (elapsed % current.loopLen);
+}
 
 export function stopPreview(): void {
   if (debounce) {
@@ -65,12 +85,22 @@ export function stopPreview(): void {
   current = null;
 }
 
-function begin(ac: AudioContext, buf: AudioBuffer, song: Song): void {
-  const { startSeconds: start, lengthSeconds: len } = previewWindow(
-    buf.duration,
-    song.sampleStartSeconds,
-    song.sampleLengthSeconds,
-  );
+/** Explicit loop window (seconds into the audio), e.g. a practice section. */
+export interface PreviewLoopWindow {
+  startSeconds: number;
+  lengthSeconds: number;
+}
+
+function begin(ac: AudioContext, buf: AudioBuffer, song: Song, win?: PreviewLoopWindow): void {
+  const { startSeconds: start, lengthSeconds: len } = win
+    ? {
+        startSeconds: Math.min(Math.max(0, win.startSeconds), Math.max(0, buf.duration - 0.5)),
+        lengthSeconds: Math.max(
+          0.5,
+          Math.min(win.lengthSeconds, buf.duration - Math.max(0, win.startSeconds)),
+        ),
+      }
+    : previewWindow(buf.duration, song.sampleStartSeconds, song.sampleLengthSeconds);
   const src = ac.createBufferSource();
   src.buffer = buf;
   src.loop = true;
@@ -86,7 +116,7 @@ function begin(ac: AudioContext, buf: AudioBuffer, song: Song): void {
   }
   const now = ac.currentTime;
   gain.gain.linearRampToValueAtTime(PREVIEW_GAIN, now + FADE_IN_SECONDS); // fade in
-  current = { src, gain };
+  current = { src, gain, startedAt: now, startOffset: start, loopLen: len };
 }
 
 type ResolvePreview = (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: Song } | null>;
@@ -96,24 +126,28 @@ type ResolvePreview = (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: So
  * playing or pending, claim a fresh token, and run `resolve` after `delayMs`
  * unless a newer request supersedes it in the meantime.
  */
-function schedulePreview(delayMs: number, resolve: ResolvePreview): void {
+function schedulePreview(delayMs: number, resolve: ResolvePreview, win?: PreviewLoopWindow): void {
   const ac = audio();
   if (!ac) return;
   stopPreview();
   const myToken = ++token;
   debounce = setTimeout(() => {
-    void run(myToken, resolve);
+    void run(myToken, resolve, win);
   }, delayMs);
 }
 
-async function run(myToken: number, resolve: ResolvePreview): Promise<void> {
+async function run(
+  myToken: number,
+  resolve: ResolvePreview,
+  win?: PreviewLoopWindow,
+): Promise<void> {
   try {
     const ac = audio();
     if (!ac) return;
     void ac.resume().catch(() => {});
     const res = await resolve(ac);
     if (!res || myToken !== token) return;
-    begin(ac, res.buf, res.song);
+    begin(ac, res.buf, res.song, win);
   } catch {
     // Silent by contract (see header): read/decode failures just mean
     // no preview, never an unhandled rejection.
@@ -151,7 +185,14 @@ export function previewSong(entry: LibraryEntry, delayMs = 450): void {
   });
 }
 
-/** Preview already-decoded-in-memory encoded audio (Player Options has it loaded). */
-export function previewEncoded(key: string, enc: ArrayBuffer, song: Song, delayMs = 250): void {
-  schedulePreview(delayMs, (ac) => decodeEnc(key, enc, song, ac));
+/** Preview already-decoded-in-memory encoded audio (Player Options has it loaded).
+ *  `win` overrides the loop to an explicit window — the practice section. */
+export function previewEncoded(
+  key: string,
+  enc: ArrayBuffer,
+  song: Song,
+  delayMs = 250,
+  win?: PreviewLoopWindow,
+): void {
+  schedulePreview(delayMs, (ac) => decodeEnc(key, enc, song, ac), win);
 }

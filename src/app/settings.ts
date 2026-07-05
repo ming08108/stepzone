@@ -12,7 +12,6 @@
  */
 
 import {
-  APPEARANCES,
   BG_MODES,
   DEFAULT_PLAY_OPTIONS,
   NOTE_SKINS,
@@ -137,7 +136,6 @@ function sanitizeSettings(v: unknown): { settings: Settings; migrated: boolean }
       bindings,
       turn: pick(p.turn, TURNS, d.turn),
       reverse: bool(p.reverse, d.reverse),
-      appearance: pick(p.appearance, APPEARANCES, d.appearance),
       webgpu: bool(p.webgpu, d.webgpu),
       bgMode: pick(p.bgMode, BG_MODES, d.bgMode),
       noteSkin: pick(p.noteSkin, NOTE_SKINS, d.noteSkin),

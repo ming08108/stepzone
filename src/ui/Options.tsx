@@ -1,9 +1,9 @@
 /**
  * STEPLINE Options — the system/global settings screen: sync & offsets (with
  * auto-calibrate), display, and the unified controls table. Per-play mods
- * (speed, turn, scroll direction, appearance, note skin, music rate,
- * background) live on the PLAYER OPTIONS screen before each song — nothing
- * appears on both screens.
+ * (speed, turn, scroll direction, note skin, music rate, background) live on
+ * the PLAYER OPTIONS screen before each song — nothing appears on both
+ * screens.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Settings } from '../app/settings';
@@ -209,8 +209,8 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
       <div className="h-full overflow-y-auto px-[28px] py-8">
         <div className="mx-auto max-w-[760px]">
           <div className="mb-8 border border-l-[3px] border-white/10 border-l-[#ff5d47]/60 px-4 py-2.5 text-[12px] leading-snug tracking-[0.04em] text-[#ececec]/50">
-            These settings are system-wide. Play mods — speed, turn, scroll direction, appearance,
-            note skin, music rate, background — are set per song on the PLAYER OPTIONS screen.
+            These settings are system-wide. Play mods — speed, turn, scroll direction, note skin,
+            music rate, background — are set per song on the PLAYER OPTIONS screen.
           </div>
 
           <Section title="SYNC / OFFSET">

@@ -1,12 +1,12 @@
 /**
  * Pure note-field math, extracted from the renderer so it is unit-testable
  * (tests/scroll.test.ts): scroll position (yOf) for the C/X/M modes with
- * reverse, appearance-mod alpha (hidden/sudden), the cull predicates, the
- * forward-only visible-window cursor, and the narrow read-only view of Judge
- * note state that the renderer is allowed to see. No canvas dependencies.
+ * reverse, the cull predicates, the forward-only visible-window cursor, and
+ * the narrow read-only view of Judge note state that the renderer is allowed
+ * to see. No canvas dependencies.
  */
 
-import type { Appearance, ScrollMode } from '../game/playOptions';
+import type { ScrollMode } from '../game/playOptions';
 import type { ActiveNote } from '../gameplay/judge';
 import { HoldNoteScore, noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 
@@ -37,7 +37,6 @@ export interface ScrollState {
   value: number;
   songMaxBpm: number;
   reverse: boolean;
-  appearance: Appearance;
   /** Effective receptor line in css px (already flipped under reverse). */
   receptorY: number;
   /** Canvas height in css px. */
@@ -56,14 +55,6 @@ export function yOf(s: ScrollState, timeSeconds: number, beatValue: number): num
   // X: multiplier is value. M: multiplier fits the peak BPM to the target.
   const mult = s.mode === 'M' ? s.value / s.songMaxBpm : s.value;
   return s.receptorY + dir * (beatValue - s.nowBeat) * SPACING * mult;
-}
-
-/** Alpha for hidden/sudden mods: 0 at the receptor (hidden) or far away (sudden). */
-export function appearanceAlpha(s: ScrollState, y: number): number {
-  if (s.appearance === 'visible') return 1;
-  const p = Math.abs(y - s.receptorY) / Math.max(1, s.height);
-  const step = (a: number, b: number, x: number) => Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return s.appearance === 'hidden' ? step(0.12, 0.4, p) : 1 - step(0.5, 0.78, p);
 }
 
 /** Has this y scrolled off the exit side of the field? */

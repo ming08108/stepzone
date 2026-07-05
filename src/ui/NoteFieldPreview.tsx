@@ -1,13 +1,13 @@
 /**
  * Live note-field preview: drives the real NoteFieldRenderer with real note
  * data — a Judge on a silent autoplay clock — so the user sees the true note
- * skin, scroll type/spacing, direction, and appearance mod before playing.
- * Loops a window of the chart; scroll/appearance changes apply live without
+ * skin, scroll type/spacing, and direction before playing.
+ * Loops a window of the chart; scroll changes apply live without
  * rebuilding. Shared by Player Options (the selected chart) and the Settings
  * screen (the bundled demo pattern from demoChart()).
  */
 import { useEffect, useRef } from 'react';
-import type { Appearance, NoteSkin, ScrollMode } from '../game/playOptions';
+import type { NoteSkin, ScrollMode } from '../game/playOptions';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { NoteData } from '../notes/noteData';
@@ -33,7 +33,7 @@ export function NoteFieldPreview({
   scrollValue,
   noteSkin,
   reverse,
-  appearance = 'visible',
+  loopWindow = null,
 }: {
   noteData: NoteData;
   timing: TimingData;
@@ -42,12 +42,15 @@ export function NoteFieldPreview({
   scrollValue: number;
   noteSkin: NoteSkin;
   reverse: boolean;
-  appearance?: Appearance;
+  /** Loop exactly this chart slice (seconds) instead of the default opening
+   *  window — Player Options' practice section, so you preview what you'll
+   *  actually be drilling. */
+  loopWindow?: { startSeconds: number; endSeconds: number } | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  // Live-applied per frame (no rebuild): scroll + appearance.
-  const liveRef = useRef({ scrollMode, scrollValue, appearance });
-  liveRef.current = { scrollMode, scrollValue, appearance };
+  // Live-applied per frame (no rebuild): scroll.
+  const liveRef = useRef({ scrollMode, scrollValue });
+  liveRef.current = { scrollMode, scrollValue };
 
   useEffect(() => {
     const canvas = ref.current;
@@ -88,7 +91,6 @@ export function NoteFieldPreview({
         bgDim: 1, // no song background in the preview
         scrollMode: liveRef.current.scrollMode,
         scrollValue: liveRef.current.scrollValue,
-        appearance: liveRef.current.appearance,
         songMaxBpm: maxBpm,
       });
       resize();
@@ -100,11 +102,32 @@ export function NoteFieldPreview({
       held = new Array<boolean>(noteData.numTracks).fill(false);
       releases = [];
       cursor = 0;
+      if (loopWindow) {
+        // Practice section: loop that exact slice (with a short lead-in so the
+        // first notes scroll in), however long it is.
+        windowStart = Math.max(0, loopWindow.startSeconds - 1.4);
+        windowEnd = Math.max(windowStart + 2, loopWindow.endSeconds + 1.0);
+      } else {
+        const first = judge.notes[0]?.time ?? 0;
+        const last = judge.notes[judge.notes.length - 1]?.time ?? first;
+        windowStart = Math.max(0, first - 1.4);
+        windowEnd = Math.max(windowStart + 2, Math.min(windowStart + LOOP, last + 1.2));
+      }
+      // Consume everything before the window as silent perfect autoplay hits,
+      // so a mid-song window starts clean instead of missing its backlog.
+      while (cursor < judge.notes.length && judge.notes[cursor].time < windowStart) {
+        const n = judge.notes[cursor];
+        cursor++;
+        if (n.note.type === TapNoteType.Mine) continue;
+        judge.step(n.track, n.time, false);
+        if (n.tailTime > n.time && n.tailTime >= windowStart) {
+          held[n.track] = true;
+          releases.push({ track: n.track, at: n.tailTime });
+        } else {
+          judge.step(n.track, n.tailTime, true);
+        }
+      }
       lastSeq = judge.judgmentSeq;
-      const first = judge.notes[0]?.time ?? 0;
-      const last = judge.notes[judge.notes.length - 1]?.time ?? first;
-      windowStart = Math.max(0, first - 1.4);
-      windowEnd = Math.max(windowStart + 2, Math.min(windowStart + LOOP, last + 1.2));
     };
 
     rebuild();
@@ -158,7 +181,6 @@ export function NoteFieldPreview({
       }
       livePatch.scrollMode = liveRef.current.scrollMode;
       livePatch.scrollValue = liveRef.current.scrollValue;
-      livePatch.appearance = liveRef.current.appearance;
       renderer.applyConfig(livePatch);
       const beat = timing.getBeatFromElapsedTime(now);
       renderer.draw(ctx, judge, now, beat, 0, feedback);
@@ -170,7 +192,16 @@ export function NoteFieldPreview({
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [noteData, timing, stepsType, noteSkin, reverse]);
+    // Primitive deps for the window so a fresh object each render is fine.
+  }, [
+    noteData,
+    timing,
+    stepsType,
+    noteSkin,
+    reverse,
+    loopWindow?.startSeconds,
+    loopWindow?.endSeconds,
+  ]);
 
   return <canvas ref={ref} className="h-full w-full" />;
 }

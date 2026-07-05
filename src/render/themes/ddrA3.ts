@@ -612,7 +612,6 @@ export class DdrA3Theme implements Theme {
     track: number,
     y: number,
     quant: NoteType,
-    alpha: number,
     style: TapNoteStyle,
   ): void {
     this.store.sync(v.ds);
@@ -628,7 +627,6 @@ export class DdrA3Theme implements Theme {
           : QUANT_TUBE[quant];
     const m = s + 9 * ds;
     ctx.save();
-    ctx.globalAlpha = alpha;
     ctx.translate(v.laneX(track), y);
     ctx.rotate(v.angle(track));
     const spr = this.store.sprite(`note:${band[1]}`, 2 * m, 2 * m, (c) => {

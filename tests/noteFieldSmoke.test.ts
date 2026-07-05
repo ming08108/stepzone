@@ -2,7 +2,7 @@
  * Smoke-exercises the full renderer draw paths for both themes (DDR A3 and
  * Simply Love) against a no-op canvas context: layout, chrome, HUD underlay/
  * overlay, holds, mines, receptors, explosions, judgment + combo animations,
- * bare mode, reverse, appearance mods, and all three scroll modes. Catches
+ * bare mode, reverse, and all three scroll modes. Catches
  * runtime errors the type checker can't (the pixel output itself is not
  * asserted).
  */
@@ -99,7 +99,7 @@ describe.each([['arcade'], ['itg']] as const)('NoteFieldRenderer smoke (%s)', (s
     }).not.toThrow();
   });
 
-  it('draws bare, reverse, hidden/sudden, X/M scroll, and danger life', () => {
+  it('draws bare, reverse, X/M scroll, and danger life', () => {
     const judge = makeJudge();
     const r = new NoteFieldRenderer(4, base);
     r.resize(600, 400, 2);
@@ -107,9 +107,9 @@ describe.each([['arcade'], ['itg']] as const)('NoteFieldRenderer smoke (%s)', (s
     expect(() => {
       r.applyConfig({ bare: true });
       r.draw(ctx, judge, 1, 2, 0.1, feedbackAt(1, TapNoteScore.W2));
-      r.applyConfig({ bare: false, reverse: true, appearance: 'hidden' });
+      r.applyConfig({ bare: false, reverse: true });
       r.draw(ctx, judge, 1, 2, 0.1, feedbackAt(1, TapNoteScore.W2));
-      r.applyConfig({ reverse: false, appearance: 'sudden', scrollMode: 'X', scrollValue: 2 });
+      r.applyConfig({ reverse: false, scrollMode: 'X', scrollValue: 2 });
       r.draw(ctx, judge, 1.5, 3, 0.2, feedbackAt(1.5, TapNoteScore.Miss));
       r.applyConfig({ scrollMode: 'M', scrollValue: 600, songMaxBpm: 150 });
       judge.life = 0.1; // danger chrome / gauge state

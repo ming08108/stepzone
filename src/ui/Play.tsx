@@ -121,6 +121,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const fxRef = useRef<ShaderBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
+  const [loopNum, setLoopNum] = useState(1);
 
   const cleanupBg = () => {
     const m = bgMediaRef.current;
@@ -210,19 +211,25 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       visualOffsetMs: settings.visualOffsetMs,
       turn: settings.turn,
       reverse: settings.reverse,
-      appearance: settings.appearance,
       bgMode: settings.bgMode,
       noteSkin: settings.noteSkin,
+      practice: req.practice ?? null,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
+    setLoopNum(1);
+    session.onLoop = setLoopNum;
     session.onEnd = (judge) => {
       const counts = { ...judge.tapCounts };
-      const { best, isNewRecord } = recordPlay(chartKey(req.song, req.chart), {
-        percent: judge.percentDancePoints,
-        grade: judge.grade,
-        maxCombo: judge.maxCombo,
-        counts,
-      });
+      // Practice runs never reach here (they loop until exit), but make sure a
+      // section-only score can never land in the real records.
+      const { best, isNewRecord } = req.practice
+        ? { best: null, isNewRecord: false }
+        : recordPlay(chartKey(req.song, req.chart), {
+            percent: judge.percentDancePoints,
+            grade: judge.grade,
+            maxCombo: judge.maxCombo,
+            counts,
+          });
       setResult({
         percent: judge.percentDancePoints,
         grade: judge.grade,
@@ -324,6 +331,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       </div>
 
       {phase === 'playing' && <FpsMeter />}
+
+      {phase === 'playing' && req.practice && (
+        <div
+          className="absolute right-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.18em] text-[#ececec]/85"
+          style={{ borderColor: AC }}
+        >
+          PRACTICE · M{Math.floor(req.practice.startBeat / 4) + 1}–M
+          {Math.max(1, Math.floor(req.practice.endBeat / 4))} · LOOP {loopNum}
+        </div>
+      )}
 
       {phase !== 'playing' && (
         <div

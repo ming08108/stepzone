@@ -115,7 +115,6 @@ export interface Theme {
     track: number,
     y: number,
     quant: NoteType,
-    alpha: number,
     style: TapNoteStyle,
   ): void;
 

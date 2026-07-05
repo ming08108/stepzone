@@ -1,3 +1,4 @@
+import type { PracticeSection } from '../game/playOptions';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 
@@ -9,4 +10,6 @@ export interface PlayRequest {
   encodedAudio: ArrayBuffer | null;
   /** Background image/video File, or null. Play owns its object URL. */
   backgroundFile: File | null;
+  /** Practice-loop section (in beats), or null/absent to play the song through. */
+  practice?: PracticeSection | null;
 }
