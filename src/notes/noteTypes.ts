@@ -15,17 +15,10 @@ export const BEATS_PER_MEASURE = 4;
 export const ROWS_PER_MEASURE = ROWS_PER_BEAT * BEATS_PER_MEASURE;
 /** Upper bound for a chart row; also the sentinel for an unclamped hold head. */
 export const MAX_NOTE_ROW = 1 << 30;
-/** Hard cap on columns (dance-double = 8, techno-double8 = 16). */
-export const MAX_NOTE_TRACKS = 16;
 
 /** Beat -> row, rounding to the nearest 1/48 (the standard snap). */
 export function beatToNoteRow(beat: number): number {
   return Math.round(beat * ROWS_PER_BEAT);
-}
-
-/** Beat -> row, truncating instead of rounding. */
-export function beatToNoteRowNotRounded(beat: number): number {
-  return Math.trunc(beat * ROWS_PER_BEAT);
 }
 
 /** Row -> beat (exact). */
@@ -46,30 +39,6 @@ export enum NoteType {
   N48TH,
   N64TH,
   N192ND,
-}
-
-/** Row spacing for a quantization class (e.g. 8th = 24 rows). */
-export function noteTypeToRow(nt: NoteType): number {
-  switch (nt) {
-    case NoteType.N4TH:
-      return ROWS_PER_MEASURE / 4; // 48
-    case NoteType.N8TH:
-      return ROWS_PER_MEASURE / 8; // 24
-    case NoteType.N12TH:
-      return ROWS_PER_MEASURE / 12; // 16
-    case NoteType.N16TH:
-      return ROWS_PER_MEASURE / 16; // 12
-    case NoteType.N24TH:
-      return ROWS_PER_MEASURE / 24; // 8
-    case NoteType.N32ND:
-      return ROWS_PER_MEASURE / 32; // 6
-    case NoteType.N48TH:
-      return ROWS_PER_MEASURE / 48; // 4
-    case NoteType.N64TH:
-      return ROWS_PER_MEASURE / 64; // 3
-    case NoteType.N192ND:
-      return 1;
-  }
 }
 
 /**
@@ -140,29 +109,12 @@ export enum HoldNoteScore {
   Missed = 3,
 }
 
-/** Runtime judgment state for a tap (populated during gameplay, not by the loader). */
-export interface TapNoteResult {
-  tns: TapNoteScore;
-  /** Timing error in seconds; negative = early, positive = late. */
-  tapNoteOffset: number;
-  hidden: boolean;
-  held: boolean;
-}
-
-/** Runtime state for a hold/roll. */
-export interface HoldNoteResult {
-  hns: HoldNoteScore;
-  /** 1.0 = full, 0.0 = dead. First time it reaches 0 -> LetGo. */
-  life: number;
-  lastHeldRow: number;
-  active: boolean;
-  held: boolean;
-}
-
 /**
  * One cell of a chart. Empty cells are never stored (see NoteData), so a
- * TapNote always represents something real. `result`/`holdResult` are attached
- * lazily by the gameplay engine.
+ * TapNote always represents something real. TapNotes are static chart data and
+ * may be shared by reference between cached Steps and play copies — runtime
+ * judgment state lives in the gameplay engine (see Judge's ActiveNote), never
+ * on the note itself.
  */
 export interface TapNote {
   type: TapNoteType;
@@ -174,8 +126,6 @@ export interface TapNote {
   keysoundIndex: number;
   /** Owning player for routine charts; -1 = not player-specific. */
   player: number;
-  result?: TapNoteResult;
-  holdResult?: HoldNoteResult;
 }
 
 export const NO_KEYSOUND = -1;

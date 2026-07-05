@@ -27,7 +27,13 @@ import {
   tapLifeDelta,
   gradeFromPercent,
 } from './scoring';
-import { DEFAULT_WINDOWS, maxWindowSeconds, windowSeconds, type TimingWindows } from './windows';
+import {
+  DEFAULT_WINDOWS,
+  missHorizonSeconds,
+  windowSeconds,
+  type TimingWindows,
+  type WindowKey,
+} from './windows';
 
 export interface ActiveNote {
   track: number;
@@ -85,7 +91,7 @@ export class Judge {
   private possibleDance = 0;
   private possibleGrade = 0;
   private readonly rate: number;
-  private readonly maxWindow: number;
+  private readonly missHorizon: number;
   private lastUpdate = 0;
   // Perf: advance a cursor over the time-sorted notes instead of scanning all
   // of them each frame, and track only the currently-active holds (todo #14).
@@ -101,7 +107,7 @@ export class Judge {
     this.windows = windows;
     this.rate = rate;
     // Windows are in chart-seconds; at rate r a real ±W is ±(W·r) chart-seconds.
-    this.maxWindow = maxWindowSeconds(windows) * rate;
+    this.missHorizon = missHorizonSeconds(windows) * rate;
     this.notesByTrack = Array.from({ length: noteData.numTracks }, () => []);
     this.notes = [];
 
@@ -157,7 +163,7 @@ export class Judge {
   }
 
   /** Effective (rate-scaled) window in chart-seconds. */
-  private win(key: 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll'): number {
+  private win(key: WindowKey): number {
     return windowSeconds(this.windows, key) * this.rate;
   }
 
@@ -186,7 +192,9 @@ export class Judge {
   private applyTapScore(note: ActiveNote, tns: TapNoteScore, offset: number): void {
     note.tns = tns;
     note.offset = offset;
-    note.hidden = true;
+    // `hidden` means consumed by the player's input. A Miss was never touched —
+    // it keeps drawing and scrolls off the field like StepMania.
+    note.hidden = tns !== TapNoteScore.Miss;
     this.lastTns = tns;
     this.judgmentSeq++;
     this.countTap(tns);
@@ -271,7 +279,7 @@ export class Judge {
   update(nowSeconds: number, held: boolean[] = []): void {
     const dt = Math.max(0, nowSeconds - this.lastUpdate);
     this.lastUpdate = nowSeconds;
-    const horizon = nowSeconds - this.maxWindow;
+    const horizon = nowSeconds - this.missHorizon;
 
     // Age notes past the miss horizon. Notes are time-sorted, so a forward-only
     // cursor visits each note once over the whole song.
@@ -280,11 +288,13 @@ export class Judge {
       this.missCursor++;
       if (n.tns !== TapNoteScore.None || !n.judgable) continue;
       if (n.note.type === TapNoteType.Mine) {
+        // Avoided mines aren't consumed — they scroll off the field visibly.
         n.tns = TapNoteScore.AvoidMine;
-        n.hidden = true;
         this.countTap(TapNoteScore.AvoidMine);
       } else {
-        this.applyTapScore(n, TapNoteScore.Miss, this.maxWindow);
+        // A Miss has no real timing offset; record the late w5 edge, not the
+        // (much larger) roll drop-timer that used to leak in here.
+        this.applyTapScore(n, TapNoteScore.Miss, this.win('w5'));
         if (n.note.type === TapNoteType.HoldHead) {
           n.hns = HoldNoteScore.Missed;
           n.holdResolved = true;
@@ -310,15 +320,28 @@ export class Judge {
           n.holdLife = Math.max(0, n.holdLife - dt / this.win('hold'));
         }
       }
+      // ITG's ImmediateHoldLetGo (on for dance): the moment an initiated
+      // hold/roll's life drains to zero it is scored LetGo and latched —
+      // re-pressing must not resurrect it to Held at the tail. Combo is
+      // untouched (ComboBreakOnImmediateHoldLetGo is off in the dance default).
+      if (n.holdLife <= 0) {
+        this.resolveHold(n, HoldNoteScore.LetGo, i);
+        continue;
+      }
       if (nowSeconds >= n.tailTime) {
-        n.hns = n.holdLife > 0 ? HoldNoteScore.Held : HoldNoteScore.LetGo;
-        n.holdResolved = true;
-        this.countHold(n.hns);
-        if (!this.failed) this.actualDance += holdDancePoints(n.hns);
-        this.changeLife(holdLifeDelta(n.hns));
-        this.activeHolds.splice(i, 1);
+        this.resolveHold(n, HoldNoteScore.Held, i);
       }
     }
+  }
+
+  /** Score a live hold (Held at the tail, or LetGo the moment life hits 0). */
+  private resolveHold(n: ActiveNote, hns: HoldNoteScore, activeIdx: number): void {
+    n.hns = hns;
+    n.holdResolved = true;
+    this.countHold(hns);
+    if (!this.failed) this.actualDance += holdDancePoints(hns);
+    this.changeLife(holdLifeDelta(hns));
+    this.activeHolds.splice(activeIdx, 1);
   }
 
   get percentDancePoints(): number {

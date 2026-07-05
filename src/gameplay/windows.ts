@@ -28,19 +28,20 @@ export const DEFAULT_WINDOWS: TimingWindows = {
   add: 0,
 };
 
-type WindowKey = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll';
+export type WindowKey = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll';
 
 /** Effective window in seconds: base * scale + add. */
 export function windowSeconds(w: TimingWindows, key: WindowKey): number {
   return w[key] * w.scale + w.add;
 }
 
-/** The widest window (the miss horizon). */
-export function maxWindowSeconds(w: TimingWindows): number {
-  return Math.max(
-    windowSeconds(w, 'w5'),
-    windowSeconds(w, 'mine'),
-    windowSeconds(w, 'hold'),
-    windowSeconds(w, 'roll'),
-  );
+/**
+ * The tap miss horizon in seconds: the widest *hit* window (w5) or the mine
+ * window. Deliberately excludes the hold/roll drop-timers — those govern how
+ * long an in-progress hold survives, not when an un-hit tap becomes a Miss.
+ * Conflating them delayed misses to ~0.5s and let a stale note swallow presses
+ * aimed at the next note.
+ */
+export function missHorizonSeconds(w: TimingWindows): number {
+  return Math.max(windowSeconds(w, 'w5'), windowSeconds(w, 'mine'));
 }
