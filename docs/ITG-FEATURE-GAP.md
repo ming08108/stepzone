@@ -66,7 +66,7 @@ Stepzone has: **Bar** life only, raw per‑judgment deltas, single fail latch at
 | **Battery** life (fixed lives)                                                                                 | med | med     | Needed for Oni courses.                                 |
 | **Time / Survival** life (draining clock)                                                                      | med | med     | Needed for Survival courses.                            |
 | Drain types: NoRecover, SuddenDeath                                                                            | low | med     | Harder life rules.                                      |
-| FailType variants: Immediate / ImmediateContinue / EndOfSong / Off                                             | low | med     | Stepzone only has immediate‑at‑0. Partial.             |
+| FailType variants: Immediate / ImmediateContinue / EndOfSong / Off                                             | low | med     | Stepzone only has immediate‑at‑0. Partial.              |
 | Life‑bar refinements: merciful drain, progressive bar, combo‑to‑regain, drain scaling, "hot"/full‑combo states | med | low‑med | Partial: raw deltas only (documented in ENGINE‑REVIEW). |
 
 ## 3. Note & timing features
@@ -82,7 +82,7 @@ _runtime application_ of already‑parsed data.
 | **Speed segments** (`#SPEEDS`, ramped x‑mod) rendered                      | med | med | Parsed, not applied. Partial.                               |
 | **Checkpoint holds / Tickcount** (holds re‑judged every N ticks, pump/ITG) | med | med | `CheckpointHit/Miss` enums exist but unused. Partial.       |
 | Combo segments (`#COMBOS` — rows worth >1 combo / multi‑miss)              | low | low | Parsed, not applied. Partial.                               |
-| **Chord cohesion combo** (per‑row worst tap governs the row)               | low | med | Stepzone approximates per‑note (documented). Partial.      |
+| **Chord cohesion combo** (per‑row worst tap governs the row)               | low | med | Stepzone approximates per‑note (documented). Partial.       |
 | Attacks (`#ATTACKS` — timed mid‑song modifiers)                            | med | low | Note type exists; not scheduled/applied. Partial.           |
 | Keysound playback (notes trigger samples; BMS/keysounded charts)           | med | low | `keysoundIndex` parsed; no sample playback. Partial.        |
 | Labels (`#LABELS` bookmarks) surfaced                                      | low | low | Parsed; editor/visual only. Partial.                        |
@@ -129,23 +129,23 @@ Stepzone does **single‑song play only** (`PLAY_MODE_REGULAR` equivalent). All 
 Stepzone stores a single **best** per chart (percent, grade, max combo, judgment
 counts, play count) in `localStorage`, using DDR dance points + 6 letter grade tiers.
 
-| Gap                                                                                                                          | E   | P   | Notes                                     |
-| ---------------------------------------------------------------------------------------------------------------------------- | --- | --- | ----------------------------------------- |
-| **ITG percentage / EX‑score** weighting (separate from DDR dance points)                                                     | low | med | ITG's displayed %. Partial: DDR % done.   |
+| Gap                                                                                                                          | E   | P   | Notes                                    |
+| ---------------------------------------------------------------------------------------------------------------------------- | --- | --- | ---------------------------------------- |
+| **ITG percentage / EX‑score** weighting (separate from DDR dance points)                                                     | low | med | ITG's displayed %. Partial: DDR % done.  |
 | Grade system parity (ITG 20‑tier / theme grades, quad‑star, "AAAA")                                                          | low | med | Stepzone has 6 letters (AAA…D). Partial. |
-| **High‑score lists** (top‑N per chart, not just best)                                                                        | low | med |                                           |
-| Rich `HighScore` fields: date, mods used, radar values, survival secs, disqualified, awards                                  | low | med | Partial: minimal best kept.               |
-| **Player profiles** (named), machine profile, guest profile                                                                  | med | med | Only anonymous localStorage today.        |
-| Memory‑card / USB profile load (arcade)                                                                                      | low | low | Mostly N/A on web.                        |
-| Machine vs. personal records; **Ranking screen**; ranking categories (A/B/C/D by meter)                                      | med | low |                                           |
-| High‑score name entry                                                                                                        | low | low |                                           |
-| Profile aggregate stats (totals by playmode/style/difficulty/meter; tap/jump/hold/mine totals; toasties; sessions; playtime) | med | low |                                           |
-| Most‑played / recently‑played tracking                                                                                       | low | low |                                           |
-| Calorie tracking (step‑ + heart‑rate‑based)                                                                                  | low | low |                                           |
-| Goals (calories / time)                                                                                                      | low | low |                                           |
-| Unlocks / codes                                                                                                              | low | low |                                           |
-| Awards: StageAward (FC etc.), PeakComboAward                                                                                 | low | low |                                           |
-| Screenshots with embedded score; signed/anti‑cheat stats                                                                     | low | low |                                           |
+| **High‑score lists** (top‑N per chart, not just best)                                                                        | low | med |                                          |
+| Rich `HighScore` fields: date, mods used, radar values, survival secs, disqualified, awards                                  | low | med | Partial: minimal best kept.              |
+| **Player profiles** (named), machine profile, guest profile                                                                  | med | med | Only anonymous localStorage today.       |
+| Memory‑card / USB profile load (arcade)                                                                                      | low | low | Mostly N/A on web.                       |
+| Machine vs. personal records; **Ranking screen**; ranking categories (A/B/C/D by meter)                                      | med | low |                                          |
+| High‑score name entry                                                                                                        | low | low |                                          |
+| Profile aggregate stats (totals by playmode/style/difficulty/meter; tap/jump/hold/mine totals; toasties; sessions; playtime) | med | low |                                          |
+| Most‑played / recently‑played tracking                                                                                       | low | low |                                          |
+| Calorie tracking (step‑ + heart‑rate‑based)                                                                                  | low | low |                                          |
+| Goals (calories / time)                                                                                                      | low | low |                                          |
+| Unlocks / codes                                                                                                              | low | low |                                          |
+| Awards: StageAward (FC etc.), PeakComboAward                                                                                 | low | low |                                          |
+| Screenshots with embedded score; signed/anti‑cheat stats                                                                     | low | low |                                          |
 
 ## 7. Editing / authoring
 
@@ -167,14 +167,14 @@ Stepzone has a read‑only Inspector. **No chart editor.**
 
 Stepzone has an AdjustSync‑style **manual auto‑calibrate** offset screen.
 
-| Gap                                                                         | E   | P       | Notes                                             |
-| --------------------------------------------------------------------------- | --- | ------- | ------------------------------------------------- |
-| Autoplay (perfect AI) + CPU skill levels (0–5, weighted from `AI.ini`)      | low | low‑med | Good demo/practice/attract mode.                  |
-| In‑play AutoSync: song / machine / **tempo** (least‑squares BPM+offset fit) | med | low     | Partial: manual calibrate only.                   |
+| Gap                                                                         | E   | P       | Notes                                            |
+| --------------------------------------------------------------------------- | --- | ------- | ------------------------------------------------ |
+| Autoplay (perfect AI) + CPU skill levels (0–5, weighted from `AI.ini`)      | low | low‑med | Good demo/practice/attract mode.                 |
+| In‑play AutoSync: song / machine / **tempo** (least‑squares BPM+offset fit) | med | low     | Partial: manual calibrate only.                  |
 | Results **offset scatter / timing graph** (per‑tap offsets)                 | low | med     | Stepzone results show counts, no graph. Partial. |
-| Life‑graph on results                                                       | low | med     | Tracked in ROADMAP as a richer results screen.    |
-| Assist clap / metronome tick during gameplay                                | low | low     |                                                   |
-| Replay save + playback                                                      | med | low     | ITGmania's own replay is a dormant stub.          |
+| Life‑graph on results                                                       | low | med     | Tracked in ROADMAP as a richer results screen.   |
+| Assist clap / metronome tick during gameplay                                | low | low     |                                                  |
+| Replay save + playback                                                      | med | low     | ITGmania's own replay is a dormant stub.         |
 
 ## 9. Theming & visual
 
@@ -187,7 +187,7 @@ UI, and static image/video backgrounds.
 | Song **preview playback** on select (`SAMPLESTART`/`SAMPLELENGTH`)                               | low       | med | Fields parsed; not played. Partial.                                               |
 | **GPU / perspective renderer** (PixiJS/WebGPU) for effect & perspective mods, dense charts       | high      | med | Renderer sits behind one interface (ROADMAP). Enables §1 effect/perspective mods. |
 | BGChanges: scripted/animated backgrounds, per‑beat visuals, foreground layer, random BG          | med       | low | Partial: static image/video only.                                                 |
-| Lua‑scripted **theme layer** (all screens/menus/HUD as swappable actors + BGAnimations)          | very high | low | Architecturally different; Stepzone uses React/Canvas.                           |
+| Lua‑scripted **theme layer** (all screens/menus/HUD as swappable actors + BGAnimations)          | very high | low | Architecturally different; Stepzone uses React/Canvas.                            |
 | Announcer (voice / sound‑cue sets reacting to events)                                            | low       | low |                                                                                   |
 | Gameplay flourishes: toasty, full‑combo/"hot" effects, hold flash, combo pulse, per‑judgment art | low       | low | Partial: basic HUD only.                                                          |
 | Cabinet lights output                                                                            | low       | low |                                                                                   |
