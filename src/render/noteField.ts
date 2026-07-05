@@ -299,10 +299,16 @@ export class NoteFieldRenderer {
     this.receptorY = 96 * ds;
   }
 
+  /** Left edge of the ITG playfield: left-aligned in gameplay (the HUD fills
+   *  the space to its right), but centered in the bare preview. */
+  private itgFieldLeft(): number {
+    if (this.bare) return (this.width - this.numTracks * this.colW) / 2;
+    return 48 * this.ds;
+  }
+
   private laneX(track: number): number {
-    // ITG centers a single playfield; arcade left-aligns it in a side panel.
-    const left =
-      this.style === 'itg' ? (this.width - this.numTracks * this.colW) / 2 : this.fieldLeft;
+    // Both styles left-align the playfield; the ITG field sits near the edge.
+    const left = this.style === 'itg' ? this.itgFieldLeft() : this.fieldLeft;
     return left + this.colW / 2 + track * this.colW;
   }
 
@@ -333,11 +339,10 @@ export class NoteFieldRenderer {
     ctx.fillRect(0, 0, this.width, this.height);
   }
 
-  /** Effective receptor Y (bottom of the field under reverse). The Simply
-   *  Love layout seats the receptors just under its 110px header (SL puts its
-   *  header at 80/480 of the screen); the bare preview keeps them high. */
+  /** Effective receptor Y (bottom of the field under reverse). The ITG field
+   *  seats its receptors high (no top header) so the most notes are visible. */
   private recY(): number {
-    const off = this.style === 'itg' && !this.bare ? 176 * this.ds : this.receptorY;
+    const off = this.style === 'itg' ? 78 * this.ds : this.receptorY;
     return this.reverse ? this.height - off : off;
   }
 
@@ -878,9 +883,10 @@ export class NoteFieldRenderer {
   }
 
   /**
-   * Simply Love (ITGmania) style: a centered playfield over the SL background
-   * filter, cel-noteskin arrows, and the SL gameplay chrome — black header
-   * with song meter + LifeMeterBar + Wendy score drawn under the field, and
+   * Simply Love (ITGmania) style: a left-aligned playfield over the SL
+   * background filter, cel-noteskin arrows, and the SL gameplay chrome — song
+   * meter + LifeMeterBar + Wendy score stacked in a side panel to the right of
+   * the field (no top header, so the field runs the full height), and
    * judgment/combo drawn over it (SL draworder 101).
    */
   private drawItg(
@@ -895,7 +901,7 @@ export class NoteFieldRenderer {
     const beatPulse = 1 - (beat - Math.floor(beat));
     const recY = this.recY();
     const fieldW = this.numTracks * this.colW;
-    const fieldL = (this.width - fieldW) / 2;
+    const fieldL = this.itgFieldLeft();
 
     // Notefield filter (SL BackgroundFilter): a plain dark strip behind the
     // lanes, flushed red on the beat while the life meter is in danger.
@@ -1110,105 +1116,101 @@ export class NoteFieldRenderer {
   }
 
   /**
-   * Simply Love gameplay underlay: the full-width black header holding the
-   * bordered song meter (title inside, SongInfoBar.lua), the LifeMeterBar
-   * with its scrolling swoosh sheen (LifeMeter/Standard.lua), the Wendy
-   * dance-percentage left of the field (Score.lua), and the step-density
-   * graph along the bottom. Drawn before the notes, like SL's underlay.
+   * Simply Love gameplay chrome, drawn to the right of the left-aligned field
+   * (no top header, so the field runs full-height): the bordered song meter
+   * (title inside, SongInfoBar.lua), the LifeMeterBar with its scrolling
+   * swoosh sheen (LifeMeter/Standard.lua), the Wendy dance-percentage
+   * (Score.lua), the difficulty, and the step-density graph along the bottom.
+   * Drawn before the notes, like SL's underlay.
    */
   private drawSlUnderlay(ctx: CanvasRenderingContext2D, judge: Judge, progress: number): void {
     const { width, ds } = this;
     const font = (w: number, px: number) =>
       `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
-    const cx = width / 2;
     const beat = this.nowBeat;
-    const fieldW = this.numTracks * this.colW;
-
-    // Header: SL's full-width black quad (80/480 of the screen, alpha .85).
-    const headerH = 110 * ds;
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-    ctx.fillRect(0, 0, width, headerH);
-
-    // Song meter: white frame, black well, accent-colored stream + title.
-    const mW = Math.min(465 * ds, width * 0.44);
-    const mH = 33 * ds;
-    const mX = cx - mW / 2;
-    const mY = 30 * ds - mH / 2;
+    const fieldR = this.itgFieldLeft() + this.numTracks * this.colW;
     const bd = 3 * ds; // frame thickness (SL: 2px of a 480-tall screen)
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(mX, mY, mW, mH);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(mX + bd, mY + bd, mW - 2 * bd, mH - 2 * bd);
+
+    // Info panel to the right of the field.
+    const px = fieldR + 40 * ds;
+    const pW = Math.max(120 * ds, Math.min(360 * ds, width - px - 24 * ds));
     const prog = Math.max(0, Math.min(1, progress));
+    ctx.save();
+
+    // Song meter: white frame, black well, accent stream + title inside.
+    const mY = 34 * ds;
+    const mH = 32 * ds;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(px, mY, pW, mH);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(px + bd, mY + bd, pW - 2 * bd, mH - 2 * bd);
     ctx.fillStyle = SL_ACCENT;
-    ctx.fillRect(mX + bd, mY + bd, (mW - 2 * bd) * prog, mH - 2 * bd);
+    ctx.fillRect(px + bd, mY + bd, (pW - 2 * bd) * prog, mH - 2 * bd);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffffff';
     ctx.font = font(700, 15);
     ctx.shadowColor = 'rgba(0,0,0,0.9)';
     ctx.shadowOffsetY = 1.5 * ds;
-    ctx.fillText(this.meta.title || 'notefield', cx, mY + mH / 2, mW - 16 * ds);
+    ctx.fillText(this.meta.title || 'notefield', px + pW / 2, mY + mH / 2, pW - 16 * ds);
     ctx.shadowColor = 'transparent';
     ctx.shadowOffsetY = 0;
     if (this.meta.subtitle) {
-      // Step artist / subtitle, tucked under the meter.
       ctx.fillStyle = 'rgba(236,236,236,0.55)';
       ctx.font = font(400, 12);
-      ctx.fillText(this.meta.subtitle, cx, mY + mH + 14 * ds, mW);
+      ctx.textBaseline = 'top';
+      ctx.fillText(this.meta.subtitle, px + pW / 2, mY + mH + 6 * ds, pW);
     }
 
-    // LifeMeterBar: white frame, black well, accent fill that turns white
-    // when full ("Hot"), plus the beat-scrolled swoosh highlight.
-    const lH = 27 * ds;
-    let lW = 204 * ds;
-    let lX = mX - 23 * ds - lW;
-    if (lX < 10 * ds) {
-      lW = Math.max(60 * ds, mX - 33 * ds);
-      lX = mX - 23 * ds - lW;
-    }
-    const lY = 30 * ds - lH / 2;
+    // LifeMeterBar: white frame, black well, accent fill that turns white when
+    // full ("Hot"), plus the beat-scrolled swoosh highlight.
+    const lY = mY + mH + 30 * ds;
+    const lH = 26 * ds;
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(lX - bd, lY - bd, lW + 2 * bd, lH + 2 * bd);
+    ctx.fillRect(px, lY, pW, lH);
     ctx.fillStyle = '#000000';
-    ctx.fillRect(lX, lY, lW, lH);
+    ctx.fillRect(px + bd, lY + bd, pW - 2 * bd, lH - 2 * bd);
     const life = judge.failed ? 0 : judge.life;
     const hot = life >= 1;
     if (life > 0) {
-      const fw = Math.max(2, lW * life);
+      const lwIn = pW - 2 * bd;
+      const fw = Math.max(2, lwIn * life);
+      const fX = px + bd;
+      const fY = lY + bd;
+      const fH = lH - 2 * bd;
       ctx.fillStyle = hot ? '#ffffff' : SL_ACCENT;
-      ctx.fillRect(lX, lY, fw, lH);
+      ctx.fillRect(fX, fY, fw, fH);
       // Swoosh: SL scrolls a soft diagonal gradient across the fill at half
       // the song's BPS, at alpha .2 (full strength while Hot).
       ctx.save();
       ctx.beginPath();
-      ctx.rect(lX, lY, fw, lH);
+      ctx.rect(fX, fY, fw, fH);
       ctx.clip();
       const p = 1 - ((beat * 0.5) % 1);
-      const gx0 = lX + (p * 2 - 2) * lW;
-      const sw = ctx.createLinearGradient(gx0, lY + lH, gx0 + 2 * lW, lY);
+      const gx0 = fX + (p * 2 - 2) * lwIn;
+      const sw = ctx.createLinearGradient(gx0, fY + fH, gx0 + 2 * lwIn, fY);
       sw.addColorStop(0, 'rgba(255,255,255,0)');
       sw.addColorStop(0.5, `rgba(255,255,255,${hot ? 0.5 : 0.22})`);
       sw.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = sw;
-      ctx.fillRect(lX, lY, fw, lH);
+      ctx.fillRect(fX, fY, fw, fH);
       ctx.restore();
     }
 
-    // Dance percentage (Score.lua: Wendy digits left of the field, no "%").
+    // Dance percentage (Score.lua: big Wendy digits, no "%") and difficulty.
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
     ctx.fillStyle = '#ececec';
-    ctx.font = font(800, 40);
+    ctx.font = font(800, 44);
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${(1 * ds).toFixed(2)}px`;
-    ctx.fillText((judge.percentDancePoints * 100).toFixed(2), cx - fieldW / 2 - 28 * ds, 92 * ds);
+    ctx.fillText((judge.percentDancePoints * 100).toFixed(2) + '%', px + pW, lY + lH + 52 * ds);
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-    // Difficulty, mirrored on the right of the field.
     ctx.textAlign = 'left';
     ctx.fillStyle = SL_ACCENT;
-    ctx.font = font(700, 16);
-    ctx.fillText(this.meta.difficulty, cx + fieldW / 2 + 28 * ds, 92 * ds);
+    ctx.font = font(700, 15);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${(2 * ds).toFixed(2)}px`;
+    ctx.fillText(this.meta.difficulty.toUpperCase(), px, lY + lH + 78 * ds);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
     ctx.restore();
 
     this.drawDensityGraph(ctx, judge);
@@ -1326,7 +1328,8 @@ export class NoteFieldRenderer {
     const { ds } = this;
     const font = (w: number, px: number) =>
       `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
-    const cx = this.width / 2;
+    // Centered over the (left-aligned) field, not the whole screen.
+    const cx = this.itgFieldLeft() + (this.numTracks * this.colW) / 2;
     const recY = this.recY();
     // Anchored inside the field past the receptor line (flips under reverse).
     const anchorY = this.reverse ? recY - 215 * ds : recY + 215 * ds;
