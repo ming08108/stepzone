@@ -26,7 +26,7 @@ import { songBpmRange } from '../io/songFiles';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { difficultyToString } from '../song/difficulty';
 import type { TimingData } from '../timing/timingData';
-import { NoteFieldPreview } from './NoteFieldPreview';
+import { NoteFieldPreview, PREVIEW_LEAD_SECONDS, PREVIEW_TAIL_SECONDS } from './NoteFieldPreview';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
@@ -179,21 +179,20 @@ export function PlayerOptions({
 
   // Loop the song sample while choosing options (#5); stop on leave/START.
   // With a practice section selected, loop that section's audio instead so
-  // you hear exactly what you'll be drilling.
+  // you hear exactly what you'll be drilling — padded with the same lead/tail
+  // as the synced note-field preview (and gameplay's practice pre/post-roll),
+  // so audio and field wrap at the same instant.
   useEffect(() => {
     if (req.encodedAudio) {
-      previewEncoded(
-        req.song.title || req.song.musicFile,
-        req.encodedAudio,
-        req.song,
-        250,
-        sectionSeconds
-          ? {
-              startSeconds: sectionSeconds.startSeconds,
-              lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds - sectionSeconds.startSeconds),
-            }
-          : undefined,
-      );
+      let win;
+      if (sectionSeconds) {
+        const start = Math.max(0, sectionSeconds.startSeconds - PREVIEW_LEAD_SECONDS);
+        win = {
+          startSeconds: start,
+          lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds + PREVIEW_TAIL_SECONDS - start),
+        };
+      }
+      previewEncoded(req.song.title || req.song.musicFile, req.encodedAudio, req.song, 250, win);
     }
     return () => stopPreview();
   }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds]);
@@ -586,6 +585,7 @@ export function PlayerOptions({
               noteSkin={settings.noteSkin}
               reverse={settings.reverse}
               loopWindow={sectionSeconds}
+              clock={previewPositionSeconds}
             />
           </div>
         </div>

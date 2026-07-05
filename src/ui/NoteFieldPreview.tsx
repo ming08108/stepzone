@@ -1,10 +1,12 @@
 /**
  * Live note-field preview: drives the real NoteFieldRenderer with real note
- * data — a Judge on a silent autoplay clock — so the user sees the true note
- * skin, scroll type/spacing, and direction before playing.
- * Loops a window of the chart; scroll changes apply live without
- * rebuilding. Shared by Player Options (the selected chart) and the Settings
- * screen (the bundled demo pattern from demoChart()).
+ * data — a Judge on autoplay — so the user sees the true note skin, scroll
+ * type/spacing, and direction before playing. When a `clock` is provided
+ * (Player Options passes the audio preview's position), the field follows the
+ * audible music exactly — what you see is what you hear; otherwise it
+ * free-runs on a rAF clock over a looping window. Scroll changes apply live
+ * without rebuilding. Shared by Player Options (the selected chart) and the
+ * Settings screen (the bundled demo pattern from demoChart()).
  */
 import { useEffect, useRef } from 'react';
 import type { NoteSkin, ScrollMode } from '../game/playOptions';
@@ -25,6 +27,15 @@ import { type Feedback, type NoteFieldConfig, NoteFieldRenderer } from '../rende
 import { songMaxBpm } from '../render/scroll';
 import { TimingData } from '../timing/timingData';
 
+/**
+ * How much music plays before/after a practice-section loop window — the same
+ * feel as gameplay's practice pre/post-roll (src/game/session.ts). Player
+ * Options pads the audio preview's loop with these so the audio and the
+ * synced note field wrap at the same instant.
+ */
+export const PREVIEW_LEAD_SECONDS = 1.5;
+export const PREVIEW_TAIL_SECONDS = 0.5;
+
 export function NoteFieldPreview({
   noteData,
   timing,
@@ -34,6 +45,7 @@ export function NoteFieldPreview({
   noteSkin,
   reverse,
   loopWindow = null,
+  clock = null,
 }: {
   noteData: NoteData;
   timing: TimingData;
@@ -46,11 +58,17 @@ export function NoteFieldPreview({
    *  window — Player Options' practice section, so you preview what you'll
    *  actually be drilling. */
   loopWindow?: { startSeconds: number; endSeconds: number } | null;
+  /** External master clock: the current audible song position in seconds, or
+   *  null when nothing is playing. When it yields a position the field follows
+   *  it exactly (audio/visual sync); on null it free-runs. */
+  clock?: (() => number | null) | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   // Live-applied per frame (no rebuild): scroll.
   const liveRef = useRef({ scrollMode, scrollValue });
   liveRef.current = { scrollMode, scrollValue };
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
 
   useEffect(() => {
     const canvas = ref.current;
@@ -103,10 +121,10 @@ export function NoteFieldPreview({
       releases = [];
       cursor = 0;
       if (loopWindow) {
-        // Practice section: loop that exact slice (with a short lead-in so the
-        // first notes scroll in), however long it is.
-        windowStart = Math.max(0, loopWindow.startSeconds - 1.4);
-        windowEnd = Math.max(windowStart + 2, loopWindow.endSeconds + 1.0);
+        // Practice section: loop that slice with the shared lead/tail —
+        // identical to the audio preview's loop, so the two wrap together.
+        windowStart = Math.max(0, loopWindow.startSeconds - PREVIEW_LEAD_SECONDS);
+        windowEnd = Math.max(windowStart + 2, loopWindow.endSeconds + PREVIEW_TAIL_SECONDS);
       } else {
         const first = judge.notes[0]?.time ?? 0;
         const last = judge.notes[judge.notes.length - 1]?.time ?? first;
@@ -139,13 +157,31 @@ export function NoteFieldPreview({
 
     let raf = 0;
     let base = 0;
+    let lastNow = -Infinity;
     const frame = (t: number) => {
       if (!base) base = t;
-      let now = windowStart + (t - base) / 1000;
-      if (now >= windowEnd) {
-        rebuild();
-        base = t;
-        now = windowStart;
+      // Master clock: the audible audio preview when one is playing, else the
+      // free-running rAF clock. While synced, keep the fallback clock rebased
+      // so an audio stop (debounce gap, decode failure) continues seamlessly.
+      const audio = clockRef.current?.() ?? null;
+      let now: number;
+      if (audio !== null) {
+        now = audio;
+        base = t - (now - windowStart) * 1000;
+      } else {
+        now = windowStart + (t - base) / 1000;
+        if (now >= windowEnd) {
+          base = t;
+          now = windowStart;
+        }
+      }
+      // Any backward jump — the audio loop wrapping, the fallback wrapping, or
+      // a clock hand-off — starts a fresh pass: re-arm the judged notes.
+      if (now < lastNow - 0.25) rebuild();
+      lastNow = now;
+      if (import.meta.env.DEV) {
+        (window as unknown as { __nfPreview?: { now: number; audio: number | null } }).__nfPreview =
+          { now, audio };
       }
       const notes = judge.notes;
       // Autoplay: hit each note as it reaches the receptor (mines are avoided,
