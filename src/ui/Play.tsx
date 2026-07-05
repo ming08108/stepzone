@@ -118,7 +118,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const sessionRef = useRef<GameSession | null>(null);
   const ctaRef = useRef<HTMLButtonElement>(null);
   const bgUrlRef = useRef<string | null>(null);
-  const bgMediaRef = useRef<HTMLVideoElement | HTMLImageElement | null>(null);
+  const bgMediaRef = useRef<HTMLVideoElement | ImageBitmap | null>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement>(null);
   const fxRef = useRef<ShaderBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
@@ -143,6 +143,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       m.pause();
       m.removeAttribute('src');
       m.load();
+    } else if (m instanceof ImageBitmap) {
+      m.close();
     }
     bgMediaRef.current = null;
     if (bgUrlRef.current) {
@@ -282,9 +284,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
     // Background image / video (unless the player turned it off).
     if (req.backgroundFile && settings.bgMode !== 'off') {
-      const url = URL.createObjectURL(req.backgroundFile);
-      bgUrlRef.current = url;
       if (isVideoFile(req.backgroundFile.name)) {
+        const url = URL.createObjectURL(req.backgroundFile);
+        bgUrlRef.current = url;
         const v = document.createElement('video');
         v.src = url;
         v.muted = true;
@@ -293,10 +295,22 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         bgMediaRef.current = v;
         session.setBackground(v);
       } else {
-        const img = new Image();
-        img.src = url;
-        bgMediaRef.current = img;
-        session.setBackground(img);
+        // Decode off-thread straight from the File. A detached <img> on a
+        // blob URL can be deferred by the browser for seconds (a black field
+        // while the song already plays); an ImageBitmap is ready the moment
+        // the promise resolves.
+        void createImageBitmap(req.backgroundFile)
+          .then((bmp) => {
+            if (sessionRef.current === session) {
+              bgMediaRef.current = bmp;
+              session.setBackground(bmp);
+            } else {
+              bmp.close(); // superseded (StrictMode re-start, retry, exit)
+            }
+          })
+          .catch(() => {
+            // Undecodable image — keep the plain dark background.
+          });
       }
     }
 

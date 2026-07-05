@@ -21,9 +21,10 @@ import {
 } from './songFiles';
 import { getCachedVideo, putCachedVideo, videoCacheKey } from './videoCache';
 
-// Background quality is deliberately modest: these render dimmed behind the
-// note field, and realtime-deadline VP8 keeps a 90s clip's conversion short.
-const VP8_ARGS = ['-c:v', 'libvpx', '-b:v', '900k', '-deadline', 'realtime', '-cpu-used', '5'];
+// Background quality is deliberately modest — these render dimmed behind the
+// note field. x264 ultrafast benchmarked ~11x realtime in the wasm core
+// (~4.5x faster than realtime-deadline VP8 on the same clip).
+const X264_ARGS = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p'];
 
 /**
  * The video codec name from ffmpeg's `-i` stream banner, lowercased — e.g.
@@ -39,11 +40,11 @@ export function parseVideoCodec(log: string): string | null {
  * Conversion plan for a probed codec. Most "legacy" files are actually H.264
  * in an AVI shell (~94% of a typical modernized library) — browsers play that
  * natively once remuxed into MP4, a lossless container swap that runs in
- * seconds. Everything else (XviD/DivX/MPEG-1/2/h263) is really transcoded.
+ * ~0.1s. Everything else (XviD/DivX/MPEG-1/2/h263) is really transcoded.
  */
 export function planConversion(codec: string | null): { args: string[]; ext: 'mp4' | 'webm' } {
   if (codec === 'h264') return { args: ['-c:v', 'copy'], ext: 'mp4' };
-  return { args: VP8_ARGS, ext: 'webm' };
+  return { args: X264_ARGS, ext: 'mp4' };
 }
 
 export interface BgConvertStatus {

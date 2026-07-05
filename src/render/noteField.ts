@@ -97,7 +97,7 @@ export class NoteFieldRenderer {
   private dpr = 1;
   private cfg: NoteFieldConfig;
   private theme: Theme;
-  private background: HTMLVideoElement | HTMLImageElement | null = null;
+  private background: HTMLVideoElement | HTMLImageElement | ImageBitmap | null = null;
   /** Forward-only cursor into the time-sorted notes; reset on geometry changes. */
   private firstVisibleIdx = 0;
   // Combo pop animation state (visual only), shared by every theme's overlay.
@@ -186,7 +186,7 @@ export class NoteFieldRenderer {
   }
 
   /** Background video/image drawn behind the field, or null. */
-  setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
+  setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.background = media;
   }
 
@@ -228,16 +228,19 @@ export class NoteFieldRenderer {
 
   private drawBackground(
     ctx: CanvasRenderingContext2D,
-    bg: HTMLVideoElement | HTMLImageElement,
+    bg: HTMLVideoElement | HTMLImageElement | ImageBitmap,
   ): void {
     let bw = 0;
     let bh = 0;
     if (bg instanceof HTMLVideoElement) {
       bw = bg.videoWidth;
       bh = bg.videoHeight;
-    } else {
+    } else if (bg instanceof HTMLImageElement) {
       bw = bg.naturalWidth;
       bh = bg.naturalHeight;
+    } else {
+      bw = bg.width;
+      bh = bg.height;
     }
     if (bw <= 0 || bh <= 0) return;
     const scale = Math.max(this.width / bw, this.height / bh);

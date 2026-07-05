@@ -167,7 +167,7 @@ export class GameSession {
   }
 
   /** Set (or clear) the background video/image drawn behind the field. */
-  setBackground(media: HTMLVideoElement | HTMLImageElement | null): void {
+  setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.renderer.setBackground(media);
     this.bgVideo = media instanceof HTMLVideoElement ? media : null;
     if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;

@@ -65,9 +65,9 @@ describe('codec probe → conversion plan', () => {
 
   it('remuxes h264 losslessly and transcodes everything else', () => {
     expect(planConversion('h264')).toEqual({ args: ['-c:v', 'copy'], ext: 'mp4' });
-    expect(planConversion('msmpeg4v3').ext).toBe('webm');
-    expect(planConversion('mpeg1video').args).toContain('libvpx');
-    expect(planConversion(null).ext).toBe('webm');
+    expect(planConversion('msmpeg4v3').args).toContain('libx264');
+    expect(planConversion('mpeg1video').args).toContain('ultrafast');
+    expect(planConversion(null).ext).toBe('mp4');
   });
 });
 
