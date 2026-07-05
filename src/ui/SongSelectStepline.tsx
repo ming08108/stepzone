@@ -6,8 +6,7 @@
  * keyboard-navigated centered list (virtualized for large libraries).
  */
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import exampleSsc from '../dev/example.ssc?raw';
-import { parseSimfile } from '../parse/loader';
+import { starterEntries } from '../starter';
 import {
   filesFromDataTransfer,
   findBackgroundFile,
@@ -164,14 +163,10 @@ export function SongSelect({
   useEffect(() => {
     if (libraryCache) return;
     let cancelled = false;
-    setEntries([
-      {
-        song: parseSimfile(exampleSsc, 'example.ssc'),
-        files: [],
-        sourceName: 'example.ssc',
-        bannerUrl: null,
-      },
-    ]);
+    // The bundled starter pack — synthesized originals, so a fresh install has
+    // real songs to play before any folder is picked. A loaded folder is
+    // appended after these (addLocalFiles keeps file-less entries).
+    setEntries(starterEntries());
     void (async () => {
       const local = await restoreSongFolder();
       if (cancelled || !local) return;

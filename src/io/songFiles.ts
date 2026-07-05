@@ -113,6 +113,8 @@ export interface LibraryEntry {
   bannerUrl: string | null;
   /** Pack (song group) this entry belongs to, when known. */
   pack?: string;
+  /** Renders this entry's audio on demand (bundled starter songs). */
+  synthAudio?: () => ArrayBuffer;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */
@@ -156,6 +158,7 @@ export async function loadLibraryFromFiles(
 
 /** Read (and decode-ready) the audio bytes for a library entry, or null. */
 export async function readSongAudio(entry: LibraryEntry): Promise<ArrayBuffer | null> {
+  if (entry.synthAudio) return entry.synthAudio();
   const f = findAudioFile(entry.files, entry.song);
   return f ? f.arrayBuffer() : null;
 }
