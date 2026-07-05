@@ -17,6 +17,13 @@ export const VIDEO_CACHE_CAP_BYTES = 2 * 1024 ** 3; // 2 GiB
 interface IndexEntry {
   bytes: number;
   lastUsed: number;
+  /** Stored filename (extension varies: remuxed mp4 vs transcoded webm). */
+  name?: string;
+}
+
+/** Stored filename for an entry (older indexes predate `name`). */
+function fileNameOf(key: string, e?: IndexEntry): string {
+  return e?.name ?? `${key}.webm`;
 }
 
 interface CacheIndex {
@@ -114,9 +121,13 @@ async function writeFile(
   await w.close();
 }
 
-async function deleteEntry(dir: FileSystemDirectoryHandle, key: string): Promise<void> {
+async function deleteEntry(
+  dir: FileSystemDirectoryHandle,
+  key: string,
+  e?: IndexEntry,
+): Promise<void> {
   try {
-    await dir.removeEntry(`${key}.webm`);
+    await dir.removeEntry(fileNameOf(key, e));
   } catch {
     /* already gone */
   }
@@ -129,11 +140,11 @@ export async function getCachedVideo(key: string): Promise<File | null> {
   const dir = await cacheDir();
   if (!dir) return null;
   try {
-    const fh = await dir.getFileHandle(`${key}.webm`);
+    const idx = await readIndex(dir);
+    const fh = await dir.getFileHandle(fileNameOf(key, idx.entries[key]));
     const file = await fh.getFile();
     // Best-effort LRU touch; a failed index write never blocks playback.
     try {
-      const idx = await readIndex(dir);
       if (idx.entries[key]) {
         idx.entries[key].lastUsed = Date.now();
         await writeIndex(dir, idx);
@@ -152,29 +163,34 @@ export async function getCachedVideo(key: string): Promise<File | null> {
  * QuotaExceededError (disk genuinely full), evicts everything else and retries
  * once. False = not cached (playback can still use the bytes in memory).
  */
-export async function putCachedVideo(key: string, data: Uint8Array): Promise<boolean> {
+export async function putCachedVideo(
+  key: string,
+  data: Uint8Array,
+  ext: 'mp4' | 'webm' = 'webm',
+): Promise<boolean> {
   if (data.byteLength > VIDEO_CACHE_CAP_BYTES) return false;
   const dir = await cacheDir();
   if (!dir) return false;
+  const name = `${key}.${ext}`;
   try {
     const idx = await readIndex(dir);
     for (const k of planEviction(idx.entries, data.byteLength, VIDEO_CACHE_CAP_BYTES)) {
-      await deleteEntry(dir, k);
+      await deleteEntry(dir, k, idx.entries[k]);
       delete idx.entries[k];
     }
     try {
-      await writeFile(dir, `${key}.webm`, data);
+      await writeFile(dir, name, data);
     } catch (err) {
       if ((err as DOMException)?.name !== 'QuotaExceededError') return false;
       // Disk full below our cap: our other videos are the only ballast we
       // control — drop them all and try once more.
       for (const k of Object.keys(idx.entries)) {
-        await deleteEntry(dir, k);
+        await deleteEntry(dir, k, idx.entries[k]);
         delete idx.entries[k];
       }
-      await writeFile(dir, `${key}.webm`, data);
+      await writeFile(dir, name, data);
     }
-    idx.entries[key] = { bytes: data.byteLength, lastUsed: Date.now() };
+    idx.entries[key] = { bytes: data.byteLength, lastUsed: Date.now(), name };
     await writeIndex(dir, idx);
     return true;
   } catch {
@@ -196,7 +212,7 @@ export async function clearVideoCache(): Promise<void> {
   const dir = await cacheDir();
   if (!dir) return;
   const idx = await readIndex(dir);
-  for (const k of Object.keys(idx.entries)) await deleteEntry(dir, k);
+  for (const k of Object.keys(idx.entries)) await deleteEntry(dir, k, idx.entries[k]);
   try {
     await writeIndex(dir, { v: 1, entries: {} });
   } catch {

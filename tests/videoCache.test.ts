@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planEviction, videoCacheKey } from '../src/io/videoCache';
+import { parseVideoCodec, planConversion } from '../src/io/bgVideo';
 import {
   findBackgroundFile,
   findConvertibleBackground,
@@ -43,6 +44,30 @@ describe('planEviction', () => {
 
   it('returns every key when the incoming file alone exceeds the cap', () => {
     expect(planEviction(entries, 5000, 1300)).toEqual(['old', 'mid', 'new']);
+  });
+});
+
+describe('codec probe → conversion plan', () => {
+  it('parses the codec from ffmpeg stream banners', () => {
+    expect(
+      parseVideoCodec(
+        `Input #0, avi, from 'in.avi':\n` +
+          `  Duration: 00:02:02.46, start: 0.000000, bitrate: 1885 kb/s\n` +
+          `  Stream #0:0: Video: h264 (High) (H264 / 0x34363248), yuv420p, 854x480, 29.97 fps\n` +
+          `  Stream #0:1: Audio: mp3, 44100 Hz, stereo\n`,
+      ),
+    ).toBe('h264');
+    expect(parseVideoCodec('  Stream #0:0: Video: msmpeg4v3 (DIV3 / 0x33564944)')).toBe(
+      'msmpeg4v3',
+    );
+    expect(parseVideoCodec('  Stream #0:0: Audio: mp3, 44100 Hz')).toBeNull();
+  });
+
+  it('remuxes h264 losslessly and transcodes everything else', () => {
+    expect(planConversion('h264')).toEqual({ args: ['-c:v', 'copy'], ext: 'mp4' });
+    expect(planConversion('msmpeg4v3').ext).toBe('webm');
+    expect(planConversion('mpeg1video').args).toContain('libvpx');
+    expect(planConversion(null).ext).toBe('webm');
   });
 });
 
