@@ -208,14 +208,27 @@ function matchBackgroundFile(entry: LibraryEntry, ok: (name: string) => boolean)
   return file ?? null;
 }
 
-/** The song's background image/video File (browser-playable formats only), or null. */
+/**
+ * The song's background image/video File (browser-playable formats only), or
+ * null. Movies beat static images: packs reference their movie via #BGCHANGES
+ * (which we don't parse — `#BACKGROUND` names the static fallback), and a song
+ * folder holds at most one movie, so any video file in it IS the background.
+ */
 export function findBackgroundFile(entry: LibraryEntry): File | null {
-  return matchBackgroundFile(entry, isPlayableBackground);
+  return (
+    matchBackgroundFile(entry, isVideoFile) ??
+    entry.files.find((f) => isVideoFile(f.name)) ??
+    matchBackgroundFile(entry, isPlayableBackground)
+  );
 }
 
 /** The song's legacy-format background video (needs conversion), or null. */
 export function findConvertibleBackground(entry: LibraryEntry): File | null {
-  return matchBackgroundFile(entry, isConvertibleVideo);
+  return (
+    matchBackgroundFile(entry, isConvertibleVideo) ??
+    entry.files.find((f) => isConvertibleVideo(f.name)) ??
+    null
+  );
 }
 
 /** Min/max BPM of a song (from its timing), for display/filtering. */

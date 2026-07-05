@@ -77,4 +77,31 @@ describe('legacy background matching', () => {
     expect(findBackgroundFile(e)?.name).toBe('song-bg.png');
     expect(findConvertibleBackground(e)?.name).toBe('movie.avi');
   });
+
+  it('finds an unreferenced folder movie (#BGCHANGES-style packs)', () => {
+    // Real-world shape (e.g. "All Star"): #BACKGROUND names the static png,
+    // the movie is only referenced by #BGCHANGES, which isn't parsed.
+    const bgPngSsc = ssc.replace('#BACKGROUND:movie.avi;', '#BACKGROUND:All Star-bg.png;');
+    const e: LibraryEntry = {
+      song: parseSimfile(bgPngSsc, 't.ssc'),
+      files: ['All Star-bg.png', 'All Star-jacket.png', 'All Star.avi', 'All Star.ogg'].map(
+        (n) => new File(['x'], n),
+      ),
+      sourceName: 't.ssc',
+      bannerUrl: null,
+    };
+    expect(findConvertibleBackground(e)?.name).toBe('All Star.avi');
+    expect(findBackgroundFile(e)?.name).toBe('All Star-bg.png'); // static until converted
+  });
+
+  it('prefers a playable movie over the named static image', () => {
+    const bgPngSsc = ssc.replace('#BACKGROUND:movie.avi;', '#BACKGROUND:song-bg.png;');
+    const e: LibraryEntry = {
+      song: parseSimfile(bgPngSsc, 't.ssc'),
+      files: ['song-bg.png', 'movie.mp4'].map((n) => new File(['x'], n)),
+      sourceName: 't.ssc',
+      bannerUrl: null,
+    };
+    expect(findBackgroundFile(e)?.name).toBe('movie.mp4');
+  });
 });

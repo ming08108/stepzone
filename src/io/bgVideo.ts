@@ -16,6 +16,7 @@ import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import {
   findBackgroundFile,
   findConvertibleBackground,
+  isVideoFile,
   type LibraryEntry,
 } from './songFiles';
 import { getCachedVideo, putCachedVideo, videoCacheKey } from './videoCache';
@@ -65,7 +66,8 @@ function ensureFfmpeg(): Promise<FFmpeg | null> {
       });
       await ff.load({ coreURL: core.default, wasmURL: wasm.default });
       return ff;
-    } catch {
+    } catch (err) {
+      console.warn('[bgVideo] ffmpeg.wasm failed to load — legacy backgrounds stay static:', err);
       return null;
     }
   })();
@@ -79,10 +81,14 @@ async function convert(ff: FFmpeg, file: File): Promise<Uint8Array | null> {
   try {
     await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
     const code = await ff.exec(['-i', inName, ...FFMPEG_ARGS, '-an', '-y', outName]);
-    if (code !== 0) return null;
+    if (code !== 0) {
+      console.warn(`[bgVideo] conversion of "${file.name}" exited with code ${code}`);
+      return null;
+    }
     const data = await ff.readFile(outName);
     return data instanceof Uint8Array && data.byteLength > 0 ? data : null;
-  } catch {
+  } catch (err) {
+    console.warn(`[bgVideo] conversion of "${file.name}" failed:`, err);
     return null;
   } finally {
     void ff.deleteFile(inName).catch(() => {});
@@ -120,18 +126,18 @@ function queueConvert(key: string, file: File): void {
 }
 
 /**
- * The background to play for an entry: a natively playable file, else the
- * cached conversion of a legacy video, else null (with a conversion queued in
- * the background so the video is there next time).
+ * The background to play for an entry: a natively playable VIDEO, else the
+ * cached conversion of a legacy movie, else the static image (with a
+ * conversion queued in the background so the movie is there next time).
  */
 export async function resolveBackground(entry: LibraryEntry): Promise<File | null> {
   const playable = findBackgroundFile(entry);
-  if (playable) return playable;
+  if (playable && isVideoFile(playable.name)) return playable;
   const legacy = findConvertibleBackground(entry);
-  if (!legacy) return null;
+  if (!legacy) return playable; // static image or nothing — no movie to convert
   const key = videoCacheKey(entry.sourceId, relPath(legacy), legacy.size);
   const cached = await getCachedVideo(key);
   if (cached) return cached;
   queueConvert(key, legacy);
-  return null;
+  return playable; // static image while the movie converts
 }
