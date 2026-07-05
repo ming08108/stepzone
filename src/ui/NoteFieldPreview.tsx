@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef } from 'react';
 import type { NoteSkin, ScrollMode } from '../game/playOptions';
-import { Judge } from '../gameplay/judge';
+import { Judge, type ActiveNote } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { NoteData } from '../notes/noteData';
 import {
@@ -28,15 +28,7 @@ import { type Feedback, type NoteFieldConfig, NoteFieldRenderer } from '../rende
 import { songMaxBpm } from '../render/scroll';
 import type { RenderMeta } from '../render/theme';
 import { TimingData } from '../timing/timingData';
-
-/**
- * How much music plays before/after a practice-section loop window — the same
- * feel as gameplay's practice pre/post-roll (src/game/session.ts). Player
- * Options pads the audio preview's loop with these so the audio and the
- * synced note field wrap at the same instant.
- */
-export const PREVIEW_LEAD_SECONDS = 1.5;
-export const PREVIEW_TAIL_SECONDS = 0.5;
+import { PRACTICE_LEAD_SECONDS, PRACTICE_TAIL_SECONDS } from '../game/playOptions';
 
 export function NoteFieldPreview({
   noteData,
@@ -137,6 +129,26 @@ export function NoteFieldPreview({
       renderer.resize(w, h, dpr);
     };
 
+    // Autoplay-hit one note: perfect press at its exact time, holds held to
+    // their tails (mines are avoided, like StepMania's autoplay, so they
+    // scroll by intact). The pre-window catch-up skips the visual feedback.
+    const hitNote = (n: ActiveNote, withFeedback: boolean) => {
+      if (n.note.type === TapNoteType.Mine) return;
+      const ev = judge.step(n.track, n.time, false);
+      if (withFeedback) {
+        feedback.laneFlash[n.track] = n.time;
+        if (ev && ev.tns !== TapNoteScore.None) {
+          feedback.laneHit[n.track] = { tns: ev.tns, atSeconds: n.time };
+        }
+      }
+      if (n.tailTime > n.time) {
+        held[n.track] = true;
+        releases.push({ track: n.track, at: n.tailTime });
+      } else {
+        judge.step(n.track, n.tailTime, true);
+      }
+    };
+
     const rebuild = () => {
       judge = new Judge(noteData, timing, DEFAULT_WINDOWS, 1);
       renderer = new NoteFieldRenderer(noteData.numTracks, {
@@ -163,8 +175,8 @@ export function NoteFieldPreview({
       if (loopWindow) {
         // Practice section: loop that slice with the shared lead/tail —
         // identical to the audio preview's loop, so the two wrap together.
-        windowStart = Math.max(0, loopWindow.startSeconds - PREVIEW_LEAD_SECONDS);
-        windowEnd = Math.max(windowStart + 2, loopWindow.endSeconds + PREVIEW_TAIL_SECONDS);
+        windowStart = Math.max(0, loopWindow.startSeconds - PRACTICE_LEAD_SECONDS);
+        windowEnd = Math.max(windowStart + 2, loopWindow.endSeconds + PRACTICE_TAIL_SECONDS);
       } else {
         const first = judge.notes[0]?.time ?? 0;
         const last = judge.notes[judge.notes.length - 1]?.time ?? first;
@@ -174,16 +186,7 @@ export function NoteFieldPreview({
       // Consume everything before the window as silent perfect autoplay hits,
       // so a mid-song window starts clean instead of missing its backlog.
       while (cursor < judge.notes.length && judge.notes[cursor].time < windowStart) {
-        const n = judge.notes[cursor];
-        cursor++;
-        if (n.note.type === TapNoteType.Mine) continue;
-        judge.step(n.track, n.time, false);
-        if (n.tailTime > n.time && n.tailTime >= windowStart) {
-          held[n.track] = true;
-          releases.push({ track: n.track, at: n.tailTime });
-        } else {
-          judge.step(n.track, n.tailTime, true);
-        }
+        hitNote(judge.notes[cursor++], false);
       }
       lastSeq = judge.judgmentSeq;
     };
@@ -224,24 +227,8 @@ export function NoteFieldPreview({
           { now, audio };
       }
       const notes = judge.notes;
-      // Autoplay: hit each note as it reaches the receptor (mines are avoided,
-      // like StepMania's autoplay, so they scroll by intact).
-      while (cursor < notes.length && notes[cursor].time <= now) {
-        const n = notes[cursor];
-        cursor++;
-        if (n.note.type === TapNoteType.Mine) continue;
-        const ev = judge.step(n.track, n.time, false);
-        feedback.laneFlash[n.track] = n.time;
-        if (ev && ev.tns !== TapNoteScore.None) {
-          feedback.laneHit[n.track] = { tns: ev.tns, atSeconds: n.time };
-        }
-        if (n.tailTime > n.time) {
-          held[n.track] = true;
-          releases.push({ track: n.track, at: n.tailTime });
-        } else {
-          judge.step(n.track, n.time, true);
-        }
-      }
+      // Autoplay: hit each note as it reaches the receptor.
+      while (cursor < notes.length && notes[cursor].time <= now) hitNote(notes[cursor++], true);
       releases = releases.filter((r) => {
         if (r.at <= now) {
           judge.step(r.track, r.at, true);

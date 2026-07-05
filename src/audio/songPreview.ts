@@ -144,15 +144,17 @@ function begin(
   win?: PreviewLoopWindow,
   rate = 1,
 ): void {
-  const { startSeconds: start, lengthSeconds: len } = win
-    ? {
-        startSeconds: Math.min(Math.max(0, win.startSeconds), Math.max(0, buf.duration - 0.5)),
-        lengthSeconds: Math.max(
-          0.5,
-          Math.min(win.lengthSeconds, buf.duration - Math.max(0, win.startSeconds)),
-        ),
-      }
-    : previewWindow(buf.duration, song.sampleStartSeconds, song.sampleLengthSeconds);
+  // The simfile's sample window, unless an explicit window (the practice
+  // section) overrides it — clamped inside the buffer.
+  let { startSeconds: start, lengthSeconds: len } = previewWindow(
+    buf.duration,
+    song.sampleStartSeconds,
+    song.sampleLengthSeconds,
+  );
+  if (win) {
+    start = Math.min(Math.max(0, win.startSeconds), Math.max(0, buf.duration - 0.5));
+    len = Math.max(0.5, Math.min(win.lengthSeconds, buf.duration - start));
+  }
   const src = ac.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = rate;

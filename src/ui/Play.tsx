@@ -4,6 +4,7 @@ import { ShaderBackground } from '../render/shaderBackground';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
 import { difficultyToString } from '../song/difficulty';
+import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
@@ -64,14 +65,6 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 }
 
 const AC = '#ff5d47';
-const DIFF_COLOR: Record<string, string> = {
-  Beginner: '#37d5ff',
-  Easy: '#ffcf3d',
-  Medium: '#ff5c5c',
-  Hard: '#59f07f',
-  Challenge: '#c86bff',
-  Edit: '#c86bff',
-};
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -340,7 +333,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
   const title = req.song.title || 'Untitled';
   const diffName = difficultyToString(req.chart.difficulty);
-  const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
+  const dcolor = difficultyColor(diffName);
   const r = songBpmRange(req.song);
   const bpmDisp =
     r.max > 0

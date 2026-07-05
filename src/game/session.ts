@@ -13,7 +13,13 @@ import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation } from '../notes/transforms';
-import { DEFAULT_PLAY_OPTIONS, type PlayOptions, type PracticeSection } from './playOptions';
+import {
+  DEFAULT_PLAY_OPTIONS,
+  PRACTICE_LEAD_SECONDS,
+  PRACTICE_TAIL_SECONDS,
+  type PlayOptions,
+  type PracticeSection,
+} from './playOptions';
 import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
@@ -25,10 +31,6 @@ import type { TimingData } from '../timing/timingData';
 
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
-/** Practice loop: how much music plays before the section on every pass. */
-const PRACTICE_PRE_ROLL_SECONDS = 1.5;
-/** Practice loop: play this far past the section so edge hits still judge. */
-const PRACTICE_POST_ROLL_SECONDS = 0.5;
 
 /**
  * Playback options applied to a session — the shared PlayOptions shape
@@ -223,7 +225,7 @@ export class GameSession {
 
   /** Where in the song playback (re)starts: 0, or just before the practice section. */
   private startOffsetSeconds(): number {
-    return this.practice ? Math.max(0, this.loopStartSeconds - PRACTICE_PRE_ROLL_SECONDS) : 0;
+    return this.practice ? Math.max(0, this.loopStartSeconds - PRACTICE_LEAD_SECONDS) : 0;
   }
 
   /** Jump back to the section start for another practice pass, judging afresh. */
@@ -310,7 +312,7 @@ export class GameSession {
     if (this.practice) {
       // Loop forever (until the player exits): past the section's post-roll —
       // or the end of the audio, whichever comes first — jump back and rejudge.
-      const resetAt = Math.min(this.loopEndSeconds + PRACTICE_POST_ROLL_SECONDS, this.endSeconds);
+      const resetAt = Math.min(this.loopEndSeconds + PRACTICE_TAIL_SECONDS, this.endSeconds);
       if (now >= resetAt) this.restartLoop();
     } else if (now >= this.endSeconds) {
       this.finish();

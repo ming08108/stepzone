@@ -26,6 +26,15 @@ export interface PracticeSection {
   endBeat: number;
 }
 
+/**
+ * Practice-loop window padding (seconds): how much music plays before the
+ * section on every pass, and how far past it before wrapping (so edge hits
+ * still judge). ONE pair shared by gameplay (game/session.ts) and both Player
+ * Options previews (audio + note field), so they all wrap the same window.
+ */
+export const PRACTICE_LEAD_SECONDS = 1.5;
+export const PRACTICE_TAIL_SECONDS = 0.5;
+
 /** Song background visibility during play. */
 export const BG_MODES = ['off', 'dim', 'full'] as const;
 export type BgMode = (typeof BG_MODES)[number];

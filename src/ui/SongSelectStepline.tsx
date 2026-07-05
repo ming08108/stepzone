@@ -34,19 +34,17 @@ import {
   type CatalogSong,
   type SongSource,
 } from '../io/localFolder';
-import { difficultyToString } from '../song/difficulty';
 import { Song } from '../song/song';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
+import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 
 const AC = '#ff5d47';
 const FAV_CLR = '#ffcf3d';
-const DIFF_NAMES = ['BEGINNER', 'EASY', 'MEDIUM', 'HARD', 'EXPERT'];
-const DIFF_CLR = ['#37d5ff', '#ffcf3d', '#ff5c5c', '#59f07f', '#c86bff'];
 const SORTS = ['title', 'artist', 'pack', 'bpm', 'level', 'best', 'plays'] as const;
 type Sort = (typeof SORTS)[number];
 
@@ -97,20 +95,8 @@ interface SongVM {
   plays: number;
 }
 
-function slotOf(name: string): number {
-  const i = ['Beginner', 'Easy', 'Medium', 'Hard', 'Challenge'].indexOf(name);
-  return i >= 0 ? i : 4; // Edit → Expert
-}
-
 function deriveLevels(song: Song): Array<number | null> {
-  const lv: Array<number | null> = [null, null, null, null, null];
-  const singles = song.charts.filter((c) => c.stepsType === 'dance-single');
-  const use = singles.length ? singles : song.charts;
-  for (const c of use) {
-    const s = slotOf(difficultyToString(c.difficulty));
-    if (lv[s] == null || c.meter > (lv[s] as number)) lv[s] = c.meter;
-  }
-  return lv;
+  return bestChartsPerSlot(song).map((c) => c?.meter ?? null);
 }
 
 function bpmText(entry: LibraryEntry): { text: string; sort: number } {
@@ -592,12 +578,7 @@ export function SongSelect({
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
     if (!s || s.levels[diff] == null) return;
     const entry = await ensureLoaded(s.entry); // no-op unless a catalog row
-    const singles = entry.song.charts.filter((c) => c.stepsType === 'dance-single');
-    const use = singles.length ? singles : entry.song.charts;
-    const chart =
-      use.find(
-        (c) => slotOf(difficultyToString(c.difficulty)) === diff && c.meter === s.levels[diff],
-      ) ?? use.find((c) => slotOf(difficultyToString(c.difficulty)) === diff);
+    const chart = bestChartsPerSlot(entry.song)[diff];
     if (!chart) return;
     const audio = await readSongAudio(entry);
     // Playable background, cached conversion of a legacy .avi/.mpg, or null
@@ -704,11 +685,11 @@ export function SongSelect({
   const topFade = off < 0;
   const botFade = off + total * ROW_H > viewH;
 
-  const chips = DIFF_NAMES.map((name, i) => {
+  const chips = DIFF_SLOT_NAMES.map((name, i) => {
     const lv = song?.levels[i];
     const on = i === diff;
     const has = lv != null;
-    return { name, lv: has ? lv : '—', clr: DIFF_CLR[i], on, has };
+    return { name, lv: has ? lv : '—', clr: DIFF_SLOT_COLORS[i], on, has };
   });
 
   const overlayRows = [
@@ -899,7 +880,7 @@ export function SongSelect({
             <span>BPM {song?.bpm ?? '—'}</span>
             <span>{song?.pack ?? ''}</span>
             <span className="font-bold" style={{ color: AC }}>
-              {DIFF_NAMES[diff]} {song?.levels[diff] ?? '—'}
+              {DIFF_SLOT_NAMES[diff]} {song?.levels[diff] ?? '—'}
             </span>
             {song?.best && (
               <span style={{ color: '#59f07f' }}>

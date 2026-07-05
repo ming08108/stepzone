@@ -18,6 +18,8 @@ import {
   BG_MODES,
   DEFAULT_PLAY_OPTIONS,
   NOTE_SKINS,
+  PRACTICE_LEAD_SECONDS,
+  PRACTICE_TAIL_SECONDS,
   SCROLL_MODES,
   TURNS,
   type PracticeSection,
@@ -26,24 +28,12 @@ import { songBpmRange } from '../io/songFiles';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { difficultyToString } from '../song/difficulty';
 import type { TimingData } from '../timing/timingData';
-import { NoteFieldPreview, PREVIEW_LEAD_SECONDS, PREVIEW_TAIL_SECONDS } from './NoteFieldPreview';
+import { bestChartsPerSlot, difficultyColor } from './difficultyUi';
+import { NoteFieldPreview } from './NoteFieldPreview';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
-
-function slotOf(name: string): number {
-  const i = ['Beginner', 'Easy', 'Medium', 'Hard', 'Challenge'].indexOf(name);
-  return i >= 0 ? i : 4; // Edit → Expert
-}
-const DIFF_COLOR: Record<string, string> = {
-  Beginner: '#37d5ff',
-  Easy: '#ffcf3d',
-  Medium: '#ff5c5c',
-  Hard: '#59f07f',
-  Challenge: '#c86bff',
-  Edit: '#c86bff',
-};
 
 /** Step to the next/previous entry of a const union array, wrapping. */
 function cycle<T>(list: readonly T[], cur: T, dir: number): T {
@@ -118,17 +108,10 @@ export function PlayerOptions({
   useGamepadKeys();
 
   // Charts available for this song, one per difficulty slot, ordered by slot (#8).
-  const charts = useMemo(() => {
-    const singles = req.song.charts.filter((c) => c.stepsType === 'dance-single');
-    const use = singles.length ? singles : req.song.charts;
-    const bySlot = new Map<number, PlayRequest['chart']>();
-    for (const c of use) {
-      const s = slotOf(difficultyToString(c.difficulty));
-      const ex = bySlot.get(s);
-      if (!ex || c.meter > ex.meter) bySlot.set(s, c);
-    }
-    return [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
-  }, [req.song]);
+  const charts = useMemo(
+    () => bestChartsPerSlot(req.song).filter((c): c is PlayRequest['chart'] => c !== null),
+    [req.song],
+  );
   const [chartIdx, setChartIdx] = useState(() => {
     const i = charts.indexOf(req.chart);
     return i >= 0 ? i : Math.max(0, charts.length >> 1);
@@ -186,10 +169,10 @@ export function PlayerOptions({
     if (req.encodedAudio) {
       let win;
       if (sectionSeconds) {
-        const start = Math.max(0, sectionSeconds.startSeconds - PREVIEW_LEAD_SECONDS);
+        const start = Math.max(0, sectionSeconds.startSeconds - PRACTICE_LEAD_SECONDS);
         win = {
           startSeconds: start,
-          lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds + PREVIEW_TAIL_SECONDS - start),
+          lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds + PRACTICE_TAIL_SECONDS - start),
         };
       }
       previewEncoded(
@@ -203,23 +186,22 @@ export function PlayerOptions({
     }
     return () => stopPreview();
   }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds, settings.musicRate]);
+  /** Set the loop endpoints (measures, already clamped by the caller). */
+  const setLoop = (start: number, end: number) => setPractice((p) => ({ ...p, start, end }));
   /** Click on the song map: drag whichever loop edge is closer to that measure
    *  (ties break toward the side of the section the click landed on, so a
    *  single-measure loop can still be stretched either way). */
   const moveNearestEdge = (m: number) => {
     const dStart = Math.abs(m - mStart);
     const dEnd = Math.abs(m - mEnd);
-    if (dStart < dEnd || (dStart === dEnd && m < mStart)) {
-      setPractice((p) => ({ ...p, start: Math.min(m, mEnd), end: mEnd }));
-    } else {
-      setPractice((p) => ({ ...p, start: mStart, end: Math.max(m, mStart) }));
-    }
+    if (dStart < dEnd || (dStart === dEnd && m < mStart)) setLoop(Math.min(m, mEnd), mEnd);
+    else setLoop(mStart, Math.max(m, mStart));
   };
 
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
   const diffName = difficultyToString(chart.difficulty);
-  const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
+  const dcolor = difficultyColor(diffName);
 
   const isX = settings.scrollMode === 'X';
   const go = () => onStart(chart, practiceSection);
@@ -287,12 +269,7 @@ export function PlayerOptions({
             sub: true,
             value: `M${mStart} · ${fmtTime(beatTime((mStart - 1) * 4))}`,
             help: 'First measure of the practice section — every pass begins here after a short lead-in. You can also click the song map below to move the nearest edge.',
-            adjust: (dir) =>
-              setPractice((p) => ({
-                ...p,
-                start: Math.max(1, Math.min(mEnd, mStart + dir)),
-                end: mEnd,
-              })),
+            adjust: (dir) => setLoop(Math.max(1, Math.min(mEnd, mStart + dir)), mEnd),
           },
           {
             label: 'LOOP END',
@@ -301,11 +278,7 @@ export function PlayerOptions({
             value: `M${mEnd} · ${fmtTime(beatTime(mEnd * 4))}`,
             help: 'Last measure of the practice section (inclusive) — once it plays out, the loop jumps back to LOOP START for another pass.',
             adjust: (dir) =>
-              setPractice((p) => ({
-                ...p,
-                start: mStart,
-                end: Math.max(mStart, Math.min(measures.count, mEnd + dir)),
-              })),
+              setLoop(mStart, Math.max(mStart, Math.min(measures.count, mEnd + dir))),
           },
         ] satisfies OptionRow[])
       : []),

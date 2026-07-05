@@ -151,6 +151,9 @@ export async function loadLibraryFromFiles(
     if (!sim) continue;
     try {
       const song = parseSimfile(await sim.text(), sim.name);
+      // Untitled songs take the simfile's name, so every consumer — display,
+      // favorites/score/stats keys, preview cache — sees one stable title.
+      if (!song.title) song.title = sim.name;
       // Pack = the folder directly above the song folder (present when a whole
       // pack was dropped; a lone song folder has no pack context).
       const segs = dir.split('/').filter(Boolean);
