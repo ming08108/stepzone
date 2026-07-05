@@ -121,6 +121,7 @@ function NotePreview({
       renderer.setColumnAngles(angles);
       renderer.setStyle(noteSkin);
       renderer.setReverse(reverse);
+      renderer.setBare(true); // notefield only — no HUD chrome in the preview
       renderer.setBgDim(1); // no song background in the preview
       renderer.setMeta({ title: '', subtitle: '', difficulty: '' });
       resize();

@@ -122,6 +122,7 @@ export class NoteFieldRenderer {
   height = 720;
   private dpr = 1;
   private meta: RenderMeta = { title: '', subtitle: '', difficulty: '' };
+  private bare = false; // skip the HUD (life/progress/score/combo/judgment) — preview
 
   private receptorY = 90;
   private colW = 110;
@@ -196,6 +197,11 @@ export class NoteFieldRenderer {
   /** Note field style: 'arcade' (STEPLINE panel) or 'itg' (centered ITGmania). */
   setStyle(style: 'arcade' | 'itg'): void {
     this.style = style;
+  }
+
+  /** Draw only the notefield (receptors + notes), no HUD — used by the preview. */
+  setBare(bare: boolean): void {
+    this.bare = bare;
   }
 
   resize(width: number, height: number, dpr = 1): void {
@@ -513,7 +519,7 @@ export class NoteFieldRenderer {
       });
     }
 
-    this.drawHud(ctx, judge, now, progress, fb);
+    if (!this.bare) this.drawHud(ctx, judge, now, progress, fb);
   }
 
   private drawHold(ctx: CanvasRenderingContext2D, n: ActiveNote): void {
@@ -804,7 +810,7 @@ export class NoteFieldRenderer {
       });
     }
 
-    this.drawItgHud(ctx, judge, now, progress, fb);
+    if (!this.bare) this.drawItgHud(ctx, judge, now, progress, fb);
   }
 
   /**
