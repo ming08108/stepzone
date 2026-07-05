@@ -7,11 +7,17 @@
  * touching the disk, and are deduplicated by identity (`isSameEntry`).
  *
  * Browsers gate re-reading a stored handle behind a user-gesture permission
- * grant, so startup is two-step: `restoreSources` silently loads whatever is
- * still trusted and names the rest, then `grantPendingSources` finishes from a
+ * grant, so startup is two-step: `restoreSources` silently names what is still
+ * trusted and what needs a gesture, then `grantPendingSources` finishes from a
  * click/keypress; choosing "Allow on every visit" in Chromium's prompt makes
  * later restores fully silent. Browsers without the API (Firefox/Safari) fall
  * back to the caller's `<input webkitdirectory>` — no persistence there.
+ *
+ * Scans are cached: each source stores a catalog of its songs' display
+ * metadata (`saveCatalog`/`loadCatalog`), so reloads render the library
+ * instantly without walking the tree; a song's real files are read on demand
+ * (`readSongFolder`) when it's highlighted or played. A rescan (re-walk +
+ * re-parse) refreshes the catalog when the folder changed on disk.
  */
 
 // Only files a library can use are collected — simfiles up front, media lazily.
@@ -67,6 +73,7 @@ const DB_NAME = 'notefield-fs';
 const STORE = 'handles';
 const LIST_KEY = 'songFolders';
 const LEGACY_KEY = 'songFolder'; // pre-multi-source single handle
+const CATALOG_PREFIX = 'catalog:'; // + source id → SourceCatalog
 
 interface StoredSource {
   id: string;
@@ -263,8 +270,111 @@ export async function removeSource(id: string): Promise<void> {
   try {
     const list = await loadList();
     await saveList(list.filter((s) => s.id !== id));
+    await idbRequest('readwrite', (s) => s.delete(CATALOG_PREFIX + id));
   } catch {
     /* nothing stored / IDB unavailable */
+  }
+}
+
+// --- Cached catalogs (skip the walk + parse on reload) --------------------------
+
+/** One song's display metadata, enough to render a library row without I/O. */
+export interface CatalogSong {
+  /** Song folder path as a webkitRelativePath dir (rooted at the source name). */
+  dir: string;
+  title: string;
+  artist: string;
+  pack?: string;
+  /** Display BPM, e.g. "148" or "120–160". */
+  bpm?: string;
+  /** dance-single meters by slot [Beginner…Expert]; null = no chart. */
+  levels?: Array<number | null>;
+}
+
+interface SourceCatalog {
+  v: 1;
+  scannedAt: number;
+  songs: CatalogSong[];
+}
+
+export async function saveCatalog(id: string, songs: CatalogSong[]): Promise<void> {
+  try {
+    const cat: SourceCatalog = { v: 1, scannedAt: Date.now(), songs };
+    await idbRequest('readwrite', (s) => s.put(cat, CATALOG_PREFIX + id));
+  } catch {
+    /* IDB unavailable — next reload rescans */
+  }
+}
+
+export async function loadCatalog(id: string): Promise<CatalogSong[] | null> {
+  try {
+    const cat = (await idbRequest('readonly', (s) => s.get(CATALOG_PREFIX + id))) as
+      | SourceCatalog
+      | undefined;
+    return cat && cat.v === 1 && Array.isArray(cat.songs) ? cat.songs : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read one song folder's files on demand (a catalog row being opened): resolve
+ * `dir` under its source handle — one small directory listing instead of a
+ * full library walk. Null when the source or folder is gone; the caller can
+ * offer a rescan.
+ */
+export async function readSongFolder(sourceId: string, dir: string): Promise<File[] | null> {
+  let list: StoredSource[] = [];
+  try {
+    list = await loadList();
+  } catch {
+    return null;
+  }
+  const s = list.find((x) => x.id === sourceId);
+  if (!s) return null;
+  try {
+    // First segment is the source root's own name — traversal starts below it.
+    const segs = dir.split('/').filter(Boolean).slice(1);
+    let d = s.handle;
+    for (const seg of segs) d = await d.getDirectoryHandle(seg);
+    const files: File[] = [];
+    for await (const h of d.values()) {
+      if (h.kind !== 'file') continue;
+      const dot = h.name.lastIndexOf('.');
+      if (dot < 0 || !KEEP_EXT.has(h.name.slice(dot).toLowerCase())) continue;
+      const f = await (h as FileSystemFileHandle).getFile();
+      try {
+        Object.defineProperty(f, 'webkitRelativePath', { value: `${dir}/${f.name}` });
+      } catch {
+        /* read-only — grouping falls back to the file name */
+      }
+      files.push(f);
+    }
+    return files;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Make sure a source is readable, prompting if allowed (call from a gesture
+ * when its permission is 'prompt'). A truly dead folder is dropped.
+ */
+export async function ensureSourcePermission(id: string): Promise<boolean> {
+  let list: StoredSource[] = [];
+  try {
+    list = await loadList();
+  } catch {
+    return false;
+  }
+  const s = list.find((x) => x.id === id);
+  if (!s) return false;
+  try {
+    if ((await s.handle.queryPermission({ mode: 'read' })) === 'granted') return true;
+    return (await s.handle.requestPermission({ mode: 'read' })) === 'granted';
+  } catch (err) {
+    if ((err as DOMException)?.name === 'NotFoundError') await removeSource(id);
+    return false;
   }
 }
 
@@ -351,38 +461,41 @@ export async function readSource(id: string, onScan?: ScanProgress): Promise<Loc
 }
 
 /**
- * Startup pass: silently load every enabled source the browser still trusts;
- * name the ones that need a user-gesture re-grant (`grantPendingSources`).
+ * Startup pass: name every enabled source the browser still trusts (ready to
+ * load from its cached catalog or a scan) and the ones that need a
+ * user-gesture re-grant (`grantPendingSources`). No folder is walked here.
  * Sources whose folders are gone are dropped from the list.
  */
-export async function restoreSources(
-  onScan?: ScanProgress,
-): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
-  return sweepSources(false, onScan);
+export async function restoreSources(): Promise<{
+  granted: Array<{ id: string; name: string }>;
+  pendingNames: string[];
+}> {
+  return sweepSources(false);
 }
 
 /**
  * Finish a restore that needed a gesture: request permission for each pending
- * source and load the granted ones. Call from a click/keydown handler.
- * Sources still denied stay in `pendingNames` for another attempt.
+ * source. Call from a click/keydown handler. Sources still denied stay in
+ * `pendingNames` for another attempt.
  */
-export async function grantPendingSources(
-  onScan?: ScanProgress,
-): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
-  return sweepSources(true, onScan);
+export async function grantPendingSources(): Promise<{
+  granted: Array<{ id: string; name: string }>;
+  pendingNames: string[];
+}> {
+  return sweepSources(true);
 }
 
-async function sweepSources(
-  mayPrompt: boolean,
-  onScan?: ScanProgress,
-): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
+async function sweepSources(mayPrompt: boolean): Promise<{
+  granted: Array<{ id: string; name: string }>;
+  pendingNames: string[];
+}> {
   let list: StoredSource[] = [];
   try {
     list = await loadList();
   } catch {
-    return { loaded: [], pendingNames: [] };
+    return { granted: [], pendingNames: [] };
   }
-  const loaded: LoadedSource[] = [];
+  const granted: Array<{ id: string; name: string }> = [];
   const pendingNames: string[] = [];
   const dead: string[] = [];
   for (const s of list) {
@@ -392,7 +505,7 @@ async function sweepSources(
       if (state !== 'granted' && mayPrompt) {
         state = await s.handle.requestPermission({ mode: 'read' });
       }
-      if (state === 'granted') loaded.push({ id: s.id, folder: await readFolder(s.handle, onScan) });
+      if (state === 'granted') granted.push({ id: s.id, name: s.handle.name });
       else pendingNames.push(s.handle.name);
     } catch (err) {
       if ((err as DOMException)?.name === 'NotFoundError') dead.push(s.id);
@@ -400,5 +513,5 @@ async function sweepSources(
     }
   }
   for (const id of dead) await removeSource(id);
-  return { loaded, pendingNames };
+  return { granted, pendingNames };
 }

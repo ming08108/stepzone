@@ -117,6 +117,12 @@ export interface LibraryEntry {
   synthAudio?: () => ArrayBuffer;
   /** The remembered folder source this entry came from (io/localFolder). */
   sourceId?: string;
+  /** Catalog-cached display BPM ("148" / "120–160") before the simfile is parsed. */
+  bpm?: string;
+  /** Catalog-cached dance-single meters by slot before the simfile is parsed. */
+  levels?: Array<number | null>;
+  /** Song folder path for on-demand loading from its source (catalog entries). */
+  lazyDir?: string;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */

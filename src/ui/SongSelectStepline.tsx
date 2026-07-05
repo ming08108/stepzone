@@ -18,17 +18,22 @@ import {
 import {
   addSourceFromDrop,
   addSourceFromPicker,
+  ensureSourcePermission,
   grantPendingSources,
   listSources,
+  loadCatalog,
+  readSongFolder,
   readSource,
   removeSource,
   restoreSources,
+  saveCatalog,
   setSourceEnabled,
   supportsFolderPicker,
+  type CatalogSong,
   type SongSource,
 } from '../io/localFolder';
 import { difficultyToString } from '../song/difficulty';
-import type { Song } from '../song/song';
+import { Song } from '../song/song';
 import { previewSong, stopPreview } from '../audio/songPreview';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
@@ -85,11 +90,40 @@ function deriveLevels(song: Song): Array<number | null> {
 }
 
 function bpmText(entry: LibraryEntry): { text: string; sort: number } {
+  // Catalog entries carry a display string until their simfile is parsed.
+  if (entry.bpm && entry.song.charts.length === 0) {
+    const nums = entry.bpm.split('–').map(Number);
+    return { text: entry.bpm, sort: nums[nums.length - 1] || 0 };
+  }
   const r = songBpmRange(entry.song);
   if (r.max <= 0) return { text: '—', sort: 0 };
   const lo = Math.round(r.min);
   const hi = Math.round(r.max);
   return { text: lo === hi ? String(hi) : `${lo}–${hi}`, sort: hi };
+}
+
+/** The song folder (webkitRelativePath dir) an entry's files live in. */
+function entryDir(e: LibraryEntry): string {
+  const p = e.files[0]?.webkitRelativePath ?? '';
+  return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+}
+
+/** A lightweight row from a cached catalog — real files load on demand. */
+function entryFromCatalog(sourceId: string, c: CatalogSong): LibraryEntry {
+  const song = new Song();
+  song.title = c.title;
+  song.artist = c.artist;
+  return {
+    song, // charts empty until the simfile is read (see ensureLoaded)
+    files: [],
+    sourceName: c.dir.split('/').pop() ?? c.title,
+    bannerUrl: null,
+    pack: c.pack,
+    sourceId,
+    bpm: c.bpm,
+    levels: c.levels,
+    lazyDir: c.dir,
+  };
 }
 
 function initials(title: string): string {
@@ -151,15 +185,16 @@ export function SongSelect({
   }, []);
 
   // Keep the module cache current: once real library content is in (a loaded
-  // song folder), leaving the screen must not lose it.
+  // or catalog-cached song folder), leaving the screen must not lose it.
   useEffect(() => {
-    if (entries.some((e) => e.files.length > 0)) libraryCache = entries;
+    if (entries.some((e) => e.files.length > 0 || e.sourceId)) libraryCache = entries;
   }, [entries]);
 
   // Parse a folder's files into entries. Entries from a remembered source are
-  // tagged with its id and replace that source's previous songs (so restore and
-  // re-read are idempotent); untagged loads (multi-folder drops, the fallback
-  // input) simply append for this session. The starter pack always stays.
+  // tagged with its id, replace that source's previous songs (so rescans are
+  // idempotent), and are summarized into a cached catalog so the next reload
+  // skips the walk+parse entirely; untagged loads (multi-folder drops, the
+  // fallback input) simply append for this session. The starter pack stays.
   const addSourceEntries = useCallback(async (files: File[], sourceId?: string) => {
     if (files.length === 0) return;
     setLoading({ msg: 'LOADING SONGS…' });
@@ -174,10 +209,71 @@ export function SongSelect({
           ...tagged,
         ]);
       }
+      if (sourceId) {
+        void saveCatalog(
+          sourceId,
+          tagged.map((e) => {
+            const bpm = bpmText(e);
+            return {
+              dir: entryDir(e),
+              title: e.song.title || e.sourceName,
+              artist: e.song.artist,
+              pack: e.pack,
+              bpm: bpm.sort > 0 ? bpm.text : undefined,
+              levels: deriveLevels(e.song),
+            };
+          }),
+        );
+      }
     } finally {
       setLoading(null);
     }
   }, []);
+
+  // Bring one source into the library: from its cached catalog when available
+  // (instant — no disk walk), else a full scan that also writes the catalog.
+  const loadSource = useCallback(
+    async (id: string, forceScan = false) => {
+      if (!forceScan) {
+        const cached = await loadCatalog(id);
+        if (cached && cached.length > 0) {
+          setEntries((prev) => [
+            ...prev.filter((e) => e.sourceId !== id),
+            ...cached.map((c) => entryFromCatalog(id, c)),
+          ]);
+          return;
+        }
+      }
+      const folder = await readSource(id, (n) =>
+        setLoading({ msg: `SCANNING FOLDER… ${n} FILES` }),
+      );
+      if (folder) await addSourceEntries(folder.files, id);
+      setLoading(null);
+    },
+    [addSourceEntries],
+  );
+
+  // A catalog row being opened: read its song folder (one directory listing)
+  // and parse the simfile, writing the result back onto the entry in place.
+  const ensureLoaded = useCallback(
+    async (entry: LibraryEntry): Promise<LibraryEntry> => {
+      if (!entry.lazyDir || !entry.sourceId || entry.song.charts.length > 0) return entry;
+      const files = await readSongFolder(entry.sourceId, entry.lazyDir);
+      if (!files || files.length === 0) return entry;
+      const { entries: parsed } = await loadLibraryFromFiles(files);
+      const full = parsed[0];
+      if (!full) return entry;
+      const merged: LibraryEntry = {
+        ...entry,
+        song: full.song,
+        files: full.files,
+        bannerUrl: full.bannerUrl,
+      };
+      setEntries((prev) => prev.map((e) => (e === entry ? merged : e)));
+      return merged;
+    },
+    [],
+  );
 
   // Folder-walk progress ticks (the phase before any songs can be counted).
   const scanTick = useCallback(
@@ -196,9 +292,9 @@ export function SongSelect({
     // appended after these (addSourceEntries keeps file-less entries).
     setEntries(starterEntries());
     void (async () => {
-      const { loaded } = await restoreSources(scanTick);
+      const { granted } = await restoreSources();
       if (cancelled) return;
-      for (const l of loaded) await addSourceEntries(l.folder.files, l.id);
+      for (const g of granted) await loadSource(g.id);
       setSources(await listSources());
       setLoading(null);
     })();
@@ -229,13 +325,21 @@ export function SongSelect({
     }
   };
 
-  // Re-grant access to the pending sources and load them. Sources still denied
-  // (dismissed prompt, no activation) stay in the banner for another try;
-  // truly dead folders are dropped by the library layer.
+  // Re-grant access to the pending sources and load them (cached catalogs make
+  // this near-instant). Sources still denied (dismissed prompt, no activation)
+  // stay in the banner for another try; dead folders are dropped by the layer.
   const finishRestore = async () => {
-    const { loaded } = await grantPendingSources(scanTick);
-    for (const l of loaded) await addSourceEntries(l.folder.files, l.id);
-    setSources(await listSources());
+    const wasPending = new Set(
+      sources.filter((s) => s.enabled && s.permission === 'prompt').map((s) => s.id),
+    );
+    await grantPendingSources();
+    const after = await listSources();
+    for (const s of after) {
+      if (s.enabled && s.permission === 'granted' && wasPending.has(s.id)) {
+        await loadSource(s.id);
+      }
+    }
+    setSources(after);
     setLoading(null);
   };
 
@@ -257,18 +361,22 @@ export function SongSelect({
   }, [pendingNames.length]);
 
   // Source management (FOLDERS panel): toggle a source's songs in/out of the
-  // library, or forget the folder entirely. Enabling may prompt for permission
-  // (the click is the gesture).
+  // library, rescan one whose contents changed on disk, or forget it entirely.
+  // Enabling/rescanning may prompt for permission (the click is the gesture).
   const toggleSource = async (s: SongSource) => {
     if (s.enabled) {
       await setSourceEnabled(s.id, false);
       setEntries((prev) => prev.filter((e) => e.sourceId !== s.id));
     } else {
       await setSourceEnabled(s.id, true);
-      const folder = await readSource(s.id, scanTick);
-      if (folder) await addSourceEntries(folder.files, s.id);
+      if (await ensureSourcePermission(s.id)) await loadSource(s.id);
       setLoading(null);
     }
+    setSources(await listSources());
+  };
+
+  const rescanSource = async (s: SongSource) => {
+    await loadSource(s.id, true);
     setSources(await listSources());
   };
 
@@ -293,7 +401,9 @@ export function SongSelect({
           pack: e.pack ?? '',
           bpm: b.text,
           bpmSort: b.sort,
-          levels: deriveLevels(e.song),
+          // Catalog rows carry cached levels until their simfile is parsed.
+          levels:
+            e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
         };
       }),
     [entries],
@@ -342,15 +452,24 @@ export function SongSelect({
   });
 
   // Loop the highlighted song's sample snippet (#5); stop when leaving.
+  // Catalog rows load their files/simfile on first highlight (also fills in
+  // the banner and real chart list for the detail panel).
   useEffect(() => {
-    if (song?.entry) previewSong(song.entry);
-  }, [song?.entry]);
+    if (!song?.entry) return;
+    let alive = true;
+    void ensureLoaded(song.entry).then((e) => {
+      if (alive) previewSong(e);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [song?.entry, ensureLoaded]);
   useEffect(() => () => stopPreview(), []);
 
   const start = useCallback(async () => {
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
     if (!s || s.levels[diff] == null) return;
-    const entry = s.entry;
+    const entry = await ensureLoaded(s.entry); // no-op unless a catalog row
     const singles = entry.song.charts.filter((c) => c.stepsType === 'dance-single');
     const use = singles.length ? singles : entry.song.charts;
     const chart =
@@ -361,7 +480,7 @@ export function SongSelect({
     const audio = await readSongAudio(entry);
     const bg = findBackgroundFile(entry);
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
-  }, [filtered, sel, diff, onPlay]);
+  }, [filtered, sel, diff, onPlay, ensureLoaded]);
 
   const reset = () => {
     setSort('title');
@@ -533,6 +652,15 @@ export function SongSelect({
                       ? `${count} SONGS`
                       : ''}
                 </span>
+                {s.enabled && (
+                  <button
+                    onClick={() => void rescanSource(s)}
+                    className="text-[#ececec]/40 hover:text-[#ececec]"
+                    title="Rescan this folder (pick up added/removed songs)"
+                  >
+                    ⟳
+                  </button>
+                )}
                 <button
                   onClick={() => void removeSrc(s)}
                   className="text-[#ececec]/40 hover:text-[#ff5d47]"
