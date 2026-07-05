@@ -4,25 +4,19 @@
  * Negative BPMs / negative stops (and "infinite" BPMs) are converted to warps
  * after parsing, via processBpmsAndStops (spec doc 2 §2.5), so DDR gimmick
  * charts time correctly.
+ *
+ * Tags shared with `.ssc` are handled by applySongHeaderTag (songHeader.ts);
+ * only `.sm`-specific handling lives here.
  */
 
-import { Song, type DisplayBpmType } from '../song/song';
+import { Song } from '../song/song';
 import { Steps } from '../song/steps';
 import { oldStyleStringToDifficulty } from '../song/difficulty';
 import { param, tagName, tokenizeMsd } from './msd';
-import { hhmmssToSeconds, parseDelays } from './timingTags';
+import { applySongHeaderTag } from './songHeader';
 import { processBpmsAndStops, rawPairs } from './negativeBpm';
 
-function parseDisplayBpm(
-  v1: string,
-  v2: string,
-): { type: DisplayBpmType; min: number; max: number } {
-  if (v1.trim() === '*') return { type: 'random', min: 0, max: 0 };
-  const min = Number.parseFloat(v1);
-  if (v2.trim().length > 0) return { type: 'specified', min, max: Number.parseFloat(v2) };
-  return { type: 'specified', min, max: min };
-}
-
+/** Parse `.sm` text. Parse warnings are appended to the optional `warnings` array. */
 export function parseSm(text: string, warnings: string[] = []): Song {
   const song = new Song();
   const values = tokenizeMsd(text, true);
@@ -33,73 +27,16 @@ export function parseSm(text: string, warnings: string[] = []): Song {
 
   for (const value of values) {
     const tag = tagName(value);
+    if (applySongHeaderTag(song, tag, value)) continue;
     const v1 = param(value, 1);
 
     switch (tag) {
-      case 'TITLE':
-        song.title = v1;
-        break;
-      case 'SUBTITLE':
-        song.subtitle = v1;
-        break;
-      case 'ARTIST':
-        song.artist = v1;
-        break;
-      case 'TITLETRANSLIT':
-        song.titleTranslit = v1;
-        break;
-      case 'SUBTITLETRANSLIT':
-        song.subtitleTranslit = v1;
-        break;
-      case 'ARTISTTRANSLIT':
-        song.artistTranslit = v1;
-        break;
-      case 'GENRE':
-        song.genre = v1;
-        break;
-      case 'CREDIT':
-        song.credit = v1;
-        break;
-      case 'MUSIC':
-        song.musicFile = v1;
-        break;
-      case 'BANNER':
-        song.bannerFile = v1;
-        break;
-      case 'BACKGROUND':
-        song.backgroundFile = v1;
-        break;
-      case 'CDTITLE':
-        song.cdTitleFile = v1;
-        break;
-      case 'LYRICSPATH':
-        song.lyricsFile = v1;
-        break;
-      case 'OFFSET':
-        song.timing.offsetSeconds = Number.parseFloat(v1) || 0;
-        break;
-      case 'SAMPLESTART':
-        song.sampleStartSeconds = hhmmssToSeconds(v1);
-        break;
-      case 'SAMPLELENGTH':
-        song.sampleLengthSeconds = hhmmssToSeconds(v1);
-        break;
-      case 'DISPLAYBPM': {
-        const d = parseDisplayBpm(v1, param(value, 2));
-        song.displayBpmType = d.type;
-        song.specifiedBpmMin = d.min;
-        song.specifiedBpmMax = d.max;
-        break;
-      }
       case 'BPMS':
         rawBpms = rawPairs(v1);
         break;
       case 'STOPS':
       case 'FREEZES':
         rawStops = rawPairs(v1);
-        break;
-      case 'DELAYS':
-        song.timing.delays = parseDelays(v1);
         break;
       case 'NOTES':
       case 'NOTES2': {

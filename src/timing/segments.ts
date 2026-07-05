@@ -32,7 +32,10 @@ export interface WarpSegment {
 
 export interface ScrollSegment {
   row: number;
-  /** Visual scroll multiplier (0 = arrows stack up). Does not affect timing. */
+  /**
+   * Visual scroll multiplier (0 = arrows stack up). Never affects timing.
+   * Parsed and stored, but not yet consumed by the renderer.
+   */
   ratio: number;
 }
 

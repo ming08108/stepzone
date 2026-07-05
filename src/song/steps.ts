@@ -42,6 +42,12 @@ export class Steps {
     return this.cachedNoteData;
   }
 
+  /**
+   * Warnings produced while parsing the note grid (parses on first access).
+   * Surfacing these in the UI is deferred; they are kept reachable here (and
+   * simfile-level warnings via parseSimfile's `warnings` out-param) for when
+   * that lands.
+   */
   get noteWarnings(): readonly string[] {
     this.getNoteData();
     return this.cachedWarnings;

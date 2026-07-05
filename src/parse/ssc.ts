@@ -2,6 +2,9 @@
  * `.ssc` parser. A song header followed by one or more `#NOTEDATA … #NOTES`
  * chart blocks. See spec doc 1 (§1.4).
  *
+ * Tags shared with `.sm` are handled by applySongHeaderTag (songHeader.ts);
+ * only `.ssc`-specific handling lives here.
+ *
  * Split-timing note: we seed each chart's working timing as a copy of the song
  * timing, then replace whichever lists the chart overrides. A chart is treated
  * as having its own timing only if it overrides at least one list. This is
@@ -10,13 +13,12 @@
  */
 
 import { TimingData } from '../timing/timingData';
-import { Song, type DisplayBpmType } from '../song/song';
+import { Song } from '../song/song';
 import { Steps } from '../song/steps';
 import { stringToDifficulty } from '../song/difficulty';
 import { param, tagName, tokenizeMsd } from './msd';
+import { applySongHeaderTag } from './songHeader';
 import {
-  cloneTiming,
-  hhmmssToSeconds,
   parseBpms,
   parseDelays,
   parseFakes,
@@ -24,21 +26,11 @@ import {
   parseSpeeds,
   parseStops,
   parseWarps,
+  supportsSplitTiming,
 } from './timingTags';
 
-function parseDisplayBpm(
-  v1: string,
-  v2: string,
-): { type: DisplayBpmType; min: number; max: number } {
-  if (v1.trim() === '*') return { type: 'random', min: 0, max: 0 };
-  const min = Number.parseFloat(v1);
-  if (v2.trim().length > 0) {
-    return { type: 'specified', min, max: Number.parseFloat(v2) };
-  }
-  return { type: 'specified', min, max: min };
-}
-
-export function parseSsc(text: string): Song {
+/** Parse `.ssc` text. Parse warnings are appended to the optional `warnings` array. */
+export function parseSsc(text: string, warnings: string[] = []): Song {
   const song = new Song();
   const values = tokenizeMsd(text, true);
 
@@ -67,85 +59,28 @@ export function parseSsc(text: string): Song {
     const v1 = param(value, 1);
 
     if (!inChart) {
+      if (applySongHeaderTag(song, tag, value)) continue;
       switch (tag) {
-        case 'TITLE':
-          song.title = v1;
-          break;
-        case 'SUBTITLE':
-          song.subtitle = v1;
-          break;
-        case 'ARTIST':
-          song.artist = v1;
-          break;
-        case 'TITLETRANSLIT':
-          song.titleTranslit = v1;
-          break;
-        case 'SUBTITLETRANSLIT':
-          song.subtitleTranslit = v1;
-          break;
-        case 'ARTISTTRANSLIT':
-          song.artistTranslit = v1;
-          break;
-        case 'GENRE':
-          song.genre = v1;
-          break;
-        case 'CREDIT':
-          song.credit = v1;
-          break;
         case 'ORIGIN':
           song.origin = v1;
-          break;
-        case 'MUSIC':
-          song.musicFile = v1;
           break;
         case 'PREVIEW':
           song.previewFile = v1;
           break;
-        case 'BANNER':
-          song.bannerFile = v1;
-          break;
-        case 'BACKGROUND':
-          song.backgroundFile = v1;
-          break;
-        case 'CDTITLE':
-          song.cdTitleFile = v1;
-          break;
         case 'JACKET':
           song.jacketFile = v1;
-          break;
-        case 'LYRICSPATH':
-          song.lyricsFile = v1;
           break;
         case 'VERSION':
           song.version = Number.parseFloat(v1) || 0;
           break;
-        case 'OFFSET':
-          song.timing.offsetSeconds = Number.parseFloat(v1) || 0;
-          break;
-        case 'SAMPLESTART':
-          song.sampleStartSeconds = hhmmssToSeconds(v1);
-          break;
-        case 'SAMPLELENGTH':
-          song.sampleLengthSeconds = hhmmssToSeconds(v1);
-          break;
         case 'KEYSOUNDS':
           song.keysounds = v1.length > 0 ? v1.split(',').map((k) => k.trim()) : [];
           break;
-        case 'DISPLAYBPM': {
-          const d = parseDisplayBpm(v1, param(value, 2));
-          song.displayBpmType = d.type;
-          song.specifiedBpmMin = d.min;
-          song.specifiedBpmMax = d.max;
-          break;
-        }
         case 'BPMS':
           song.timing.bpms = parseBpms(v1);
           break;
         case 'STOPS':
           song.timing.stops = parseStops(v1);
-          break;
-        case 'DELAYS':
-          song.timing.delays = parseDelays(v1);
           break;
         case 'WARPS':
           song.timing.warps = parseWarps(v1, song.version);
@@ -162,7 +97,7 @@ export function parseSsc(text: string): Song {
         case 'NOTEDATA':
           inChart = true;
           chart = new Steps();
-          chartTiming = cloneTiming(song.timing);
+          chartTiming = song.timing.clone();
           chartHasOwnTiming = false;
           break;
         default:
@@ -172,7 +107,7 @@ export function parseSsc(text: string): Song {
     }
 
     // Inside a #NOTEDATA block.
-    const splitOK = song.version === 0 || song.version >= 0.7;
+    const splitOK = supportsSplitTiming(song.version);
     switch (tag) {
       case 'STEPSTYPE':
         if (chart) chart.stepsType = v1;
@@ -253,7 +188,10 @@ export function parseSsc(text: string): Song {
   }
 
   // Tolerate a trailing chart with no closing NOTES (shouldn't happen).
-  if (inChart) finishChart('');
+  if (inChart) {
+    warnings.push('#NOTEDATA block missing its closing #NOTES; chart kept with no notes.');
+    finishChart('');
+  }
 
   song.timing.tidy();
   return song;

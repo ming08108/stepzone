@@ -13,6 +13,14 @@ import { parsePairs } from './timingTags';
 
 export const FAST_BPM_WARP = 9999999;
 
+/**
+ * Warp-to-end sentinel: the destination beat used when the file ends while
+ * still inside a negative/infinite-BPM region. Not a typo of FAST_BPM_WARP —
+ * the engine's ProcessBPMsAndStops uses this distinct 8-nines literal, and we
+ * keep the value byte-identical to it.
+ */
+export const WARP_TO_END_BEAT = 99999999;
+
 export interface ProcessedTiming {
   bpms: BpmSegment[];
   stops: StopSegment[];
@@ -132,7 +140,8 @@ export function processBpmsAndStops(
   }
 
   if (warpstart >= 0) {
-    const warpend = bpm < 0 || bpm > FAST_BPM_WARP ? 99999999 : prevbeat - (timeofs * bpm) / 60;
+    const warpend =
+      bpm < 0 || bpm > FAST_BPM_WARP ? WARP_TO_END_BEAT : prevbeat - (timeofs * bpm) / 60;
     addWarp(warpstart, warpend - warpstart);
     if (bpm !== prewarpbpm) addBpm(warpstart, bpm);
   }

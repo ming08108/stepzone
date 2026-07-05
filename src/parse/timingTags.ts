@@ -13,10 +13,18 @@ import type {
   StopSegment,
   WarpSegment,
 } from '../timing/segments';
-import { TimingData } from '../timing/timingData';
 
 /** `.ssc` version at which per-chart timing became authoritative and warps relative. */
 export const VERSION_SPLIT_TIMING = 0.7;
+
+/**
+ * Does this `#VERSION` support split (per-chart) timing and relative warps?
+ * True for modern files (>= 0.7) and for version 0, which means the tag was
+ * absent — treated as modern, matching the engine.
+ */
+export function supportsSplitTiming(version: number): boolean {
+  return version === 0 || version >= VERSION_SPLIT_TIMING;
+}
 
 export interface Pair {
   beat: number;
@@ -43,8 +51,8 @@ export function parseBpms(s: string): BpmSegment[] {
   const out: BpmSegment[] = [];
   for (const { beat, values } of parsePairs(s)) {
     const bpm = values[0];
-    // Reject non-positive BPMs (SSC). Negative-BPM->warp for `.sm` is handled
-    // separately (see sm.ts); not yet implemented.
+    // Reject non-positive BPMs (SSC). `.sm` negative-BPM -> warp conversion is
+    // handled separately by processBpmsAndStops (see negativeBpm.ts).
     if (beat < 0 || !Number.isFinite(bpm) || bpm <= 0) continue;
     out.push({ row: beatToNoteRow(beat), bps: bpm / 60 });
   }
@@ -77,7 +85,7 @@ export function parseWarps(s: string, version: number): WarpSegment[] {
     const v = values[0];
     if (beat < 0 || !Number.isFinite(v)) continue;
     let lengthBeats: number;
-    if (version !== 0 && version < VERSION_SPLIT_TIMING && v > beat) {
+    if (!supportsSplitTiming(version) && v > beat) {
       lengthBeats = v - beat; // legacy: absolute destination beat
     } else if (v > 0) {
       lengthBeats = v; // modern: relative length
@@ -127,22 +135,4 @@ export function hhmmssToSeconds(s: string): number {
   let seconds = 0;
   for (const p of parts) seconds = seconds * 60 + p;
   return seconds;
-}
-
-/** Shallow copy of a TimingData (segment arrays copied; segments shared). */
-export function cloneTiming(src: TimingData): TimingData {
-  const t = new TimingData();
-  t.offsetSeconds = src.offsetSeconds;
-  t.bpms = [...src.bpms];
-  t.stops = [...src.stops];
-  t.delays = [...src.delays];
-  t.warps = [...src.warps];
-  t.scrolls = [...src.scrolls];
-  t.speeds = [...src.speeds];
-  t.timeSignatures = [...src.timeSignatures];
-  t.tickcounts = [...src.tickcounts];
-  t.combos = [...src.combos];
-  t.labels = [...src.labels];
-  t.fakes = [...src.fakes];
-  return t;
 }

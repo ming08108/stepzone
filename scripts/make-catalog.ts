@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate a static notefield catalog.json from a Songs library. Use this for
+ * Generate a static stepzone catalog.json from a Songs library. Use this for
  * static hosting (GitHub Pages, S3, …); for a live server use `song-server.ts`,
  * and for local dev the library loads automatically (no catalog needed).
  *

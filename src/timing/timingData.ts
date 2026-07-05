@@ -70,17 +70,37 @@ export class TimingData {
   /** Seconds between the start of the audio and musical beat 0 (the `#OFFSET`). */
   offsetSeconds = 0;
 
+  // Consumed by beat<->time conversion (bpms/stops/delays/warps) and
+  // judgability (warps/fakes).
   bpms: BpmSegment[] = [];
   stops: StopSegment[] = [];
   delays: DelaySegment[] = [];
   warps: WarpSegment[] = [];
+  fakes: FakeSegment[] = [];
+
+  // Parsed and carried, but not yet consumed by anything (timing math,
+  // judging, or rendering). Kept for future features — do not delete.
   scrolls: ScrollSegment[] = [];
   speeds: SpeedSegment[] = [];
   timeSignatures: TimeSignatureSegment[] = [];
   tickcounts: TickcountSegment[] = [];
   combos: ComboSegment[] = [];
   labels: LabelSegment[] = [];
-  fakes: FakeSegment[] = [];
+
+  /**
+   * Copy this timing: offset copied, every segment array copied (segment
+   * objects shared — treat them as immutable). Arrays are discovered
+   * dynamically so a newly added segment list can never be silently dropped.
+   */
+  clone(): TimingData {
+    const t = new TimingData();
+    t.offsetSeconds = this.offsetSeconds;
+    for (const key of Object.keys(this)) {
+      const v = (this as Record<string, unknown>)[key];
+      if (Array.isArray(v)) (t as unknown as Record<string, unknown>)[key] = [...v];
+    }
+    return t;
+  }
 
   /** Sort every list by row and guarantee a BPM at row 0 (default 60). */
   tidy(): void {
@@ -110,6 +130,7 @@ export class TimingData {
     return bps;
   }
 
+  /** BPM at a row. Unused by the engine itself; kept as a trivial convenience. */
   getBpmAtRow(row: number): number {
     return this.getBpsAtRow(row) * 60;
   }
@@ -167,6 +188,19 @@ export class TimingData {
     };
   }
 
+  /**
+   * Enter the warp at cursor index `c.warp`: start warping, extend the warp
+   * destination if this warp reaches further, and advance the index. Shared
+   * by both conversion loops; the event-order semantics live in findEvent.
+   */
+  private advanceWarp(c: Cursor): void {
+    c.isWarping = true;
+    const ws = this.warps[c.warp];
+    const warpSum = noteRowToBeat(ws.lengthRows) + noteRowToBeat(ws.row);
+    if (warpSum > c.warpDestination) c.warpDestination = warpSum;
+    c.warp++;
+  }
+
   // --- beat -> time (ITGmania GetElapsedTimeInternal) ----------------------
 
   private elapsedTimeInternal(c: Cursor, beat: number): number {
@@ -193,14 +227,9 @@ export class TimingData {
           break;
         case EventType.Marker:
           return c.lastTime;
-        case EventType.Warp: {
-          c.isWarping = true;
-          const ws = this.warps[c.warp];
-          const warpSum = noteRowToBeat(ws.lengthRows) + noteRowToBeat(ws.row);
-          if (warpSum > c.warpDestination) c.warpDestination = warpSum;
-          c.warp++;
+        case EventType.Warp:
+          this.advanceWarp(c);
           break;
-        }
         case EventType.NotFound:
           // Unreachable for beat->time: the marker always fires first.
           return c.lastTime;
@@ -272,16 +301,11 @@ export class TimingData {
           c.stop++;
           break;
         }
-        case EventType.Warp: {
-          c.isWarping = true;
-          const ws = this.warps[c.warp];
-          const warpSum = noteRowToBeat(ws.lengthRows) + noteRowToBeat(ws.row);
-          if (warpSum > c.warpDestination) c.warpDestination = warpSum;
+        case EventType.Warp:
+          this.advanceWarp(c);
           warpBeginRow = ev.row;
           warpDestination = c.warpDestination;
-          c.warp++;
           break;
-        }
         case EventType.Marker:
           break; // not used in time->beat
       }
