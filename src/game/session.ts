@@ -57,6 +57,10 @@ export class GameSession {
   usingRealAudio = false;
   /** Per-tap timing errors in seconds (negative = early), for the results graph. */
   readonly offsets: number[] = [];
+  /** Steps successfully hit this session (W1–W5). Session-lifetime: unlike the
+   *  judge's counts it survives practice-loop resets, so the global lifetime
+   *  step counter (app/stats.ts) can bank it once when the session ends. */
+  stepsTaken = 0;
 
   private dpr = 1;
   private raf = 0;
@@ -244,7 +248,10 @@ export class GameSession {
     const ev = this.judge.step(track, t, false);
     if (ev && ev.tns !== TapNoteScore.None) {
       this.feedback.laneHit[track] = { tns: ev.tns, atSeconds: t };
-      if (ev.tns !== TapNoteScore.HitMine) this.offsets.push(ev.offset);
+      if (ev.tns !== TapNoteScore.HitMine) {
+        this.offsets.push(ev.offset);
+        this.stepsTaken++;
+      }
     }
   }
 

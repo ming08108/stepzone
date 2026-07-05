@@ -22,9 +22,11 @@ import {
   TapNoteType,
   type TapNote,
 } from '../notes/noteTypes';
+import { isVideoFile } from '../io/songFiles';
 import { columnAnglesFor } from '../render/columns';
 import { type Feedback, type NoteFieldConfig, NoteFieldRenderer } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
+import type { RenderMeta } from '../render/theme';
 import { TimingData } from '../timing/timingData';
 
 /**
@@ -46,6 +48,11 @@ export function NoteFieldPreview({
   reverse,
   loopWindow = null,
   clock = null,
+  hud = false,
+  meta = null,
+  background = null,
+  bgDim = 0.6,
+  mediaRate = 1,
 }: {
   noteData: NoteData;
   timing: TimingData;
@@ -62,6 +69,17 @@ export function NoteFieldPreview({
    *  null when nothing is playing. When it yields a position the field follows
    *  it exactly (audio/visual sync); on null it free-runs. */
   clock?: (() => number | null) | null;
+  /** Draw the full HUD chrome (song panel, gauge, score, judgments) — the
+   *  Player Options preview looks just like the real thing. */
+  hud?: boolean;
+  /** Song title/artist/difficulty for the HUD panels (with `hud`). */
+  meta?: RenderMeta | null;
+  /** Background image/video File behind the field (with `hud`), like play. */
+  background?: File | null;
+  /** Dark-overlay alpha on the background media (matches session's bgMode). */
+  bgDim?: number;
+  /** Playback rate for a background video, matching the audio preview. */
+  mediaRate?: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   // Live-applied per frame (no rebuild): scroll.
@@ -80,6 +98,26 @@ export function NoteFieldPreview({
     const angles = columnAnglesFor(stepsType, noteData.numTracks);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const LOOP = 9; // seconds of chart shown before looping
+
+    // Background media (with hud): the same image/video the real session draws.
+    let bgMedia: HTMLVideoElement | HTMLImageElement | null = null;
+    let bgUrl: string | null = null;
+    if (hud && background) {
+      bgUrl = URL.createObjectURL(background);
+      if (isVideoFile(background.name)) {
+        const v = document.createElement('video');
+        v.src = bgUrl;
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.playbackRate = mediaRate;
+        bgMedia = v;
+      } else {
+        const img = new Image();
+        img.src = bgUrl;
+        bgMedia = img;
+      }
+    }
 
     let judge!: Judge;
     let renderer!: NoteFieldRenderer;
@@ -105,12 +143,14 @@ export function NoteFieldPreview({
         columnAngles: angles,
         noteSkin,
         reverse,
-        bare: true, // notefield only — no HUD chrome in the preview
-        bgDim: 1, // no song background in the preview
+        bare: !hud, // hud: the real chrome; else notefield only
+        bgDim: hud ? bgDim : 1,
         scrollMode: liveRef.current.scrollMode,
         scrollValue: liveRef.current.scrollValue,
         songMaxBpm: maxBpm,
+        ...(hud && meta ? { meta } : {}),
       });
+      renderer.setBackground(bgMedia);
       resize();
       feedback = {
         lastJudgment: null,
@@ -215,20 +255,53 @@ export function NoteFieldPreview({
         lastSeq = judge.judgmentSeq;
         feedback.lastJudgment = { tns: judge.lastTns, atSeconds: now };
       }
+      // Keep a background video loosely synced to the (audio-driven) clock,
+      // exactly like the real session does.
+      if (bgMedia instanceof HTMLVideoElement && now >= 0) {
+        const v = bgMedia;
+        if (v.paused) {
+          v.currentTime = Math.max(0, now);
+          void v.play().catch(() => {});
+        } else if (Math.abs(v.currentTime - now) > 0.35) {
+          v.currentTime = Math.max(0, now);
+        }
+      }
       livePatch.scrollMode = liveRef.current.scrollMode;
       livePatch.scrollValue = liveRef.current.scrollValue;
       renderer.applyConfig(livePatch);
       const beat = timing.getBeatFromElapsedTime(now);
-      renderer.draw(ctx, judge, now, beat, 0, feedback);
+      // HUD progress hairline: the loop for a practice section, else the song.
+      const progress = !hud
+        ? 0
+        : loopWindow
+          ? Math.min(
+              1,
+              Math.max(
+                0,
+                (now - loopWindow.startSeconds) /
+                  Math.max(0.001, loopWindow.endSeconds - loopWindow.startSeconds),
+              ),
+            )
+          : songEnd > 0
+            ? Math.min(1, Math.max(0, now / songEnd))
+            : 0;
+      renderer.draw(ctx, judge, now, beat, progress, feedback);
       raf = requestAnimationFrame(frame);
     };
+    const songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
     raf = requestAnimationFrame(frame);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      if (bgMedia instanceof HTMLVideoElement) {
+        bgMedia.pause();
+        bgMedia.removeAttribute('src');
+        bgMedia.load();
+      }
+      if (bgUrl) URL.revokeObjectURL(bgUrl);
     };
-    // Primitive deps for the window so a fresh object each render is fine.
+    // Primitive deps for the window/meta so fresh objects each render are fine.
   }, [
     noteData,
     timing,
@@ -237,6 +310,13 @@ export function NoteFieldPreview({
     reverse,
     loopWindow?.startSeconds,
     loopWindow?.endSeconds,
+    hud,
+    bgDim,
+    background,
+    mediaRate,
+    meta?.title,
+    meta?.subtitle,
+    meta?.difficulty,
   ]);
 
   return <canvas ref={ref} className="h-full w-full" />;

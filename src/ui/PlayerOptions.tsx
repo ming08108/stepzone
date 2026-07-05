@@ -192,10 +192,17 @@ export function PlayerOptions({
           lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds + PREVIEW_TAIL_SECONDS - start),
         };
       }
-      previewEncoded(req.song.title || req.song.musicFile, req.encodedAudio, req.song, 250, win);
+      previewEncoded(
+        req.song.title || req.song.musicFile,
+        req.encodedAudio,
+        req.song,
+        250,
+        win,
+        settings.musicRate,
+      );
     }
     return () => stopPreview();
-  }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds]);
+  }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds, settings.musicRate]);
   /** Click on the song map: drag whichever loop edge is closer to that measure
    *  (ties break toward the side of the section the click landed on, so a
    *  single-measure loop can still be stretched either way). */
@@ -586,6 +593,15 @@ export function PlayerOptions({
               reverse={settings.reverse}
               loopWindow={sectionSeconds}
               clock={previewPositionSeconds}
+              hud
+              meta={{
+                title: req.song.title || 'Untitled',
+                subtitle: req.song.artist,
+                difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
+              }}
+              background={settings.bgMode === 'off' ? null : (req.backgroundFile ?? null)}
+              bgDim={settings.bgMode === 'full' ? 0.25 : 0.6}
+              mediaRate={settings.musicRate}
             />
           </div>
         </div>

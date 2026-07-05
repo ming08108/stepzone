@@ -10,6 +10,7 @@ import { starterEntries } from '../starter';
 import {
   filesFromDataTransfer,
   loadLibraryFromFiles,
+  pickPackImage,
   readSongAudio,
   songBpmRange,
   type LibraryEntry,
@@ -35,14 +36,18 @@ import {
 } from '../io/localFolder';
 import { difficultyToString } from '../song/difficulty';
 import { Song } from '../song/song';
-import { previewSong, stopPreview } from '../audio/songPreview';
+import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
+import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
+import { loadScores } from '../app/scores';
+import { loadStats } from '../app/stats';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 
 const AC = '#ff5d47';
+const FAV_CLR = '#ffcf3d';
 const DIFF_NAMES = ['BEGINNER', 'EASY', 'MEDIUM', 'HARD', 'EXPERT'];
 const DIFF_CLR = ['#37d5ff', '#ffcf3d', '#ff5c5c', '#59f07f', '#c86bff'];
-const SORTS = ['title', 'artist', 'pack', 'bpm', 'level'] as const;
+const SORTS = ['title', 'artist', 'pack', 'bpm', 'level', 'best', 'plays'] as const;
 type Sort = (typeof SORTS)[number];
 
 const ROW_H = 44;
@@ -53,25 +58,43 @@ const ROW_H = 44;
 // page reload restores the library from the remembered folder on disk.
 let libraryCache: LibraryEntry[] | null = null;
 
+// Pack background art (todos3 #8): pack name -> object URL, null = known none.
+// Module-scoped like libraryCache so revisits don't re-read pack folders.
+const packArtUrls = new Map<string, string | null>();
+
+/** Stash freshly-walked pack art (full scans carry the pack-root files). */
+function stashPackImages(packImages: Map<string, File>): void {
+  for (const [pack, file] of packImages) {
+    if (!packArtUrls.get(pack)) packArtUrls.set(pack, URL.createObjectURL(file));
+  }
+}
+
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
 const savedFilters = {
-  sort: 'title' as Sort,
+  sort: 'pack' as Sort, // packs are the arcade's natural grouping (todos3 #7)
   search: '',
   minLv: 1,
   maxLv: 20,
   sel: 0,
   diff: 2,
+  favOnly: false,
 };
 
 interface SongVM {
   entry: LibraryEntry;
+  /** Favorites/stats key (app/favorites songKey). */
+  key: string;
   title: string;
   artist: string;
   pack: string;
   bpm: string;
   bpmSort: number;
   levels: Array<number | null>;
+  /** Best recorded score across this song's charts, or null (app/scores). */
+  best: { percent: number; grade: string } | null;
+  /** Times a play of this song was started (app/stats). */
+  plays: number;
 }
 
 function slotOf(name: string): number {
@@ -178,8 +201,31 @@ export function SongSelect({
   const [search, setSearch] = useState(savedFilters.search);
   const [minLv, setMinLv] = useState(savedFilters.minLv);
   const [maxLv, setMaxLv] = useState(savedFilters.maxLv);
+  const [favOnly, setFavOnly] = useState(savedFilters.favOnly);
+  const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
+
+  // Lifetime stats/scores, fresh each visit (plays recorded while away land).
+  const stats = useMemo(() => loadStats(), []);
+  const bestBySong = useMemo(() => {
+    const m = new Map<string, { percent: number; grade: string }>();
+    for (const [k, s] of Object.entries(loadScores())) {
+      // chartKey = songKey·stepsType·difficulty·meter — strip the last three.
+      const sk = k.split('·').slice(0, -3).join('·');
+      const prev = m.get(sk);
+      if (!prev || s.percent > prev.percent) m.set(sk, { percent: s.percent, grade: s.grade });
+    }
+    return m;
+  }, []);
+
+  const toggleFav = (k: string) => {
+    const next = new Set(favs);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
+    saveFavorites(next);
+    setFavs(next);
+  };
   const searchRef = useRef<HTMLInputElement>(null);
   const wheelAcc = useRef(0);
   useGamepadKeys();
@@ -210,9 +256,10 @@ export function SongSelect({
     if (files.length === 0) return;
     setLoading({ msg: 'LOADING SONGS…' });
     try {
-      const { entries: loaded } = await loadLibraryFromFiles(files, (done, total) =>
+      const { entries: loaded, packImages } = await loadLibraryFromFiles(files, (done, total) =>
         setLoading({ msg: `LOADING SONGS… ${done} / ${total}`, frac: done / total }),
       );
+      stashPackImages(packImages);
       const tagged = sourceId ? loaded.map((e) => ({ ...e, sourceId })) : loaded;
       if (tagged.length) {
         setEntries((prev) => [
@@ -402,24 +449,30 @@ export function SongSelect({
     () =>
       entries.map((e) => {
         const b = bpmText(e);
+        const title = e.song.title || e.sourceName;
+        const key = songKey(title, e.song.artist);
         return {
           entry: e,
-          title: e.song.title || e.sourceName,
+          key,
+          title,
           artist: e.song.artist,
           pack: e.pack ?? '',
           bpm: b.text,
           bpmSort: b.sort,
           // Catalog rows carry cached levels until their simfile is parsed.
           levels: e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
+          best: bestBySong.get(key) ?? null,
+          plays: stats.songPlays[key] ?? 0,
         };
       }),
-    [entries],
+    [entries, bestBySong, stats],
   );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const rows = songs.filter(
       (s) =>
+        (!favOnly || favs.has(s.key)) &&
         (!q ||
           s.title.toLowerCase().includes(q) ||
           s.artist.toLowerCase().includes(q) ||
@@ -437,13 +490,18 @@ export function SongSelect({
             ? (s) => s.bpmSort
             : sort === 'level'
               ? (s) => s.levels[diff] ?? 99
-              : (s) => s.title.toLowerCase();
+              : sort === 'best'
+                ? // Highest score first; never-played songs sort last.
+                  (s) => -(s.best?.percent ?? -1)
+                : sort === 'plays'
+                  ? (s) => -s.plays // most played first
+                  : (s) => s.title.toLowerCase();
     return rows.slice().sort((x, y) => {
       const a = key(x);
       const b = key(y);
       return a < b ? -1 : a > b ? 1 : 0;
     });
-  }, [songs, search, minLv, maxLv, sort, diff]);
+  }, [songs, search, minLv, maxLv, favOnly, favs, sort, diff]);
 
   const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
   const song = filtered[selClamped];
@@ -456,6 +514,7 @@ export function SongSelect({
     savedFilters.maxLv = maxLv;
     savedFilters.sel = selClamped;
     savedFilters.diff = diff;
+    savedFilters.favOnly = favOnly;
   });
 
   // Loop the highlighted song's sample snippet (#5); stop when leaving.
@@ -465,13 +524,69 @@ export function SongSelect({
     if (!song?.entry) return;
     let alive = true;
     void ensureLoaded(song.entry).then((e) => {
-      if (alive) previewSong(e);
+      // Already-decoded audio (prefetched neighbors) starts near-instantly.
+      if (alive) previewSong(e, previewCached(e) ? 120 : 450);
     });
     return () => {
       alive = false;
     };
   }, [song?.entry, ensureLoaded]);
   useEffect(() => () => stopPreview(), []);
+
+  // Warm the preview cache for songs near the cursor (todos3 #4), so scrolling
+  // onto a neighbor starts its sample immediately instead of after a decode.
+  useEffect(() => {
+    if (filtered.length === 0) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      void (async () => {
+        for (const off of [1, -1, 2, -2]) {
+          const vm = filtered[selClamped + off];
+          if (!vm || !alive) continue;
+          const e = await ensureLoaded(vm.entry); // no-op unless a catalog row
+          if (alive) prefetchSong(e);
+        }
+      })();
+    }, 350);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [selClamped, filtered, ensureLoaded]);
+
+  // The selected song's pack art, as a dim backdrop behind the list (#8).
+  // Full scans stashed it already; catalog rows resolve it with one directory
+  // listing of the pack folder, remembered (even as "none") per pack.
+  const [packArt, setPackArt] = useState<string | null>(null);
+  useEffect(() => {
+    const pack = song?.pack || '';
+    const entry = song?.entry;
+    if (!pack || !entry) {
+      setPackArt(null);
+      return;
+    }
+    const known = packArtUrls.get(pack);
+    if (known !== undefined) {
+      setPackArt(known);
+      return;
+    }
+    if (!entry.sourceId || !entry.lazyDir || !entry.lazyDir.includes('/')) {
+      setPackArt(null);
+      return;
+    }
+    let alive = true;
+    setPackArt(null);
+    const packDir = entry.lazyDir.slice(0, entry.lazyDir.lastIndexOf('/'));
+    void readSongFolder(entry.sourceId, packDir).then((files) => {
+      const pick = pickPackImage(files ?? []);
+      const url = pick ? URL.createObjectURL(pick) : null;
+      packArtUrls.set(pack, url);
+      if (alive) setPackArt(url);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [song?.pack, song?.entry]);
 
   const start = useCallback(async () => {
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
@@ -492,21 +607,33 @@ export function SongSelect({
   }, [filtered, sel, diff, onPlay, ensureLoaded]);
 
   const reset = () => {
-    setSort('title');
+    setSort('pack');
     setSearch('');
     setMinLv(1);
     setMaxLv(20);
+    setFavOnly(false);
   };
   const adjust = (i: number, dir: number) => {
     if (i === 0) setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
     else if (i === 1) setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
     else if (i === 2) setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
+    else if (i === 3) setFavOnly((v) => !v);
   };
 
   // Keyboard navigation (arcade model).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', 'Shift'];
+      const keys = [
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'Enter',
+        'Escape',
+        'Shift',
+        'f',
+        'F',
+      ];
       if (!keys.includes(e.key)) return;
       const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
       if (overlay) {
@@ -518,10 +645,10 @@ export function SongSelect({
         if (typing && e.key !== 'Enter') return;
         e.preventDefault();
         if (e.key === 'ArrowLeft') setOsel((v) => Math.max(0, v - 1));
-        else if (e.key === 'ArrowRight') setOsel((v) => Math.min(3, v + 1));
+        else if (e.key === 'ArrowRight') setOsel((v) => Math.min(4, v + 1));
         else if (e.key === 'ArrowUp') adjust(osel, 1);
         else if (e.key === 'ArrowDown') adjust(osel, -1);
-        else if (e.key === 'Enter') osel === 3 ? reset() : setOverlay(false);
+        else if (e.key === 'Enter') osel === 4 ? reset() : setOverlay(false);
       } else {
         if (typing) return;
         e.preventDefault();
@@ -531,7 +658,10 @@ export function SongSelect({
         else if (e.key === 'ArrowLeft') setDiff((v) => Math.max(0, v - 1));
         else if (e.key === 'ArrowRight') setDiff((v) => Math.min(4, v + 1));
         else if (e.key === 'Enter') void start();
-        else if (e.key === 'Escape' || e.key === 'Shift') {
+        else if (e.key === 'f' || e.key === 'F') {
+          const s = filtered[selClamped];
+          if (s) toggleFav(s.key);
+        } else if (e.key === 'Escape' || e.key === 'Shift') {
           setOverlay(true);
           setOsel(0);
         }
@@ -539,7 +669,7 @@ export function SongSelect({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [overlay, osel, filtered.length, selClamped, start, sort, minLv, maxLv]);
+  }, [overlay, osel, filtered, selClamped, start, sort, minLv, maxLv, favs]);
 
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
@@ -585,6 +715,7 @@ export function SongSelect({
     { label: 'SORT', value: sort.toUpperCase() },
     { label: 'MIN LV', value: String(minLv) },
     { label: 'MAX LV', value: String(maxLv) },
+    { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL' },
     { label: 'RESET', value: '↺' },
   ];
 
@@ -607,6 +738,7 @@ export function SongSelect({
           </span>
         </div>
         <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
+          <span title="Lifetime steps hit">{stats.steps.toLocaleString()} STEPS</span>
           <span>{filtered.length} SONGS</span>
           <button
             onClick={() => setShowSources((v) => !v)}
@@ -687,8 +819,7 @@ export function SongSelect({
           {videoCache && videoCache.count > 0 && (
             <div className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2 text-[#ececec]/40">
               <span title="Legacy .avi/.mpg backgrounds converted for browser playback">
-                BG VIDEO CACHE — {(videoCache.bytes / 1048576).toFixed(0)} MB (
-                {videoCache.count})
+                BG VIDEO CACHE — {(videoCache.bytes / 1048576).toFixed(0)} MB ({videoCache.count})
               </span>
               <button
                 onClick={() =>
@@ -750,7 +881,19 @@ export function SongSelect({
           )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <div className="truncate text-[34px] font-bold leading-[1.15]">{song?.title ?? '—'}</div>
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              onClick={() => song && toggleFav(song.key)}
+              title="Favorite (F)"
+              className="flex-none text-[26px] leading-none"
+              style={{ color: song && favs.has(song.key) ? FAV_CLR : 'rgba(236,236,236,.25)' }}
+            >
+              {song && favs.has(song.key) ? '★' : '☆'}
+            </button>
+            <div className="truncate text-[34px] font-bold leading-[1.15]">
+              {song?.title ?? '—'}
+            </div>
+          </div>
           <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
           <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
             <span>BPM {song?.bpm ?? '—'}</span>
@@ -758,6 +901,12 @@ export function SongSelect({
             <span className="font-bold" style={{ color: AC }}>
               {DIFF_NAMES[diff]} {song?.levels[diff] ?? '—'}
             </span>
+            {song?.best && (
+              <span style={{ color: '#59f07f' }}>
+                BEST {(song.best.percent * 100).toFixed(2)}% · {song.best.grade}
+              </span>
+            )}
+            {song != null && song.plays > 0 && <span>{song.plays} PLAYS</span>}
           </div>
         </div>
         <div className="flex flex-none flex-col items-stretch gap-[5px]">
@@ -803,7 +952,7 @@ export function SongSelect({
               key={o.label}
               onClick={() => {
                 setOsel(i);
-                i === 3 ? reset() : adjust(i, 1);
+                i === overlayRows.length - 1 ? reset() : adjust(i, 1);
               }}
               className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
               style={{
@@ -826,13 +975,15 @@ export function SongSelect({
       </div>
 
       {/* Column headers */}
-      <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_0.75fr_90px_76px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
+      <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
         {(
           [
             ['TITLE', 'title', false],
             ['ARTIST', 'artist', false],
             ['PACK', 'pack', false],
             ['BPM', 'bpm', true],
+            ['BEST', 'best', true],
+            ['PLAYS', 'plays', true],
             ['LV', 'level', true],
           ] as const
         ).map(([label, key, end]) => {
@@ -862,6 +1013,15 @@ export function SongSelect({
       <div
         ref={listRef}
         className="relative min-h-0 flex-1 overflow-hidden"
+        style={
+          packArt
+            ? {
+                backgroundImage: `linear-gradient(to right, #0b0c0e 0%, rgba(11,12,14,.62) 30%, rgba(11,12,14,.62) 70%, #0b0c0e 100%), url(${packArt})`,
+                backgroundSize: 'auto, cover',
+                backgroundPosition: 'center, center',
+              }
+            : undefined
+        }
         onWheel={(e) => {
           // Scroll wheel moves the selection (#6). Accumulate for trackpads.
           wheelAcc.current += e.deltaY;
@@ -900,7 +1060,7 @@ export function SongSelect({
                     setSel(i);
                     void start();
                   }}
-                  className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.75fr_90px_76px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
+                  className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
                   style={{
                     top: i * ROW_H,
                     height: ROW_H,
@@ -911,12 +1071,25 @@ export function SongSelect({
                     borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
                   }}
                 >
-                  <span className="overflow-hidden text-ellipsis">{s.title}</span>
+                  <span className="overflow-hidden text-ellipsis">
+                    {favs.has(s.key) && (
+                      <span className="mr-1" style={{ color: FAV_CLR }}>
+                        ★
+                      </span>
+                    )}
+                    {s.title}
+                  </span>
                   <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
                   <span className="overflow-hidden text-ellipsis text-[14px] opacity-40">
                     {s.pack || '—'}
                   </span>
                   <span className="justify-self-end opacity-60">{s.bpm}</span>
+                  <span className="justify-self-end text-[13px] opacity-70">
+                    {s.best ? `${(s.best.percent * 100).toFixed(1)} ${s.best.grade}` : ''}
+                  </span>
+                  <span className="justify-self-end text-[13px] opacity-45">
+                    {s.plays > 0 ? s.plays : ''}
+                  </span>
                   <span
                     className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
                     style={{ background: AC + '1f', color: AC }}
@@ -972,12 +1145,7 @@ export function SongSelect({
         <span>◀▶ DIFFICULTY</span>
         <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — CONFIRM</span>
         <button onClick={() => setOverlay((v) => !v)}>SELECT — SORT / FILTER</button>
-        <span className="flex-1" />
-        {bgConvert && (
-          <span className="truncate" title="Converting a legacy background video for this browser">
-            CONVERTING BG — {bgConvert.name.toUpperCase()} {Math.round(bgConvert.progress * 100)}%
-          </span>
-        )}
+        <span>F — FAVORITE</span>
       </div>
     </div>
   );

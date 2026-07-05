@@ -125,11 +125,15 @@ export interface LibraryEntry {
   lazyDir?: string;
 }
 
-/** Group files by folder and parse every song found (metadata + banner only). */
+/**
+ * Group files by folder and parse every song found (metadata + banner only).
+ * `packImages` carries pack-root art (a pack folder's own banner/background
+ * image, when the walk included one) keyed by pack name.
+ */
 export async function loadLibraryFromFiles(
   files: File[],
   onProgress?: (done: number, total: number) => void,
-): Promise<{ entries: LibraryEntry[]; warnings: string[] }> {
+): Promise<{ entries: LibraryEntry[]; warnings: string[]; packImages: Map<string, File> }> {
   const warnings: string[] = [];
   const groups = new Map<string, File[]>();
   for (const f of files) {
@@ -164,7 +168,18 @@ export async function loadLibraryFromFiles(
 
   if (entries.length === 0) warnings.push('No .sm/.ssc simfiles found in the selection.');
   entries.sort((a, b) => (a.song.title || '').localeCompare(b.song.title || ''));
-  return { entries, warnings };
+
+  // Pack-root art: the group at a pack's own folder (no simfile there) often
+  // holds a banner/background image for the whole pack.
+  const packImages = new Map<string, File>();
+  for (const e of entries) {
+    if (!e.pack || packImages.has(e.pack)) continue;
+    const dir = dirOf(e.files[0]);
+    const packDir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
+    const pick = pickPackImage(groups.get(packDir) ?? []);
+    if (pick) packImages.set(e.pack, pick);
+  }
+  return { entries, warnings, packImages };
 }
 
 /** Read (and decode-ready) the audio bytes for a library entry, or null. */
@@ -179,6 +194,23 @@ const BG_IMG_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 
 export function isVideoFile(name: string): boolean {
   return BG_VIDEO_EXT.includes(ext(name));
+}
+
+/** True when a filename is an image by extension. */
+export function isImageFile(name: string): boolean {
+  return BG_IMG_EXT.includes(ext(name));
+}
+
+/** The best pack-art candidate among a folder's files: an image named like a
+ *  background, else one named like a banner, else any image; null when none. */
+export function pickPackImage(files: File[]): File | null {
+  const imgs = files.filter((f) => isImageFile(f.name));
+  return (
+    imgs.find((f) => /bg|background/i.test(f.name)) ??
+    imgs.find((f) => /banner/i.test(f.name)) ??
+    imgs[0] ??
+    null
+  );
 }
 
 /** True when a filename is a browser-playable background (image or video) by extension. */

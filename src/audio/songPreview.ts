@@ -37,13 +37,49 @@ function audio(): AudioContext | null {
 }
 
 const bufCache = new Map<string, AudioBuffer>();
-const MAX_CACHE = 6;
+const MAX_CACHE = 12; // current + a few scroll steps of prefetched neighbors
 function cache(key: string, buf: AudioBuffer): void {
   bufCache.set(key, buf);
   if (bufCache.size > MAX_CACHE) {
     const first = bufCache.keys().next().value;
     if (first) bufCache.delete(first);
   }
+}
+
+/** Cache key for a library entry (song folder path — names collide across packs). */
+function entryKey(entry: LibraryEntry): string {
+  return entry.files[0]?.webkitRelativePath || entry.sourceName;
+}
+
+/** Is this entry's audio already decoded (a preview would start instantly)? */
+export function previewCached(entry: LibraryEntry): boolean {
+  return bufCache.has(entryKey(entry));
+}
+
+const inflight = new Set<string>();
+
+/**
+ * Warm the preview cache for a song without playing it — the song-select
+ * cursor's neighbors, so scrolling onto them starts their sample immediately.
+ * Never touches the currently playing/debounced preview; silent on failure.
+ */
+export function prefetchSong(entry: LibraryEntry): void {
+  const ac = audio();
+  if (!ac) return;
+  const key = entryKey(entry);
+  if (bufCache.has(key) || inflight.has(key)) return;
+  inflight.add(key);
+  void (async () => {
+    try {
+      const enc = await readSongAudio(entry);
+      if (!enc || bufCache.has(key)) return;
+      cache(key, await ac.decodeAudioData(enc.slice(0)));
+    } catch {
+      // silent by contract (see header) — no prefetch, preview decodes later
+    } finally {
+      inflight.delete(key);
+    }
+  })();
 }
 
 let token = 0; // bumped to cancel any in-flight / scheduled preview
@@ -101,7 +137,13 @@ export interface PreviewLoopWindow {
   lengthSeconds: number;
 }
 
-function begin(ac: AudioContext, buf: AudioBuffer, song: Song, win?: PreviewLoopWindow): void {
+function begin(
+  ac: AudioContext,
+  buf: AudioBuffer,
+  song: Song,
+  win?: PreviewLoopWindow,
+  rate = 1,
+): void {
   const { startSeconds: start, lengthSeconds: len } = win
     ? {
         startSeconds: Math.min(Math.max(0, win.startSeconds), Math.max(0, buf.duration - 0.5)),
@@ -113,6 +155,7 @@ function begin(ac: AudioContext, buf: AudioBuffer, song: Song, win?: PreviewLoop
     : previewWindow(buf.duration, song.sampleStartSeconds, song.sampleLengthSeconds);
   const src = ac.createBufferSource();
   src.buffer = buf;
+  src.playbackRate.value = rate;
   src.loop = true;
   src.loopStart = start;
   src.loopEnd = start + len;
@@ -128,7 +171,8 @@ function begin(ac: AudioContext, buf: AudioBuffer, song: Song, win?: PreviewLoop
     return;
   }
   const sync = new SyncMap();
-  sync.startContextTime = when - start; // rate 1: song-second 0 <-> context time
+  sync.playbackRate = rate;
+  sync.startContextTime = when - start / rate; // song-second 0 <-> context time
   gain.gain.setValueAtTime(0, when);
   gain.gain.linearRampToValueAtTime(PREVIEW_GAIN, when + FADE_IN_SECONDS); // fade in
   current = { src, gain, sync, startOffset: start, loopLen: len };
@@ -141,13 +185,18 @@ type ResolvePreview = (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: So
  * playing or pending, claim a fresh token, and run `resolve` after `delayMs`
  * unless a newer request supersedes it in the meantime.
  */
-function schedulePreview(delayMs: number, resolve: ResolvePreview, win?: PreviewLoopWindow): void {
+function schedulePreview(
+  delayMs: number,
+  resolve: ResolvePreview,
+  win?: PreviewLoopWindow,
+  rate = 1,
+): void {
   const ac = audio();
   if (!ac) return;
   stopPreview();
   const myToken = ++token;
   debounce = setTimeout(() => {
-    void run(myToken, resolve, win);
+    void run(myToken, resolve, win, rate);
   }, delayMs);
 }
 
@@ -155,6 +204,7 @@ async function run(
   myToken: number,
   resolve: ResolvePreview,
   win?: PreviewLoopWindow,
+  rate = 1,
 ): Promise<void> {
   try {
     const ac = audio();
@@ -162,7 +212,7 @@ async function run(
     void ac.resume().catch(() => {});
     const res = await resolve(ac);
     if (!res || myToken !== token) return;
-    begin(ac, res.buf, res.song, win);
+    begin(ac, res.buf, res.song, win, rate);
   } catch {
     // Silent by contract (see header): read/decode failures just mean
     // no preview, never an unhandled rejection.
@@ -190,8 +240,7 @@ async function decodeEnc(
 /** Preview a library entry after a short settle delay (song-select hover). */
 export function previewSong(entry: LibraryEntry, delayMs = 450): void {
   schedulePreview(delayMs, async (ac) => {
-    // Key on the song folder's path — simfile names alone collide across packs.
-    const key = entry.files[0]?.webkitRelativePath || entry.sourceName;
+    const key = entryKey(entry);
     const cached = bufCache.get(key);
     if (cached) return { buf: cached, song: entry.song };
     const enc = await readSongAudio(entry);
@@ -201,13 +250,15 @@ export function previewSong(entry: LibraryEntry, delayMs = 450): void {
 }
 
 /** Preview already-decoded-in-memory encoded audio (Player Options has it loaded).
- *  `win` overrides the loop to an explicit window — the practice section. */
+ *  `win` overrides the loop to an explicit window — the practice section —
+ *  and `rate` plays it at the chosen MUSIC RATE, like gameplay will. */
 export function previewEncoded(
   key: string,
   enc: ArrayBuffer,
   song: Song,
   delayMs = 250,
   win?: PreviewLoopWindow,
+  rate = 1,
 ): void {
-  schedulePreview(delayMs, (ac) => decodeEnc(key, enc, song, ac), win);
+  schedulePreview(delayMs, (ac) => decodeEnc(key, enc, song, ac), win, rate);
 }

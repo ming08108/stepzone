@@ -5,7 +5,9 @@ import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
 import { difficultyToString } from '../song/difficulty';
 import { TapNoteScore } from '../notes/noteTypes';
+import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
+import { addSongPlay, addSteps } from '../app/stats';
 import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
@@ -122,6 +124,18 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
+  // Bank a session's hit steps into the lifetime counter exactly once —
+  // whichever comes first of finishing, retrying, or leaving mid-song.
+  const bankedRef = useRef(new WeakSet<GameSession>());
+  const bankSteps = (s: GameSession | null) => {
+    if (!s || bankedRef.current.has(s)) return;
+    bankedRef.current.add(s);
+    addSteps(s.stepsTaken);
+  };
+  // Count a play once per run: guarded so StrictMode's doubled mount effect
+  // (which calls start() twice in dev) can't double-count; re-armed on the
+  // results screen so RETRY counts as a fresh play.
+  const playCountedRef = useRef(false);
 
   const cleanupBg = () => {
     const m = bgMediaRef.current;
@@ -186,6 +200,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
   useEffect(
     () => () => {
+      bankSteps(sessionRef.current);
       sessionRef.current?.stop();
       cleanupBg();
     },
@@ -200,8 +215,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const start = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    bankSteps(sessionRef.current);
     sessionRef.current?.stop();
     cleanupBg();
+    if (!playCountedRef.current) {
+      playCountedRef.current = true;
+      addSongPlay(songKey(req.song.title, req.song.artist));
+    }
 
     const session = new GameSession(req.song, req.chart, canvas, {
       scrollMode: settings.scrollMode,
@@ -219,6 +239,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     setLoopNum(1);
     session.onLoop = setLoopNum;
     session.onEnd = (judge) => {
+      bankSteps(session);
+      playCountedRef.current = false; // a RETRY from here is a new play
       const counts = { ...judge.tapCounts };
       // Practice runs never reach here (they loop until exit), but make sure a
       // section-only score can never land in the real records.
