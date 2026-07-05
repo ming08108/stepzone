@@ -1,13 +1,19 @@
 /**
  * Song preview player (#5): loops a song's sample snippet (SAMPLESTART/LENGTH)
  * while it's highlighted in the menus and on the Player Options screen. Runs on
- * its own AudioContext, independent of gameplay. Debounced so scrolling the list
- * doesn't hammer the disk/decoder, with a small decoded-buffer cache. Every
- * failure is silent (no preview) — it's a nicety, never blocking.
+ * its own AudioContext, independent of gameplay — but exposes its audible
+ * position through the SAME clock mapping gameplay uses (SyncMap anchored via
+ * anchorSyncFromOutput, see audio/clock.ts), so UI synced to
+ * previewPositionSeconds() can never drift from the music. Debounced so
+ * scrolling the list doesn't hammer the disk/decoder, with a small
+ * decoded-buffer cache. Every failure is silent (no preview) — it's a nicety,
+ * never blocking.
  */
 import { type LibraryEntry, readSongAudio } from '../io/songFiles';
 import type { Song } from '../song/song';
+import { anchorSyncFromOutput } from './clock';
 import { previewWindow } from './previewWindow';
+import { SyncMap } from './syncMap';
 
 // Fade/stop envelope (seconds) and target loudness for the preview loop.
 const FADE_IN_SECONDS = 0.25;
@@ -44,9 +50,11 @@ let token = 0; // bumped to cancel any in-flight / scheduled preview
 let current: {
   src: AudioBufferSourceNode;
   gain: GainNode;
-  /** Context time when the source started, plus its loop geometry — enough to
-   *  reconstruct the audible song position at any later moment. */
-  startedAt: number;
+  /** The gameplay clock mapping (audio/syncMap.ts): song-second 0 anchored to
+   *  the scheduled start, re-anchored per read from getOutputTimestamp — the
+   *  SAME sync path as WebAudioClock, so the preview sits on the audible axis
+   *  with no drift and no output-latency lead. */
+  sync: SyncMap;
   startOffset: number;
   loopLen: number;
 } | null = null;
@@ -54,14 +62,16 @@ let debounce: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * The song position (seconds into the audio file) the playing preview loop is
- * at right now, or null when nothing is playing. Pure read — UI playheads
- * poll this per frame.
+ * *audibly* at right now, or null when nothing is playing. UI playheads and
+ * the synced note-field preview poll this per frame.
  */
 export function previewPositionSeconds(): number | null {
   if (!current || !ctx) return null;
-  const elapsed = ctx.currentTime - current.startedAt;
-  if (elapsed <= 0) return current.startOffset;
-  return current.startOffset + (elapsed % current.loopLen);
+  anchorSyncFromOutput(ctx, current.sync);
+  // The un-looped timeline since the scheduled start, folded into the loop.
+  const rel = current.sync.songSecondsAtPerf(performance.now()) - current.startOffset;
+  if (rel <= 0) return current.startOffset; // start lead: nothing audible yet
+  return current.startOffset + (rel % current.loopLen);
 }
 
 export function stopPreview(): void {
@@ -109,14 +119,19 @@ function begin(ac: AudioContext, buf: AudioBuffer, song: Song, win?: PreviewLoop
   const gain = ac.createGain();
   gain.gain.value = 0;
   src.connect(gain).connect(ac.destination);
+  // Schedule at an explicit context time (like WebAudioClock.start) so the
+  // mapping is exact: song-second `start` plays at context time `when`.
+  const when = ac.currentTime + 0.05;
   try {
-    src.start(0, start);
+    src.start(when, start);
   } catch {
     return;
   }
-  const now = ac.currentTime;
-  gain.gain.linearRampToValueAtTime(PREVIEW_GAIN, now + FADE_IN_SECONDS); // fade in
-  current = { src, gain, startedAt: now, startOffset: start, loopLen: len };
+  const sync = new SyncMap();
+  sync.startContextTime = when - start; // rate 1: song-second 0 <-> context time
+  gain.gain.setValueAtTime(0, when);
+  gain.gain.linearRampToValueAtTime(PREVIEW_GAIN, when + FADE_IN_SECONDS); // fade in
+  current = { src, gain, sync, startOffset: start, loopLen: len };
 }
 
 type ResolvePreview = (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: Song } | null>;

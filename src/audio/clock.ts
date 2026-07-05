@@ -17,6 +17,28 @@
 
 import { SyncMap } from './syncMap';
 
+/**
+ * Re-anchor a SyncMap from the audio hardware — THE sync primitive shared by
+ * gameplay (WebAudioClock) and the song-preview player, so both live on the
+ * same audible axis. getOutputTimestamp already accounts for output latency;
+ * when it is missing or not yet warmed up we approximate with
+ * currentTime - outputLatency.
+ */
+export function anchorSyncFromOutput(ctx: AudioContext, sync: SyncMap): void {
+  const ts = ctx.getOutputTimestamp?.();
+  if (
+    ts &&
+    ts.contextTime !== undefined &&
+    ts.performanceTime !== undefined &&
+    ts.contextTime > 0
+  ) {
+    sync.setAnchor(ts.contextTime, ts.performanceTime);
+    return;
+  }
+  const outLatency = ctx.outputLatency || ctx.baseLatency || 0;
+  sync.setAnchor(ctx.currentTime - outLatency, performance.now());
+}
+
 export class WebAudioClock {
   readonly ctx: AudioContext;
   readonly sync = new SyncMap();
@@ -116,24 +138,9 @@ export class WebAudioClock {
     }
   }
 
-  /**
-   * Re-anchor the SyncMap from the audio hardware. Call once per frame.
-   * getOutputTimestamp already accounts for output latency; when it is missing
-   * or not yet warmed up we approximate with currentTime - outputLatency.
-   */
+  /** Re-anchor the SyncMap from the audio hardware. Call once per frame. */
   refresh(): void {
-    const ts = this.ctx.getOutputTimestamp?.();
-    if (
-      ts &&
-      ts.contextTime !== undefined &&
-      ts.performanceTime !== undefined &&
-      ts.contextTime > 0
-    ) {
-      this.sync.setAnchor(ts.contextTime, ts.performanceTime);
-      return;
-    }
-    const outLatency = this.ctx.outputLatency || this.ctx.baseLatency || 0;
-    this.sync.setAnchor(this.ctx.currentTime - outLatency, performance.now());
+    anchorSyncFromOutput(this.ctx, this.sync);
   }
 
   /** Song position (seconds) audible right now. */
