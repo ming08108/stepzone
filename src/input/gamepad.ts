@@ -29,6 +29,19 @@ const AXIS_THRESHOLD = 0.5;
 export type GpRole = 'left' | 'down' | 'up' | 'right' | 'confirm' | 'back';
 export const GP_ROLES: readonly GpRole[] = ['left', 'down', 'up', 'right', 'confirm', 'back'];
 
+// Default pad button(s) per role when the user hasn't rebound it. Dance-pad
+// friendly: arrows on buttons 0-3 (left 0, right 1, up 2, down 3), Start 10 /
+// Select 11. The dpad (12-15) and standard Start/Back (9/8) stay as fallbacks so
+// ordinary gamepads still work; the left stick also drives the columns.
+const DEFAULT_BUTTONS: Record<GpRole, number[]> = {
+  left: [0, 14],
+  down: [3, 13],
+  up: [2, 12],
+  right: [1, 15],
+  confirm: [10, 9],
+  back: [11, 8],
+};
+
 // --- rebindable button map (button index per role), persisted --------------
 
 const GP_KEY = 'notefield.gamepadBindings.v1';
@@ -109,37 +122,39 @@ export function readGamepad(): GamepadRead {
 
   const btn = (i: number) => gp.buttons[i]?.pressed ?? false;
   const ax = gp.axes;
-  const axLeft = (ax[0] ?? 0) < -AXIS_THRESHOLD;
-  const axRight = (ax[0] ?? 0) > AXIS_THRESHOLD;
-  const axUp = (ax[1] ?? 0) < -AXIS_THRESHOLD;
-  const axDown = (ax[1] ?? 0) > AXIS_THRESHOLD;
-  const bound = (role: GpRole) => {
-    const b = gpBindings[role];
-    return b != null && btn(b);
+  const axFor: Record<GpRole, boolean> = {
+    left: (ax[0] ?? 0) < -AXIS_THRESHOLD,
+    right: (ax[0] ?? 0) > AXIS_THRESHOLD,
+    up: (ax[1] ?? 0) < -AXIS_THRESHOLD,
+    down: (ax[1] ?? 0) > AXIS_THRESHOLD,
+    confirm: false,
+    back: false,
   };
 
-  // Columns: standard dpad (12-15) or left stick, plus any rebound button.
-  const up = btn(12) || axUp || bound('up');
-  const down = btn(13) || axDown || bound('down');
-  const left = btn(14) || axLeft || bound('left');
-  const right = btn(15) || axRight || bound('right');
-
-  // Confirm/back: an explicit binding wins; otherwise A/Start and B/Back — but
-  // never a button that's been rebound to a column (so pressing a panel that
-  // lives on button 0/1 doesn't also fire menu confirm/back).
-  const colButtons = new Set(
+  // Buttons the user rebound to a column — excluded from the default confirm/back
+  // so a panel press on one of those buttons doesn't also fire a menu action.
+  const userCols = new Set(
     [gpBindings.left, gpBindings.down, gpBindings.up, gpBindings.right].filter(
       (v): v is number => v != null,
     ),
   );
-  const confirm =
-    gpBindings.confirm != null
-      ? btn(gpBindings.confirm)
-      : (btn(0) && !colButtons.has(0)) || (btn(9) && !colButtons.has(9));
-  const back =
-    gpBindings.back != null
-      ? btn(gpBindings.back)
-      : (btn(1) && !colButtons.has(1)) || (btn(8) && !colButtons.has(8));
+  // An explicit user binding wins; otherwise the DEFAULT_BUTTONS for the role
+  // (dance-pad arrows / Start / Select, with dpad + standard Start/Back as
+  // fallbacks); columns also accept the left stick.
+  const read = (role: GpRole): boolean => {
+    const b = gpBindings[role];
+    if (b != null) return btn(b);
+    for (const i of DEFAULT_BUTTONS[role]) {
+      if ((role === 'confirm' || role === 'back') && userCols.has(i)) continue;
+      if (btn(i)) return true;
+    }
+    return axFor[role];
+  };
+
+  const left = read('left');
+  const down = read('down');
+  const up = read('up');
+  const right = read('right');
 
   return {
     columns: [left, down, up, right],
@@ -147,8 +162,8 @@ export function readGamepad(): GamepadRead {
     down,
     left,
     right,
-    confirm,
-    back,
+    confirm: read('confirm'),
+    back: read('back'),
     connected: true,
   };
 }
