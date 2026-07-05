@@ -68,8 +68,10 @@ Driven by `todo.txt`. Done:
   meter, BPM, sort) with **favorites** (localStorage). (#7, #11, #12)
 - **Background image/video** behind the field, video loosely song-synced. (#9)
 - **Arcade look** + correct arrows for solo/double/pump modes. (#2, #8)
+- **Mirror/turn mods** (mirror, left, right, shuffle) — `src/notes/transforms.ts`,
+  applied per-session, with tests.
 
-Deferred here: mirror/turn mods; noteskins (quantization coloring is wired); a
+Deferred here: noteskins (quantization coloring is wired); a
 richer results screen (life graph); a GPU (PixiJS/WebGPU) renderer for the note
 field (advised over raw WebGPU — the renderer sits behind one interface, so it's
 a clean swap when perspective mods / dense charts arrive). (#8's WebGPU part)
@@ -82,3 +84,5 @@ a clean swap when perspective mods / dense charts arrive). (#8's WebGPU part)
 - Per-row chord-cohesion combo; roll re-tap polish; life-delta modifiers.
 - Round-trip serialization + `ChartKey` hashing for validation (spec doc 10
   §10.7).
+- Raw WebHID dance-pad input as a lower-latency, opt-in alternative to the
+  Gamepad API.

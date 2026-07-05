@@ -1,6 +1,6 @@
 # Engine fidelity review vs ITGmania (todo #16)
 
-A systematic check of notefield's engine against the ITGmania source and the
+A systematic check of Stepzone's engine against the ITGmania source and the
 reimplementation spec (`../itgmania/Docs/TrackPlayerSpec/`). Each row: does our
 logic match, and if not, is it a bounded simplification or a real gap.
 

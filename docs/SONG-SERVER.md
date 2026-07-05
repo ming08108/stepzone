@@ -2,7 +2,7 @@
 
 ## Your local library loads automatically
 
-The dev/preview server serves your Songs library at `/songs`, and notefield
+The dev/preview server serves your Songs library at `/songs`, and Stepzone
 **auto-loads it on startup — nothing to paste, no separate process, no CORS.**
 By default it serves `C:/Games/ITGmania/Songs`; point it elsewhere with the
 `SONGS_DIR` env var:

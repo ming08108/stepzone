@@ -1,11 +1,11 @@
 {
-  "name": "notefield",
+  "name": "stepzone",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "A web-based DDR/StepMania-compatible rhythm track player. Engine is framework-free TypeScript; UI is React.",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.6"
   },
   "scripts": {
     "dev": "vite",

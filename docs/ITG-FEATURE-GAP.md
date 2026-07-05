@@ -1,14 +1,14 @@
 # ITGmania Feature Gap
 
-What full ITGmania (a StepMania 5.1 fork) supports that **notefield** does not yet
+What full ITGmania (a StepMania 5.1 fork) supports that **Stepzone** does not yet
 have. Purpose: plan future work. Derived from the ITGmania C++ source
 (`../itgmania/src`) and the reimplementation spec (`../itgmania/Docs/TrackPlayerSpec`)
-compared against notefield's `src/`, `docs/ROADMAP.md`, `docs/ENGINE-REVIEW.md`, and
+compared against Stepzone's `src/`, `docs/ROADMAP.md`, `docs/ENGINE-REVIEW.md`, and
 `todo.txt`.
 
 ## Summary
 
-notefield faithfully implements the **core data + play path** for one **4‑panel
+Stepzone faithfully implements the **core data + play path** for one **4‑panel
 dance‑single** chart: `.sm`/`.ssc` parsing, timing (BPM/stop/delay/warp incl. `.sm`
 negative‑BPM→warp and `.ssc` split timing), tap/hold/roll/mine judgment, DDR
 dance‑point scoring + grade tiers + a bar life meter, C/X/M scroll, a few turn mods,
@@ -25,7 +25,7 @@ and built‑in networking/GrooveStats. Roughly: the **single‑player dance engi
 
 **~120 distinct gaps** below across **12 categories**. Legend — **E** = implementation
 effort, **P** = priority for a DDR/ITG‑faithful web player. Both low / med / high.
-"Partial" marks things notefield already covers in part. Note: ITGmania ships **only**
+"Partial" marks things Stepzone already covers in part. Note: ITGmania ships **only**
 the _dance, pump, techno, lights_ games (beat/kb7/para/pop'n/ez2/maniax were removed),
 so those legacy games are **not** counted as gaps.
 
@@ -33,7 +33,7 @@ so those legacy games are **not** counted as gaps.
 
 ## 1. Gameplay modifiers (`PlayerOptions`)
 
-notefield has: C/X/M scroll, `mirror/left/right/shuffle` turns, music‑rate, audio/visual
+Stepzone has: C/X/M scroll, `mirror/left/right/shuffle` turns, music‑rate, audio/visual
 offset. The rest of ITGmania's very large `PlayerOptions` surface is absent.
 
 | Gap                                                                                                                                                                                                                     | E       | P        | Notes                                                         |
@@ -58,7 +58,7 @@ offset. The rest of ITGmania's very large `PlayerOptions` surface is absent.
 
 ## 2. Life meter & fail
 
-notefield has: **Bar** life only, raw per‑judgment deltas, single fail latch at life 0
+Stepzone has: **Bar** life only, raw per‑judgment deltas, single fail latch at life 0
 (shown as FAILED on results). No mid‑song game‑over screen.
 
 | Gap                                                                                                            | E   | P       | Notes                                                   |
@@ -66,12 +66,12 @@ notefield has: **Bar** life only, raw per‑judgment deltas, single fail latch a
 | **Battery** life (fixed lives)                                                                                 | med | med     | Needed for Oni courses.                                 |
 | **Time / Survival** life (draining clock)                                                                      | med | med     | Needed for Survival courses.                            |
 | Drain types: NoRecover, SuddenDeath                                                                            | low | med     | Harder life rules.                                      |
-| FailType variants: Immediate / ImmediateContinue / EndOfSong / Off                                             | low | med     | notefield only has immediate‑at‑0. Partial.             |
+| FailType variants: Immediate / ImmediateContinue / EndOfSong / Off                                             | low | med     | Stepzone only has immediate‑at‑0. Partial.             |
 | Life‑bar refinements: merciful drain, progressive bar, combo‑to‑regain, drain scaling, "hot"/full‑combo states | med | low‑med | Partial: raw deltas only (documented in ENGINE‑REVIEW). |
 
 ## 3. Note & timing features
 
-notefield **parses all segment types** (BPM/Stop/Delay/Warp/Scroll/Speed/TimeSig/
+Stepzone **parses all segment types** (BPM/Stop/Delay/Warp/Scroll/Speed/TimeSig/
 Tickcount/Combo/Label/Fake) and applies BPM/Stop/Delay/Warp; judges tap/hold/roll/mine;
 excludes fakes; judges lifts. Handles `.ssc` split (per‑chart) timing. Gaps are mostly
 _runtime application_ of already‑parsed data.
@@ -82,7 +82,7 @@ _runtime application_ of already‑parsed data.
 | **Speed segments** (`#SPEEDS`, ramped x‑mod) rendered                      | med | med | Parsed, not applied. Partial.                               |
 | **Checkpoint holds / Tickcount** (holds re‑judged every N ticks, pump/ITG) | med | med | `CheckpointHit/Miss` enums exist but unused. Partial.       |
 | Combo segments (`#COMBOS` — rows worth >1 combo / multi‑miss)              | low | low | Parsed, not applied. Partial.                               |
-| **Chord cohesion combo** (per‑row worst tap governs the row)               | low | med | notefield approximates per‑note (documented). Partial.      |
+| **Chord cohesion combo** (per‑row worst tap governs the row)               | low | med | Stepzone approximates per‑note (documented). Partial.      |
 | Attacks (`#ATTACKS` — timed mid‑song modifiers)                            | med | low | Note type exists; not scheduled/applied. Partial.           |
 | Keysound playback (notes trigger samples; BMS/keysounded charts)           | med | low | `keysoundIndex` parsed; no sample playback. Partial.        |
 | Labels (`#LABELS` bookmarks) surfaced                                      | low | low | Parsed; editor/visual only. Partial.                        |
@@ -92,7 +92,7 @@ _runtime application_ of already‑parsed data.
 
 ## 4. Game types & styles
 
-notefield input is **dance‑single (4 keys)** only, though it can _render/parse_ solo(6),
+Stepzone input is **dance‑single (4 keys)** only, though it can _render/parse_ solo(6),
 double(8), and pump(5) column layouts. ITGmania ships dance/pump/techno/lights.
 
 | Gap                                                     | E       | P   | Notes                                             |
@@ -106,7 +106,7 @@ double(8), and pump(5) column layouts. ITGmania ships dance/pump/techno/lights.
 
 ## 5. Game modes & courses
 
-notefield does **single‑song play only** (`PLAY_MODE_REGULAR` equivalent). All other
+Stepzone does **single‑song play only** (`PLAY_MODE_REGULAR` equivalent). All other
 `PlayMode`s and the course system are absent.
 
 | Gap                                                             | E    | P       | Notes                                |
@@ -126,13 +126,13 @@ notefield does **single‑song play only** (`PLAY_MODE_REGULAR` equivalent). All
 
 ## 6. Scoring & profiles
 
-notefield stores a single **best** per chart (percent, grade, max combo, judgment
+Stepzone stores a single **best** per chart (percent, grade, max combo, judgment
 counts, play count) in `localStorage`, using DDR dance points + 6 letter grade tiers.
 
 | Gap                                                                                                                          | E   | P   | Notes                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --- | --- | ----------------------------------------- |
 | **ITG percentage / EX‑score** weighting (separate from DDR dance points)                                                     | low | med | ITG's displayed %. Partial: DDR % done.   |
-| Grade system parity (ITG 20‑tier / theme grades, quad‑star, "AAAA")                                                          | low | med | notefield has 6 letters (AAA…D). Partial. |
+| Grade system parity (ITG 20‑tier / theme grades, quad‑star, "AAAA")                                                          | low | med | Stepzone has 6 letters (AAA…D). Partial. |
 | **High‑score lists** (top‑N per chart, not just best)                                                                        | low | med |                                           |
 | Rich `HighScore` fields: date, mods used, radar values, survival secs, disqualified, awards                                  | low | med | Partial: minimal best kept.               |
 | **Player profiles** (named), machine profile, guest profile                                                                  | med | med | Only anonymous localStorage today.        |
@@ -149,7 +149,7 @@ counts, play count) in `localStorage`, using DDR dance points + 6 letter grade t
 
 ## 7. Editing / authoring
 
-notefield has a read‑only Inspector. **No chart editor.**
+Stepzone has a read‑only Inspector. **No chart editor.**
 
 | Gap                                                                             | E    | P       | Notes                            |
 | ------------------------------------------------------------------------------- | ---- | ------- | -------------------------------- |
@@ -165,20 +165,20 @@ notefield has a read‑only Inspector. **No chart editor.**
 
 ## 8. Autoplay, replay & sync
 
-notefield has an AdjustSync‑style **manual auto‑calibrate** offset screen.
+Stepzone has an AdjustSync‑style **manual auto‑calibrate** offset screen.
 
 | Gap                                                                         | E   | P       | Notes                                             |
 | --------------------------------------------------------------------------- | --- | ------- | ------------------------------------------------- |
 | Autoplay (perfect AI) + CPU skill levels (0–5, weighted from `AI.ini`)      | low | low‑med | Good demo/practice/attract mode.                  |
 | In‑play AutoSync: song / machine / **tempo** (least‑squares BPM+offset fit) | med | low     | Partial: manual calibrate only.                   |
-| Results **offset scatter / timing graph** (per‑tap offsets)                 | low | med     | notefield results show counts, no graph. Partial. |
+| Results **offset scatter / timing graph** (per‑tap offsets)                 | low | med     | Stepzone results show counts, no graph. Partial. |
 | Life‑graph on results                                                       | low | med     | Tracked in ROADMAP as a richer results screen.    |
 | Assist clap / metronome tick during gameplay                                | low | low     |                                                   |
 | Replay save + playback                                                      | med | low     | ITGmania's own replay is a dormant stub.          |
 
 ## 9. Theming & visual
 
-notefield uses a fixed **Canvas** renderer (quantization colors, arcade look), a React
+Stepzone uses a fixed **Canvas** renderer (quantization colors, arcade look), a React
 UI, and static image/video backgrounds.
 
 | Gap                                                                                              | E         | P   | Notes                                                                             |
@@ -187,14 +187,14 @@ UI, and static image/video backgrounds.
 | Song **preview playback** on select (`SAMPLESTART`/`SAMPLELENGTH`)                               | low       | med | Fields parsed; not played. Partial.                                               |
 | **GPU / perspective renderer** (PixiJS/WebGPU) for effect & perspective mods, dense charts       | high      | med | Renderer sits behind one interface (ROADMAP). Enables §1 effect/perspective mods. |
 | BGChanges: scripted/animated backgrounds, per‑beat visuals, foreground layer, random BG          | med       | low | Partial: static image/video only.                                                 |
-| Lua‑scripted **theme layer** (all screens/menus/HUD as swappable actors + BGAnimations)          | very high | low | Architecturally different; notefield uses React/Canvas.                           |
+| Lua‑scripted **theme layer** (all screens/menus/HUD as swappable actors + BGAnimations)          | very high | low | Architecturally different; Stepzone uses React/Canvas.                           |
 | Announcer (voice / sound‑cue sets reacting to events)                                            | low       | low |                                                                                   |
 | Gameplay flourishes: toasty, full‑combo/"hot" effects, hold flash, combo pulse, per‑judgment art | low       | low | Partial: basic HUD only.                                                          |
 | Cabinet lights output                                                                            | low       | low |                                                                                   |
 
 ## 10. Input & hardware
 
-notefield: rebindable **keyboard** (4 columns) + **gamepad** (dpad/left‑stick → 4 columns).
+Stepzone: rebindable **keyboard** (4 columns) + **gamepad** (dpad/left‑stick → 4 columns).
 
 | Gap                                                                    | E    | P   | Notes                                                  |
 | ---------------------------------------------------------------------- | ---- | --- | ------------------------------------------------------ |
@@ -205,7 +205,7 @@ notefield: rebindable **keyboard** (4 columns) + **gamepad** (dpad/left‑stick 
 
 ## 11. Song library & navigation
 
-notefield: load one pack; searchable/filterable table (type/meter/BPM, sort); favorites;
+Stepzone: load one pack; searchable/filterable table (type/meter/BPM, sort); favorites;
 banners; expandable difficulty grid.
 
 | Gap                                                                           | E   | P   | Notes                                                 |
@@ -219,7 +219,7 @@ banners; expandable difficulty grid.
 
 ## 12. Networking & platform (mostly ITGmania‑specific additions vs. SM5)
 
-notefield is fully offline/local.
+Stepzone is fully offline/local.
 
 | Gap                                                                                                   | E        | P       | Notes                                                          |
 | ----------------------------------------------------------------------------------------------------- | -------- | ------- | -------------------------------------------------------------- |
@@ -233,7 +233,7 @@ notefield is fully offline/local.
 
 ## Non‑gaps (already faithful — for reference)
 
-To keep this honest, notefield already matches ITGmania on these, so they are **not**
+To keep this honest, Stepzone already matches ITGmania on these, so they are **not**
 future work: MSD tokenizing; `.sm`/`.ssc` header + note‑grid parsing (incl. the `,,`
 quirk and keysound list); beat⇄second timing with BPM/stop/delay/warp; `.sm`
 negative‑BPM/negative‑stop → warp synthesis; `.ssc` split (per‑chart) timing; W1–W5 +

@@ -1,8 +1,8 @@
 # Online Multiplayer — design & investigation
 
 Status: investigation / design. No code yet. This document proposes how to add
-online multiplayer to notefield, informed by how StepMania/ITGmania did (and now
-does) it, and by notefield's own clock/judgment architecture.
+online multiplayer to Stepzone, informed by how StepMania/ITGmania did (and now
+does) it, and by Stepzone's own clock/judgment architecture.
 
 The one-line thesis, up front:
 
@@ -109,15 +109,15 @@ Limits (things we must fix or accept):
 - **Not web-reachable.** Raw TCP + custom binary is unusable from a browser
   (JS has no raw TCP sockets) and needs a native dedicated server.
 
-Takeaway for notefield: **keep the authoritative-local model and the small stat
+Takeaway for Stepzone: **keep the authoritative-local model and the small stat
 feed; replace TCP+binary with WebSocket+JSON; add the anti-cheat and shared-start
 pieces SM never had.**
 
 ---
 
-## 2. notefield's architecture, and why remote judging is impossible
+## 2. Stepzone's architecture, and why remote judging is impossible
 
-notefield already judges exactly the way a netplay client must. The relevant
+Stepzone already judges exactly the way a netplay client must. The relevant
 pieces:
 
 **Two-timebase clock** (`src/audio/syncMap.ts`, `src/audio/clock.ts`,
@@ -227,7 +227,7 @@ A small **Node WebSocket server** (`ws` or `uWebSockets.js`) is the right spine:
 - Topology matches SMOnline: every client dials **out** to the server, so player
   NAT never matters (§6.3).
 
-Message encoding: **JSON** to start (debuggable, matches notefield's TS types
+Message encoding: **JSON** to start (debuggable, matches Stepzone's TS types
 1:1). If the `scoreUpdate` feed ever gets heavy, switch that one message to a
 binary/`MessagePack` frame — but at the volumes below (§5.3) JSON is fine.
 
@@ -299,7 +299,7 @@ choosing `T0 = serverNow + max(readyRTTs) + margin` (e.g. +1.5 s) so the slowest
 client still has time. Each client converts `T0` to its local perf clock via §5.1
 and schedules audio so **song-second 0 lands on `T0`**:
 
-- notefield already schedules `source.start(when)` with a lead
+- Stepzone already schedules `source.start(when)` with a lead
   (`clock.start(offset, leadSeconds)` sets
   `startContextTime = when − offset/rate`). The net path computes the `when`
   (AudioContext time) whose _audible_ instant equals local-perf(`T0`), using the
@@ -345,7 +345,7 @@ Score comparability requires equal conditions. Rules:
 
 ## 6. Data shapes (TypeScript sketches)
 
-These mirror notefield's existing types (`TapNoteScore` counts, `life` 0..1,
+These mirror Stepzone's existing types (`TapNoteScore` counts, `life` 0..1,
 `percentDancePoints`, `chartKey`). Envelope is a discriminated union on `t`.
 
 ```ts
@@ -530,7 +530,7 @@ Each phase ends with something demoable and reuses the prior phase's transport.
   reference** (per-rate boards, hash-keyed charts, queued submit) and run our own
   endpoints so we control schema, ranking, and non-ITG content. Keep the door
   open to _also_ submit to GrooveStats later for charts it recognizes.
-- **Reuse notefield internals directly.** `Judge` already exposes exactly the
+- **Reuse Stepzone internals directly.** `Judge` already exposes exactly the
   scoreboard state; `chartKey` is a leaderboard key; `onEnd(judge)` is the single
   finish hook; the 2 s lead-in is a countdown handle; `SyncMap`/`getOutputTimestamp`
   is the anchor for converting `startAt` to a local `when`. Very little new
@@ -605,5 +605,5 @@ P2P exposes IPs). Names are user-chosen; ranked identity is the account.
   hardening.
 - **Build, don't bridge:** the classic ITGmania TCP netcode is gone and
   browser-unreachable; stand up a fresh WS server, reuse GrooveStats only as a
-  design reference for async boards, and lean on notefield's existing
+  design reference for async boards, and lean on Stepzone's existing
   `Judge`/`chartKey`/`onEnd` seams.
