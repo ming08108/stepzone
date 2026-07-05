@@ -72,7 +72,7 @@ function Toggle({
 
 const val =
   'ml-auto w-[92px] flex-none text-right text-[15px] font-bold [font-variant-numeric:tabular-nums]';
-const slider = 'h-1 flex-1 accent-[#ff4d3d]';
+const slider = 'h-1 flex-1 accent-[#ff5d47]';
 
 export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibrate: () => void }) {
   const { settings, update } = useSettings();
@@ -184,7 +184,7 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
                 active={settings.noteSkin === 'itg'}
                 onClick={() => update({ noteSkin: 'itg' })}
               >
-                ITG
+                Simply Love
               </Toggle>
             </Row>
             <Row label="APPEARANCE">
@@ -255,7 +255,7 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
                         key={code}
                         onClick={() => clearKey(code)}
                         title="click to remove"
-                        className="border border-white/15 px-1.5 text-[13px] hover:border-[#ff4d3d] hover:text-[#ff4d3d]"
+                        className="border border-white/15 px-1.5 text-[13px] hover:border-[#ff5d47] hover:text-[#ff5d47]"
                       >
                         {keyLabel(code)}
                       </button>
@@ -263,7 +263,7 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
                   </div>
                   <button
                     onClick={() => setRebinding(i)}
-                    className="mt-2 w-full border border-white/10 py-1 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff4d3d] hover:text-[#ececec]"
+                    className="mt-2 w-full border border-white/10 py-1 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff5d47] hover:text-[#ececec]"
                   >
                     {rebinding === i ? 'press a key…' : '+ bind'}
                   </button>

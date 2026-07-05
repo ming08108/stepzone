@@ -16,7 +16,7 @@ import {
   type GpRole,
 } from '../input/gamepad';
 
-const AC = '#ff4d3d';
+const AC = '#ff5d47';
 const LABELS: Record<GpRole, string> = {
   left: '← Left',
   down: '↓ Down',
@@ -98,7 +98,7 @@ export function GamepadSettings() {
             <div className="mt-2 flex gap-1">
               <button
                 onClick={() => setCapturing(capturing === role ? null : role)}
-                className="flex-1 border border-white/10 py-1 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff4d3d] hover:text-[#ececec]"
+                className="flex-1 border border-white/10 py-1 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff5d47] hover:text-[#ececec]"
               >
                 {capturing === role ? 'cancel' : 'bind'}
               </button>
@@ -109,7 +109,7 @@ export function GamepadSettings() {
                     force();
                   }}
                   title="clear"
-                  className="border border-white/10 px-2 py-1 text-[12px] text-[#ececec]/60 hover:border-[#ff4d3d] hover:text-[#ff4d3d]"
+                  className="border border-white/10 px-2 py-1 text-[12px] text-[#ececec]/60 hover:border-[#ff5d47] hover:text-[#ff5d47]"
                 >
                   ✕
                 </button>

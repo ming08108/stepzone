@@ -2,7 +2,8 @@
  * Canvas note field: directional arrows colored by quantization, pulsing
  * receptors, hit flashes, holds, and a full-screen HUD. Two selectable styles
  * (setStyle): 'arcade' — the left-aligned STEPLINE panel — and 'itg' — a
- * centered ITGmania/SM5 field with flat beveled arrows and a restrained HUD.
+ * centered Simply Love (ITGmania) field: cel-noteskin arrows plus the SL
+ * gameplay HUD (black header, LifeMeterBar, Wendy score, step-density graph).
  * Upscroll, constant-time (CMod) spacing. See spec doc 8. Purely presentational
  * — reads the Judge, never mutates it. Works in logical (CSS) pixels; the caller
  * sets a devicePixelRatio transform via resize().
@@ -54,10 +55,10 @@ const JUDGMENT: Record<number, { label: string; color: string }> = {
   [TapNoteScore.HitMine]: { label: 'MINE!', color: '#ff4d3d' },
 };
 
-// ITG judgment tiers: title-case labels in the Simply Love-style colors.
+// ITG judgment tiers: title-case labels in the SL.JudgmentColors["ITG"] set.
 const ITG_JUDGMENT: Record<number, { label: string; color: string }> = {
   [TapNoteScore.W1]: { label: 'Fantastic', color: '#21cce8' },
-  [TapNoteScore.W2]: { label: 'Excellent', color: '#e2a71c' },
+  [TapNoteScore.W2]: { label: 'Excellent', color: '#e29c18' },
   [TapNoteScore.W3]: { label: 'Great', color: '#66c955' },
   [TapNoteScore.W4]: { label: 'Decent', color: '#b45cff' },
   [TapNoteScore.W5]: { label: 'Way Off', color: '#c9855e' },
@@ -71,8 +72,9 @@ const ANGLES = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
 const SPACING = 64; // base pixels per beat (ITG ARROW_SPACING)
 const RECEPTOR_FLASH = 0.11; // seconds the receptor stays lit after a press
 const EXPLOSION = 0.26; // seconds for the hit explosion ring/glow
-const ITG_FLASH = 0.15; // seconds for the small ITG receptor hit flash
+const ITG_EXPLOSION = 0.22; // seconds for the cel-style hit explosion bloom
 const JUDGMENT_LIFE = 0.7; // seconds the judgment label shows (design keyframes)
+const SL_JUDGMENT_LIFE = 0.9; // SL judgment tween: pop 0.1s, hold ~0.67s, shrink 0.2s
 const DRAW_CULL = 100; // px beyond the field before a note is culled
 
 export interface Feedback {
@@ -99,6 +101,77 @@ function traceArrow(ctx: CanvasRenderingContext2D, s: number): void {
   ctx.lineTo(0.42 * s, 0);
   ctx.lineTo(s, 0);
   ctx.closePath();
+}
+
+// Simply Love palette bits used by the ITG-style HUD.
+const SL_ACCENT = '#ff5d47'; // SL.Colors[1] — the signature coral
+const SL_GRAPH_BG = '#1e282f'; // density-graph backing (SL UpperNPSGraph quad)
+const SL_GRAPH_LO = '#00adc0'; // histogram base color (SL-Histogram "blue")
+const SL_GRAPH_HI = '#8200a1'; // histogram peak color (SL-Histogram "purple")
+// SL full-combo pulse pairs (Player combo.lua): all-Fantastic blue,
+// all-Excellent gold, all-Great green; anything less is plain white.
+const SL_COMBO_W1: readonly [string, string] = ['#c8ffff', '#6bf0ff'];
+const SL_COMBO_W2: readonly [string, string] = ['#fdffc9', '#fddb85'];
+const SL_COMBO_W3: readonly [string, string] = ['#c9ffc9', '#94fec1'];
+
+/**
+ * ITG "cel" noteskin arrow geometry, traced from the noteskin's tap-note mesh
+ * ("_down tap note model.txt"): three concentric rings — the notched-chevron
+ * silhouette, the bevel band, and the flat front face — normalized to a
+ * half-extent of 1 (model units / 32), tip up like traceArrow.
+ */
+type CelRing = ReadonlyArray<readonly [number, number]>;
+const CEL_OUTLINE: CelRing = [
+  [0, -0.971],
+  [1.002, 0.031],
+  [0.594, 0.44],
+  [0.344, 0.19],
+  [0.344, 0.938],
+  [-0.344, 0.938],
+  [-0.344, 0.19],
+  [-0.594, 0.44],
+  [-1.002, 0.031],
+];
+const CEL_BEVEL: CelRing = [
+  [0, -0.883],
+  [0.914, 0.031],
+  [0.594, 0.351],
+  [0.281, 0.039],
+  [0.281, 0.875],
+  [-0.281, 0.875],
+  [-0.281, 0.039],
+  [-0.594, 0.351],
+  [-0.914, 0.031],
+];
+const CEL_FACE: CelRing = [
+  [0, -0.75],
+  [0.781, 0.031],
+  [0.594, 0.219],
+  [0.188, -0.188],
+  [0.188, 0.781],
+  [-0.188, 0.781],
+  [-0.188, -0.188],
+  [-0.594, 0.219],
+  [-0.781, 0.031],
+];
+
+function traceCel(ctx: CanvasRenderingContext2D, s: number, ring: CelRing): void {
+  ctx.beginPath();
+  ctx.moveTo(ring[0][0] * s, ring[0][1] * s);
+  for (let i = 1; i < ring.length; i++) ctx.lineTo(ring[i][0] * s, ring[i][1] * s);
+  ctx.closePath();
+}
+
+/** Linear blend between two #rrggbb colors, t in [0,1]. */
+function lerpHex(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ch = (shift: number) => {
+    const va = (pa >> shift) & 255;
+    const vb = (pb >> shift) & 255;
+    return Math.round(va + (vb - va) * t);
+  };
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
 }
 
 /** Styling for one arrow draw. Widths are in design units (80px arrow), ds-scaled. */
@@ -151,6 +224,12 @@ export class NoteFieldRenderer {
   // Combo pop animation state (visual only).
   private lastCombo = 0;
   private comboPopAt = -10;
+  // Cached per-measure NPS histogram for the SL step-density graph.
+  private density: {
+    src: unknown;
+    bins: Array<{ t0: number; t1: number; h: number }>;
+    lastT: number;
+  } | null = null;
 
   constructor(readonly numTracks: number) {}
 
@@ -254,9 +333,12 @@ export class NoteFieldRenderer {
     ctx.fillRect(0, 0, this.width, this.height);
   }
 
-  /** Effective receptor Y (bottom of the field under reverse). */
+  /** Effective receptor Y (bottom of the field under reverse). The Simply
+   *  Love layout seats the receptors just under its 110px header (SL puts its
+   *  header at 80/480 of the screen); the bare preview keeps them high. */
   private recY(): number {
-    return this.reverse ? this.height - this.receptorY : this.receptorY;
+    const off = this.style === 'itg' && !this.bare ? 176 * this.ds : this.receptorY;
+    return this.reverse ? this.height - off : off;
   }
 
   private yOf(timeSeconds: number, beatValue: number): number {
@@ -531,6 +613,47 @@ export class NoteFieldRenderer {
     const top = Math.min(headY, tailY);
     const bottom = Math.max(headY, tailY);
     const alive = !n.holdInitiated || n.holdLife > 0;
+    if (this.style === 'itg') {
+      // Cel hold: a light silver tube with dark side rims and a rounded tail
+      // cap ("Down Hold Body Active.png"); grey once dropped, aglow while held.
+      const w = this.arrowS * 1.5;
+      const r = w / 2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(
+        x - w / 2,
+        top,
+        w,
+        Math.max(1, bottom - top),
+        this.reverse ? [r, r, 0, 0] : [0, 0, r, r],
+      );
+      const g = ctx.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+      if (alive) {
+        g.addColorStop(0, 'rgba(148,154,162,0.95)');
+        g.addColorStop(0.18, 'rgba(238,240,244,0.95)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0.95)');
+        g.addColorStop(0.82, 'rgba(210,214,220,0.95)');
+        g.addColorStop(1, 'rgba(128,133,141,0.95)');
+      } else {
+        g.addColorStop(0, 'rgba(70,72,78,0.8)');
+        g.addColorStop(0.5, 'rgba(118,122,128,0.8)');
+        g.addColorStop(1, 'rgba(70,72,78,0.8)');
+      }
+      if (alive && held) {
+        // Hold explosion glow while the lane is engaged.
+        ctx.shadowColor = 'rgba(255,255,255,0.6)';
+        ctx.shadowBlur = 12 * this.ds;
+      }
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 2 * this.ds;
+      ctx.strokeStyle = alive ? '#14161a' : 'rgba(20,22,26,0.6)';
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     const w = this.arrowS;
     ctx.save();
     ctx.beginPath();
@@ -553,6 +676,42 @@ export class NoteFieldRenderer {
   }
 
   private drawMine(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    if (this.style === 'itg') {
+      // Cel mine: a dark metal orb with three rotating shell plates and a
+      // red core pulsing on the beat ("_mine tex.png" / "_mine model.txt").
+      const r = this.arrowS * 0.66;
+      const beatPulse = 1 - (this.nowBeat - Math.floor(this.nowBeat));
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(this.nowSeconds * 2.2);
+      const body = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.15, 0, 0, r);
+      body.addColorStop(0, '#4c5058');
+      body.addColorStop(0.7, '#26282e');
+      body.addColorStop(1, '#101114');
+      ctx.fillStyle = body;
+      ctx.strokeStyle = '#0c0d10';
+      ctx.lineWidth = 2.5 * this.ds;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#b4b8c0';
+      ctx.lineWidth = r * 0.3;
+      for (let i = 0; i < 3; i++) {
+        const a0 = (i / 3) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.68, a0 + 0.35, a0 + (Math.PI * 2) / 3 - 0.35);
+        ctx.stroke();
+      }
+      ctx.fillStyle = `rgba(255,48,48,${(0.55 + 0.45 * beatPulse).toFixed(3)})`;
+      ctx.shadowColor = 'rgba(255,48,48,0.8)';
+      ctx.shadowBlur = 10 * this.ds * (0.5 + beatPulse);
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     const r = this.arrowS * 0.8;
     ctx.save();
     ctx.translate(x, y);
@@ -719,9 +878,10 @@ export class NoteFieldRenderer {
   }
 
   /**
-   * ITGmania / SM5 style: a centered playfield over a plain dark filter, flat
-   * beveled arrows with hard outlines, and restrained hit feedback — a brief
-   * receptor flash instead of the arcade glow rings. Sharp and readable.
+   * Simply Love (ITGmania) style: a centered playfield over the SL background
+   * filter, cel-noteskin arrows, and the SL gameplay chrome — black header
+   * with song meter + LifeMeterBar + Wendy score drawn under the field, and
+   * judgment/combo drawn over it (SL draworder 101).
    */
   private drawItg(
     ctx: CanvasRenderingContext2D,
@@ -737,9 +897,17 @@ export class NoteFieldRenderer {
     const fieldW = this.numTracks * this.colW;
     const fieldL = (this.width - fieldW) / 2;
 
-    // Notefield filter: a plain dark strip behind the lanes (Simply Love style).
+    // Notefield filter (SL BackgroundFilter): a plain dark strip behind the
+    // lanes, flushed red on the beat while the life meter is in danger.
     ctx.fillStyle = 'rgba(3,4,6,0.5)';
     ctx.fillRect(fieldL - 8 * ds, 0, fieldW + 16 * ds, height);
+    if (!judge.failed && judge.life < 0.25) {
+      ctx.fillStyle = `rgba(255,32,32,${(0.06 + 0.1 * beatPulse).toFixed(3)})`;
+      ctx.fillRect(fieldL - 8 * ds, 0, fieldW + 16 * ds, height);
+    }
+
+    // SL draws its header/meters/density graph under the arrows.
+    if (!this.bare) this.drawSlUnderlay(ctx, judge, progress);
 
     // Advance the visible-window cursor (same forward-only scan as arcade).
     const notes = judge.notes;
@@ -760,21 +928,16 @@ export class NoteFieldRenderer {
       if (n.note.type === TapNoteType.HoldHead && !n.holdResolved) this.drawHold(ctx, n);
     }
 
-    // Receptors: plain grey outline arrows that brighten on the beat; a press
-    // fills them white briefly. No glow.
-    const recStroke = `rgba(178,184,194,${(0.45 + 0.4 * beatPulse).toFixed(3)})`;
+    // Receptors: cel silver arrows that flash bright on each beat (the cel
+    // skin's diffuseramp); a press blooms them white and dips the scale.
     for (let t = 0; t < this.numTracks; t++) {
       const x = this.laneX(t);
       const flashAge = now - (fb.laneFlash[t] ?? -1);
       const pressed = flashAge >= 0 && flashAge < RECEPTOR_FLASH;
-      this.arrow(ctx, x, recY, t, pressed ? 0.92 : 1, {
-        fill: pressed ? 'rgba(255,255,255,0.9)' : 'rgba(150,156,166,0.14)',
-        stroke: pressed ? '#f2f4f8' : recStroke,
-        lineWidth: 4,
-      });
+      this.itgReceptor(ctx, x, recY, t, pressed, beatPulse);
     }
 
-    // Notes and unhit hold heads (windowed): flat beveled ITG arrows.
+    // Notes and unhit hold heads (windowed): cel-noteskin arrows.
     for (let i = this.firstVisibleIdx; i < notes.length; i++) {
       const n = notes[i];
       const y = this.yOf(n.time, n.beat);
@@ -793,29 +956,49 @@ export class NoteFieldRenderer {
       }
     }
 
-    // Hit flash: a small, brief judgment-tinted pop on the receptor — no
-    // additive glow or expanding rings in this style.
+    // Hit explosion: the cel "Tap Explosion" — the arrow silhouette blooming
+    // in the judgment color with a white-hot core, scaling up as it fades
+    // (the "Down Tap Explosion Dim/Bright" sprites; Fantastics run brighter).
     for (let t = 0; t < this.numTracks; t++) {
       const hit = fb.laneHit[t];
       if (!hit) continue;
       const age = now - hit.atSeconds;
-      if (age < 0 || age >= ITG_FLASH) continue;
-      const k = age / ITG_FLASH;
+      if (age < 0 || age >= ITG_EXPLOSION) continue;
+      const k = age / ITG_EXPLOSION;
+      const fade = 1 - k;
       const j = ITG_JUDGMENT[hit.tns];
-      this.arrow(ctx, this.laneX(t), recY, t, 1 + 0.08 * k, {
-        fill: j ? j.color : '#ffffff',
-        alpha: 0.45 * (1 - k),
-        stroke: 'rgba(255,255,255,0.8)',
-        lineWidth: 3,
-      });
+      const color = j ? j.color : '#ffffff';
+      const bright = hit.tns === TapNoteScore.W1;
+      ctx.save();
+      ctx.translate(this.laneX(t), recY);
+      ctx.rotate(this.angle(t));
+      const sc = 1 + 0.18 * k;
+      ctx.scale(sc, sc);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = (bright ? 30 : 20) * ds * fade;
+      traceCel(ctx, this.arrowS, CEL_OUTLINE);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.5 * fade;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      traceCel(ctx, this.arrowS * 0.88, CEL_OUTLINE);
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = (bright ? 0.8 : 0.55) * fade;
+      ctx.fill();
+      ctx.restore();
     }
 
-    if (!this.bare) this.drawItgHud(ctx, judge, now, progress, fb);
+    // Judgment and combo sit over the field, like SL's draworder-101 actors.
+    if (!this.bare) this.drawSlOverlay(ctx, judge, now, fb);
   }
 
   /**
-   * ITG note body: flat quantization fill lit toward the point, a hard dark
-   * rim, and a thin inner bevel line. Crisp — no glow, no drop shadow.
+   * Cel-noteskin tap note (the Simply Love default): the classic beveled ITG
+   * arrow — notched-chevron silhouette with a near-black rim, a silver bevel
+   * band, a flat quantization-colored face with a light cel shade, and the
+   * animated stripe scrolling through the stem (the model's "scroller" mesh,
+   * which cel scrolls one texture-height per beat).
    */
   private itgArrow(
     ctx: CanvasRenderingContext2D,
@@ -826,157 +1009,399 @@ export class NoteFieldRenderer {
     alpha: number,
   ): void {
     const s = this.arrowS;
+    const ds = this.ds;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
     ctx.rotate(this.angle(track));
-    traceArrow(ctx, s);
-    ctx.fillStyle = fill;
+    // Silhouette / dark rim, stroked over itself to soften the corners.
+    traceCel(ctx, s, CEL_OUTLINE);
+    ctx.fillStyle = '#0d0e12';
     ctx.fill();
-    // Bevel shading: brighter toward the tip, darker toward the tail.
-    const g = ctx.createLinearGradient(0, -s, 0, 0.78 * s);
-    g.addColorStop(0, 'rgba(255,255,255,0.4)');
-    g.addColorStop(0.45, 'rgba(255,255,255,0.05)');
-    g.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2.5 * ds;
+    ctx.strokeStyle = '#0d0e12';
+    ctx.stroke();
+    // Silver bevel band between rim and face, lit from the tip side.
+    traceCel(ctx, s, CEL_BEVEL);
+    let g = ctx.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(1, 'rgba(170,177,187,0.95)');
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.lineWidth = 5 * this.ds;
-    ctx.strokeStyle = '#14161a';
+    // Flat quantization-colored face with a subtle two-tone cel shade.
+    traceCel(ctx, s, CEL_FACE);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    g = ctx.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, 'rgba(255,255,255,0.32)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.2)');
+    ctx.fillStyle = g;
+    ctx.fill();
+    // Hairline seam where the stem tucks into the chevron V.
+    ctx.lineWidth = 1.5 * ds;
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.stroke();
-    // Thin inner highlight line sells the bevel.
-    ctx.scale(0.78, 0.78);
-    traceArrow(ctx, s);
-    ctx.lineWidth = (2 * this.ds) / 0.78;
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.stroke();
+    // Animated center stripe: a soft highlight sweeping tip→tail each beat
+    // (drawn twice, one period apart, so the wrap is seamless).
+    ctx.clip();
+    const frac = this.nowBeat - Math.floor(this.nowBeat);
+    for (const yC of [-s + frac * 2 * s, -3 * s + frac * 2 * s]) {
+      const sg = ctx.createLinearGradient(0, yC - 0.9 * s, 0, yC + 0.9 * s);
+      sg.addColorStop(0, 'rgba(255,255,255,0)');
+      sg.addColorStop(0.5, 'rgba(255,255,255,0.34)');
+      sg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(-0.188 * s, -s, 0.376 * s, 2 * s);
+    }
     ctx.restore();
   }
 
-  private drawItgHud(
+  /**
+   * Cel receptor: the same silhouette in neutral silver, pulsing bright on
+   * each beat (the skin's diffuseramp between 10% grey and white), with the
+   * inset stem panel from the "Receptor Go" texture. A press blooms it white
+   * and dips the scale, like the common noteskin's PressCommand.
+   */
+  private itgReceptor(
     ctx: CanvasRenderingContext2D,
-    judge: Judge,
-    now: number,
-    progress: number,
-    fb: Feedback,
+    x: number,
+    y: number,
+    track: number,
+    pressed: boolean,
+    beatPulse: number,
   ): void {
+    const s = this.arrowS;
+    const ds = this.ds;
+    const f = beatPulse * beatPulse; // sharp attack on the beat, quick decay
+    const v = pressed ? 246 : Math.round(112 + 104 * f);
+    const grey = (n: number) => {
+      const c = Math.max(0, Math.min(255, Math.round(n)));
+      return `rgb(${c},${c},${Math.min(255, c + 4)})`;
+    };
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(this.angle(track));
+    if (pressed) ctx.scale(0.92, 0.92);
+    traceCel(ctx, s, CEL_OUTLINE);
+    ctx.fillStyle = '#0d0e12';
+    ctx.fill();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2.5 * ds;
+    ctx.strokeStyle = '#0d0e12';
+    ctx.stroke();
+    traceCel(ctx, s, CEL_BEVEL);
+    const g = ctx.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, grey(v + 58));
+    g.addColorStop(1, grey(v - 30));
+    ctx.fillStyle = g;
+    ctx.fill();
+    traceCel(ctx, s, CEL_FACE);
+    ctx.fillStyle = grey(v);
+    ctx.fill();
+    // Inset stem panel (the "Go" stripe housing) with its divider notch.
+    ctx.clip();
+    ctx.fillStyle = grey(v + 34);
+    ctx.fillRect(-0.12 * s, -0.1 * s, 0.24 * s, 0.84 * s);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillRect(-0.12 * s, 0.22 * s, 0.24 * s, 1.5 * ds);
+    ctx.restore();
+  }
+
+  /**
+   * Simply Love gameplay underlay: the full-width black header holding the
+   * bordered song meter (title inside, SongInfoBar.lua), the LifeMeterBar
+   * with its scrolling swoosh sheen (LifeMeter/Standard.lua), the Wendy
+   * dance-percentage left of the field (Score.lua), and the step-density
+   * graph along the bottom. Drawn before the notes, like SL's underlay.
+   */
+  private drawSlUnderlay(ctx: CanvasRenderingContext2D, judge: Judge, progress: number): void {
     const { width, ds } = this;
     const font = (w: number, px: number) =>
       `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
     const cx = width / 2;
-    const recY = this.recY();
-    const beatPulse = 1 - (this.nowBeat - Math.floor(this.nowBeat));
+    const beat = this.nowBeat;
     const fieldW = this.numTracks * this.colW;
 
-    // Top strip: song title/artist left, difficulty + dance score right, with a
-    // thin song-progress line along its bottom edge.
-    const stripH = 34 * ds;
+    // Header: SL's full-width black quad (80/480 of the screen, alpha .85).
+    const headerH = 110 * ds;
     ctx.save();
-    ctx.fillStyle = 'rgba(3,4,6,0.72)';
-    ctx.fillRect(0, 0, width, stripH);
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(0, stripH, width, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, 0, width, headerH);
+
+    // Song meter: white frame, black well, accent-colored stream + title.
+    const mW = Math.min(465 * ds, width * 0.44);
+    const mH = 33 * ds;
+    const mX = cx - mW / 2;
+    const mY = 30 * ds - mH / 2;
+    const bd = 3 * ds; // frame thickness (SL: 2px of a 480-tall screen)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(mX, mY, mW, mH);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(mX + bd, mY + bd, mW - 2 * bd, mH - 2 * bd);
     const prog = Math.max(0, Math.min(1, progress));
-    ctx.fillStyle = 'rgba(236,236,236,0.55)';
-    ctx.fillRect(0, stripH - 2 * ds, width * prog, 2 * ds);
+    ctx.fillStyle = SL_ACCENT;
+    ctx.fillRect(mX + bd, mY + bd, (mW - 2 * bd) * prog, mH - 2 * bd);
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#ececec';
+    ctx.fillStyle = '#ffffff';
     ctx.font = font(700, 15);
-    const title = this.meta.title || 'notefield';
-    const titleW = ctx.measureText(title).width;
-    ctx.fillText(title, 16 * ds, stripH / 2);
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowOffsetY = 1.5 * ds;
+    ctx.fillText(this.meta.title || 'notefield', cx, mY + mH / 2, mW - 16 * ds);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowOffsetY = 0;
     if (this.meta.subtitle) {
-      ctx.fillStyle = 'rgba(236,236,236,0.5)';
+      // Step artist / subtitle, tucked under the meter.
+      ctx.fillStyle = 'rgba(236,236,236,0.55)';
       ctx.font = font(400, 12);
-      ctx.fillText(this.meta.subtitle, 16 * ds + titleW + 10 * ds, stripH / 2);
+      ctx.fillText(this.meta.subtitle, cx, mY + mH + 14 * ds, mW);
     }
+
+    // LifeMeterBar: white frame, black well, accent fill that turns white
+    // when full ("Hot"), plus the beat-scrolled swoosh highlight.
+    const lH = 27 * ds;
+    let lW = 204 * ds;
+    let lX = mX - 23 * ds - lW;
+    if (lX < 10 * ds) {
+      lW = Math.max(60 * ds, mX - 33 * ds);
+      lX = mX - 23 * ds - lW;
+    }
+    const lY = 30 * ds - lH / 2;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(lX - bd, lY - bd, lW + 2 * bd, lH + 2 * bd);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(lX, lY, lW, lH);
+    const life = judge.failed ? 0 : judge.life;
+    const hot = life >= 1;
+    if (life > 0) {
+      const fw = Math.max(2, lW * life);
+      ctx.fillStyle = hot ? '#ffffff' : SL_ACCENT;
+      ctx.fillRect(lX, lY, fw, lH);
+      // Swoosh: SL scrolls a soft diagonal gradient across the fill at half
+      // the song's BPS, at alpha .2 (full strength while Hot).
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(lX, lY, fw, lH);
+      ctx.clip();
+      const p = 1 - ((beat * 0.5) % 1);
+      const gx0 = lX + (p * 2 - 2) * lW;
+      const sw = ctx.createLinearGradient(gx0, lY + lH, gx0 + 2 * lW, lY);
+      sw.addColorStop(0, 'rgba(255,255,255,0)');
+      sw.addColorStop(0.5, `rgba(255,255,255,${hot ? 0.5 : 0.22})`);
+      sw.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = sw;
+      ctx.fillRect(lX, lY, fw, lH);
+      ctx.restore();
+    }
+
+    // Dance percentage (Score.lua: Wendy digits left of the field, no "%").
+    ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'right';
     ctx.fillStyle = '#ececec';
-    ctx.font = font(700, 17);
-    const pct = `${(judge.percentDancePoints * 100).toFixed(2)}%`;
-    const pctW = ctx.measureText(pct).width;
-    ctx.fillText(pct, width - 16 * ds, stripH / 2);
-    ctx.fillStyle = 'rgba(236,236,236,0.5)';
-    ctx.font = font(400, 12);
-    ctx.fillText(this.meta.difficulty, width - 16 * ds - pctW - 12 * ds, stripH / 2);
+    ctx.font = font(800, 40);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = `${(1 * ds).toFixed(2)}px`;
+    ctx.fillText((judge.percentDancePoints * 100).toFixed(2), cx - fieldW / 2 - 28 * ds, 92 * ds);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    // Difficulty, mirrored on the right of the field.
+    ctx.textAlign = 'left';
+    ctx.fillStyle = SL_ACCENT;
+    ctx.font = font(700, 16);
+    ctx.fillText(this.meta.difficulty, cx + fieldW / 2 + 28 * ds, 92 * ds);
     ctx.restore();
 
-    // Life bar: horizontal, top center over the field — green when healthy,
-    // amber then red (with a beat-synced danger pulse) as life drains.
-    const barW = fieldW;
-    const barX = cx - barW / 2;
-    const barY = stripH + 8 * ds;
-    const barH = 9 * ds;
+    this.drawDensityGraph(ctx, judge);
+  }
+
+  /**
+   * SL step-density graph: per-measure NPS as a filled silhouette, blue at
+   * the baseline blending toward purple at the peak (SL-Histogram.lua's
+   * vertex colors), over the #1E282F backing, with the already-played span
+   * swept to black like UpperNPSGraph's ProgressQuad.
+   */
+  private drawDensityGraph(ctx: CanvasRenderingContext2D, judge: Judge): void {
+    const { width, height, ds } = this;
+    if (this.density?.src !== judge.notes) this.buildDensity(judge.notes);
+    const dg = this.density;
+    if (!dg || dg.bins.length < 2 || dg.lastT <= 0) return;
+    const H = 44 * ds;
+    const top = height - H;
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(barX, barY, barW, barH);
-    const life = judge.failed ? 0 : judge.life;
-    if (life > 0) {
-      const fw = Math.max(2, (barW - 2) * life);
-      ctx.fillStyle = life < 0.25 ? '#ff3030' : life < 0.5 ? '#ffc63d' : '#3fe04f';
-      if (life < 0.25) ctx.globalAlpha = 0.55 + 0.45 * beatPulse; // danger pulse
-      ctx.fillRect(barX + 1, barY + 1, fw, barH - 2);
-      ctx.globalAlpha = 1;
-      if (life < 1) {
-        // Bright leading cap, like the ITG lifebar's moving edge.
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.fillRect(barX + 1 + fw - 1.5 * ds, barY + 1, 1.5 * ds, barH - 2);
-      }
-    }
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+    ctx.fillStyle = SL_GRAPH_BG;
+    ctx.fillRect(0, top, width, H);
+    const xOf = (t: number) => (t / dg.lastT) * width;
+    const g = ctx.createLinearGradient(0, height, 0, top);
+    g.addColorStop(0, SL_GRAPH_LO);
+    g.addColorStop(1, SL_GRAPH_HI);
+    ctx.beginPath();
+    ctx.moveTo(xOf(dg.bins[0].t0), height);
+    for (const b of dg.bins) ctx.lineTo(xOf(b.t0), height - b.h * H);
+    const last = dg.bins[dg.bins.length - 1];
+    ctx.lineTo(xOf(last.t1), height);
+    ctx.closePath();
+    ctx.fillStyle = g;
+    ctx.fill();
+    const played = Math.max(0, Math.min(1, this.nowSeconds / dg.lastT)) * width;
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, top, played, H);
     ctx.restore();
+  }
 
-    // Judgment above combo, anchored inside the field past the receptor line
-    // (flips under reverse so both stay on screen).
+  /**
+   * Per-measure notes-per-second histogram (SL-Histogram's NPSperMeasure).
+   * Measure-boundary times are interpolated from the chart's own (beat, time)
+   * pairs, so BPM changes are respected without needing timing data here.
+   * Cached per notes array; rebuilt when the song changes.
+   */
+  private buildDensity(notes: readonly ActiveNote[]): void {
+    const bins: Array<{ t0: number; t1: number; h: number }> = [];
+    const beats: number[] = [];
+    const times: number[] = [];
+    const counts = new Map<number, number>();
+    let lastT = 0;
+    let firstM = Infinity;
+    let lastM = -1;
+    for (const n of notes) {
+      beats.push(n.beat);
+      times.push(n.time);
+      const end = n.note.type === TapNoteType.HoldHead ? n.tailTime : n.time;
+      if (end > lastT) lastT = end;
+      const kind = n.note.type;
+      if (kind !== TapNoteType.Tap && kind !== TapNoteType.HoldHead && kind !== TapNoteType.Lift)
+        continue;
+      if (n.hidden) continue;
+      const m = Math.floor(n.beat / 4);
+      counts.set(m, (counts.get(m) ?? 0) + 1);
+      if (m < firstM) firstM = m;
+      if (m > lastM) lastM = m;
+    }
+    this.density = { src: notes, bins, lastT };
+    if (lastM < 0 || beats.length < 2) return;
+    // Piecewise-linear beat→time lookup; the cursor only moves forward since
+    // measure boundaries are scanned in ascending order.
+    let i = 0;
+    const timeAt = (b: number): number => {
+      while (i < beats.length - 1 && beats[i + 1] <= b) i++;
+      let j = i;
+      let k = i + 1;
+      while (k < beats.length && beats[k] <= beats[j]) k++;
+      if (k >= beats.length) {
+        k = beats.length - 1;
+        j = k - 1;
+        while (j >= 0 && beats[j] >= beats[k]) j--;
+        if (j < 0) return times[k]; // degenerate: the chart has no beat spread
+      }
+      const slope = (times[k] - times[j]) / (beats[k] - beats[j]);
+      return Number.isFinite(slope) ? times[j] + (b - beats[j]) * slope : times[j];
+    };
+    let peak = 0;
+    const raw: Array<{ t0: number; t1: number; nps: number }> = [];
+    let t0 = timeAt(firstM * 4);
+    for (let m = firstM; m <= lastM; m++) {
+      const t1 = timeAt((m + 1) * 4);
+      const nps = (counts.get(m) ?? 0) / Math.max(0.001, t1 - t0);
+      raw.push({ t0, t1, nps });
+      if (nps > peak) peak = nps;
+      t0 = t1;
+    }
+    if (peak <= 0) return;
+    for (const r of raw) bins.push({ t0: r.t0, t1: r.t1, h: Math.min(1, r.nps / peak) });
+    const endT = raw[raw.length - 1].t1;
+    if (endT > lastT) this.density.lastT = endT;
+  }
+
+  /**
+   * SL overlay, drawn above the notes: the judgment label in the ITG colors
+   * with the "Love" graphic's soft same-color glow and SL's zoom tween
+   * (pop in slightly large, settle, hold, shrink away), and the bare combo
+   * digits below — white, or pulsing SL's full-combo blue/gold/green pairs.
+   */
+  private drawSlOverlay(
+    ctx: CanvasRenderingContext2D,
+    judge: Judge,
+    now: number,
+    fb: Feedback,
+  ): void {
+    const { ds } = this;
+    const font = (w: number, px: number) =>
+      `${w} ${px * ds}px "Space Grotesk", system-ui, sans-serif`;
+    const cx = this.width / 2;
+    const recY = this.recY();
+    // Anchored inside the field past the receptor line (flips under reverse).
     const anchorY = this.reverse ? recY - 215 * ds : recY + 215 * ds;
+
     if (fb.lastJudgment) {
       const age = now - fb.lastJudgment.atSeconds;
       const j = ITG_JUDGMENT[fb.lastJudgment.tns];
-      if (j && age >= 0 && age < JUDGMENT_LIFE) {
-        const t = age / JUDGMENT_LIFE;
-        const pop = t < 0.12 ? 1.22 - (t / 0.12) * 0.22 : 1;
-        const alpha = t > 0.8 ? (1 - t) / 0.2 : 1;
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(cx, anchorY - 26 * ds);
-        ctx.scale(pop, pop);
-        ctx.textAlign = 'center';
-        ctx.fillStyle = j.color;
-        ctx.font = font(700, 30);
-        if ('letterSpacing' in ctx) ctx.letterSpacing = `${(1.5 * ds).toFixed(2)}px`;
-        // Hard offset shadow (no blur) keeps it crisp over the background.
-        ctx.shadowColor = 'rgba(0,0,0,0.85)';
-        ctx.shadowOffsetY = 2 * ds;
-        ctx.fillText(j.label, 0, 0);
-        ctx.restore();
+      if (j && age >= 0 && age < SL_JUDGMENT_LIFE) {
+        const t = age / SL_JUDGMENT_LIFE;
+        // SL's tween: zoom 0.8 → decelerate 0.75 → sleep → accelerate 0.
+        let pop: number;
+        if (t < 0.111) {
+          const k = t / 0.111;
+          pop = 1 + 0.067 * (1 - k * (2 - k));
+        } else if (t < 0.778) {
+          pop = 1;
+        } else {
+          const k = (t - 0.778) / 0.222;
+          pop = Math.max(0, 1 - k * k);
+        }
+        if (pop > 0.02) {
+          ctx.save();
+          ctx.translate(cx, anchorY - 26 * ds);
+          ctx.scale(pop, pop);
+          ctx.textAlign = 'center';
+          ctx.font = font(800, 34);
+          if ('letterSpacing' in ctx) ctx.letterSpacing = `${(1.5 * ds).toFixed(2)}px`;
+          ctx.shadowColor = j.color;
+          ctx.shadowBlur = 18 * ds;
+          ctx.fillStyle = j.color;
+          ctx.fillText(j.label, 0, 0);
+          ctx.shadowBlur = 0;
+          ctx.lineWidth = 1.2 * ds;
+          ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+          ctx.strokeText(j.label, 0, 0);
+          ctx.restore();
+        }
       }
     }
 
-    // Combo: a plain white count with a small label, subtle pop on increment.
+    // Combo: digits only (SL shows no label), visible from 4 (ShowComboAt).
     if (judge.combo !== this.lastCombo) {
       if (judge.combo > this.lastCombo) this.comboPopAt = now;
       this.lastCombo = judge.combo;
     }
     if (judge.combo > 3) {
+      const tc = judge.tapCounts;
+      const broken =
+        (tc[TapNoteScore.Miss] ?? 0) + (tc[TapNoteScore.W5] ?? 0) + (tc[TapNoteScore.W4] ?? 0);
+      const w3 = tc[TapNoteScore.W3] ?? 0;
+      const w2 = tc[TapNoteScore.W2] ?? 0;
+      let pulse: readonly [string, string] | null = null;
+      if (broken === 0) {
+        if (w3 === 0 && w2 === 0) pulse = SL_COMBO_W1;
+        else if (w3 === 0) pulse = SL_COMBO_W2;
+        else pulse = SL_COMBO_W3;
+      }
+      let fill = 'rgba(255,255,255,0.98)';
+      if (pulse) {
+        const ph = (now % 0.8) / 0.8; // SL's diffuseshift, 0.8s period
+        fill = lerpHex(pulse[0], pulse[1], ph < 0.5 ? ph * 2 : (1 - ph) * 2);
+      }
       const k = Math.max(0, Math.min(1, (now - this.comboPopAt) / 0.13));
-      const pop = 1 + 0.1 * (1 - k);
+      const pop = 1 + 0.08 * (1 - k);
       ctx.save();
-      ctx.translate(cx, anchorY + 34 * ds);
+      ctx.translate(cx, anchorY + 36 * ds);
       ctx.scale(pop, pop);
       ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(236,236,236,0.95)';
-      ctx.font = font(700, 44);
-      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.font = font(800, 48);
+      // Hard 45° drop shadow, like SL's shadowlength on the combo font.
+      ctx.shadowColor = 'rgba(0,0,0,0.85)';
+      ctx.shadowOffsetX = 2 * ds;
       ctx.shadowOffsetY = 2 * ds;
+      ctx.fillStyle = fill;
       ctx.fillText(String(judge.combo), 0, 0);
-      ctx.shadowColor = 'transparent';
-      ctx.shadowOffsetY = 0;
-      ctx.fillStyle = 'rgba(236,236,236,0.55)';
-      ctx.font = font(700, 11);
-      if ('letterSpacing' in ctx) ctx.letterSpacing = `${(3 * ds).toFixed(2)}px`;
-      ctx.fillText('COMBO', 0, 18 * ds);
       ctx.restore();
     }
   }

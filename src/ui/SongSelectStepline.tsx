@@ -28,7 +28,7 @@ import { previewSong, stopPreview } from '../audio/songPreview';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 
-const AC = '#ff4d3d';
+const AC = '#ff5d47';
 const DIFF_NAMES = ['BEGINNER', 'EASY', 'MEDIUM', 'HARD', 'EXPERT'];
 const DIFF_CLR = ['#37d5ff', '#ffcf3d', '#ff5c5c', '#59f07f', '#c86bff'];
 const SORTS = ['title', 'artist', 'bpm', 'level'] as const;

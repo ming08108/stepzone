@@ -5,7 +5,7 @@
  */
 import { type ReactNode } from 'react';
 
-export const STEP_AC = '#ff4d3d';
+export const STEP_AC = '#ff5d47';
 
 export function Stage({
   label,

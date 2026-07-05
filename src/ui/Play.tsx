@@ -61,7 +61,7 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
   );
 }
 
-const AC = '#ff4d3d';
+const AC = '#ff5d47';
 const DIFF_COLOR: Record<string, string> = {
   Beginner: '#37d5ff',
   Easy: '#ffcf3d',
@@ -77,11 +77,11 @@ const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W3, 'GREAT', '#59f07f'],
   [TapNoteScore.W4, 'DECENT', '#c86bff'],
   [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
-  [TapNoteScore.Miss, 'MISS', '#ff4d3d'],
+  [TapNoteScore.Miss, 'MISS', '#ff5d47'],
 ];
 
 const CTL_BTN =
-  'border border-white/15 bg-black/30 px-3 py-1.5 text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:border-[#ff4d3d] hover:text-[#ececec]';
+  'border border-white/15 bg-black/30 px-3 py-1.5 text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:border-[#ff5d47] hover:text-[#ececec]';
 
 /** Live FPS counter (rendered over the playfield). */
 function FpsMeter() {
