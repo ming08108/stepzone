@@ -279,6 +279,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     await session.start(req.encodedAudio);
   };
 
+  // Straight into the song: START on Player Options already confirmed intent
+  // (and is the activating gesture for audio), so there is no second PRESS
+  // START gate — the ready splash just covers the load.
+  const startRef = useRef(start);
+  startRef.current = start;
+  useEffect(() => {
+    void startRef.current();
+  }, []);
+
   const toggleFullscreen = () => {
     const el = wrapRef.current;
     if (!el) return;
@@ -335,16 +344,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               >
                 {diffName} {req.chart.meter}
               </div>
-              <button
-                ref={ctaRef}
-                onClick={start}
-                className="mt-4 text-[16px] tracking-[0.22em] outline-none"
-                style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+              <div
+                className="mt-4 text-[14px] tracking-[0.22em] text-[#ececec]/60"
+                style={{ animation: 'blinkStart 1.4s infinite' }}
               >
-                PRESS START (ENTER)
-              </button>
-              <div className="text-[12px] tracking-[0.14em] text-[#ececec]/45">
-                ← ↓ ↑ → &nbsp;OR&nbsp; D F J K
+                LOADING…
               </div>
             </>
           )}
