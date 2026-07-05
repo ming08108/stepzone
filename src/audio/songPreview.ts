@@ -2,10 +2,9 @@
  * Song preview player (#5): loops a song's sample snippet (SAMPLESTART/LENGTH)
  * while it's highlighted in the menus and on the Player Options screen. Runs on
  * its own AudioContext, independent of gameplay. Debounced so scrolling the list
- * doesn't hammer the network/decoder, with a small decoded-buffer cache. Every
+ * doesn't hammer the disk/decoder, with a small decoded-buffer cache. Every
  * failure is silent (no preview) — it's a nicety, never blocking.
  */
-import { ensureRemoteLoaded, readRemoteAudio } from '../io/remoteLibrary';
 import { type LibraryEntry, readSongAudio } from '../io/songFiles';
 import type { Song } from '../song/song';
 import { previewWindow } from './previewWindow';
@@ -116,7 +115,7 @@ async function run(myToken: number, resolve: ResolvePreview): Promise<void> {
     if (!res || myToken !== token) return;
     begin(ac, res.buf, res.song);
   } catch {
-    // Silent by contract (see header): network/decode failures just mean
+    // Silent by contract (see header): read/decode failures just mean
     // no preview, never an unhandled rejection.
   }
 }
@@ -142,16 +141,13 @@ async function decodeEnc(
 /** Preview a library entry after a short settle delay (song-select hover). */
 export function previewSong(entry: LibraryEntry, delayMs = 450): void {
   schedulePreview(delayMs, async (ac) => {
-    const key = entry.remoteDir ?? entry.sourceName;
+    // Key on the song folder's path — simfile names alone collide across packs.
+    const key = entry.files[0]?.webkitRelativePath || entry.sourceName;
     const cached = bufCache.get(key);
     if (cached) return { buf: cached, song: entry.song };
-    let e = entry;
-    if (entry.remoteDir && entry.song.charts.length === 0) {
-      e = { ...entry, song: await ensureRemoteLoaded(entry) };
-    }
-    const enc = e.remoteDir ? await readRemoteAudio(e) : await readSongAudio(e);
+    const enc = await readSongAudio(entry);
     if (!enc) return null;
-    return decodeEnc(key, enc, e.song, ac);
+    return decodeEnc(key, enc, entry.song, ac);
   });
 }
 

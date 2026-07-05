@@ -28,9 +28,10 @@ npm test        # unit tests: MSD parser, timing, note grid, sync clock, judgmen
 npm run build   # strict typecheck + production build
 ```
 
-Node ≥ 22.6 matters for the `scripts/` song-server tooling (`npm run
-song-server`, [`docs/SONG-SERVER.md`](docs/SONG-SERVER.md)), which relies on
-Node running TypeScript directly.
+Songs load straight from disk: pick (or drop) a song folder, a pack, or a
+whole Songs directory on the song-select screen. In Chromium browsers the
+choice is remembered, so the library reloads on the next visit after a
+one-click permission re-grant.
 
 Play with <kbd>←</kbd> <kbd>↓</kbd> <kbd>↑</kbd> <kbd>→</kbd> (or D F J K), or a
 gamepad / dance pad. The "Inspect" tab shows the parsed song/timing/notes.
@@ -55,7 +56,7 @@ src/
   render/     note-field canvas, WebGPU background    (spec doc 8)
   gameplay/   judgment, scoring, life                 (spec doc 4)
   game/       the play-loop orchestrator              (spec doc 9)
-  io/         song folders, packs, remote catalog
+  io/         song folders, packs, remembered folder handle
   app/        persisted settings / favorites / scores
   ui/         React components
 tests/        vitest suites (mirror the engine)

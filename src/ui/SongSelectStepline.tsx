@@ -17,11 +17,11 @@ import {
   type LibraryEntry,
 } from '../io/songFiles';
 import {
-  ensureRemoteLoaded,
-  fetchRemoteBackground,
-  loadRemoteLibrary,
-  readRemoteAudio,
-} from '../io/remoteLibrary';
+  grantStoredFolder,
+  pickSongFolder,
+  restoreSongFolder,
+  supportsFolderPicker,
+} from '../io/localFolder';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import { previewSong, stopPreview } from '../audio/songPreview';
@@ -37,9 +37,9 @@ type Sort = (typeof SORTS)[number];
 const ROW_H = 44;
 
 // The loaded library, kept across remounts like the filters below: returning
-// from a song reuses it instead of refetching the catalog and re-deriving every
+// from a song reuses it instead of re-reading the folder and re-deriving every
 // row (parsed simfiles on the entries survive too). Session-scoped — a full
-// page reload fetches the catalog fresh, so server-side additions still land.
+// page reload restores the library from the remembered folder on disk.
 let libraryCache: LibraryEntry[] | null = null;
 
 // Filter/selection state kept across remounts (e.g. after returning from a song)
@@ -80,20 +80,11 @@ function deriveLevels(song: Song): Array<number | null> {
 }
 
 function bpmText(entry: LibraryEntry): { text: string; sort: number } {
-  if (entry.bpm) {
-    const nums = entry.bpm.split(/[–-]/).map(Number);
-    return { text: entry.bpm, sort: nums[nums.length - 1] || 0 };
-  }
   const r = songBpmRange(entry.song);
   if (r.max <= 0) return { text: '—', sort: 0 };
   const lo = Math.round(r.min);
   const hi = Math.round(r.max);
   return { text: lo === hi ? String(hi) : `${lo}–${hi}`, sort: hi };
-}
-
-function mergeEntries(prev: LibraryEntry[], incoming: LibraryEntry[]): LibraryEntry[] {
-  const have = new Set(prev.map((e) => e.remoteDir).filter(Boolean));
-  return [...prev, ...incoming.filter((e) => !have.has(e.remoteDir))];
 }
 
 function initials(title: string): string {
@@ -118,6 +109,9 @@ export function SongSelect({
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Name of a remembered song folder awaiting a click to re-grant access.
+  const [restoreName, setRestoreName] = useState<string | null>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
 
   const [sel, setSel] = useState(savedFilters.sel);
   const [diff, setDiff] = useState(savedFilters.diff);
@@ -142,15 +136,31 @@ export function SongSelect({
     return () => ro.disconnect();
   }, []);
 
-  // Keep the module cache current: once any real library content is in (a
-  // remote catalog or local folders), leaving the screen must not lose it.
+  // Keep the module cache current: once real library content is in (a loaded
+  // song folder), leaving the screen must not lose it.
   useEffect(() => {
-    if (entries.some((e) => e.remoteDir || e.files.length > 0)) libraryCache = entries;
+    if (entries.some((e) => e.files.length > 0)) libraryCache = entries;
   }, [entries]);
 
-  // Auto-load the built-in local library (/songs) plus any saved external
-  // catalog — but only once per session: on a remount the cache serves the
-  // list instantly with no catalog refetch.
+  // Parse a picked/restored/dropped folder into entries. A folder selection is
+  // the library: it replaces previously loaded songs (so restore and re-pick
+  // are idempotent) but leaves the built-in example alone.
+  const addLocalFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    setBusy(true);
+    try {
+      const { entries: loaded } = await loadLibraryFromFiles(files);
+      if (loaded.length) {
+        setEntries((prev) => [...prev.filter((e) => e.files.length === 0), ...loaded]);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // Auto-load the remembered song folder, once per session (on a remount the
+  // cache serves the list instantly). A remembered folder the browser won't
+  // silently re-open surfaces as a click-to-restore banner instead.
   useEffect(() => {
     if (libraryCache) return;
     let cancelled = false;
@@ -163,20 +173,37 @@ export function SongSelect({
       },
     ]);
     void (async () => {
-      const localUrl = new URL('/songs/catalog.json', location.href).href;
-      const saved = localStorage.getItem('notefield.catalogUrl');
-      for (const url of [localUrl, ...(saved && saved !== localUrl ? [saved] : [])]) {
-        try {
-          const { entries: remote } = await loadRemoteLibrary(url);
-          if (!cancelled && remote.length) setEntries((prev) => mergeEntries(prev, remote));
-        } catch {
-          /* not configured */
-        }
-      }
+      const local = await restoreSongFolder();
+      if (cancelled || !local) return;
+      if ('needsGesture' in local) setRestoreName(local.name);
+      else await addLocalFiles(local.files);
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // "FOLDER" button: native directory picker where supported (Chromium — the
+  // choice is remembered across reloads), <input webkitdirectory> elsewhere.
+  const chooseFolder = async () => {
+    if (supportsFolderPicker()) {
+      const picked = await pickSongFolder();
+      if (picked) await addLocalFiles(picked.files);
+    } else {
+      folderRef.current?.click();
+    }
+  };
+
+  // Restore banner click: re-grant access to the remembered folder and load it.
+  const finishRestore = async () => {
+    setRestoreName(null);
+    const granted = await grantStoredFolder();
+    if (granted) await addLocalFiles(granted.files);
+  };
+
+  useEffect(() => {
+    if (folderRef.current) folderRef.current.webkitdirectory = true;
   }, []);
 
   const songs = useMemo<SongVM[]>(
@@ -190,7 +217,7 @@ export function SongSelect({
           pack: e.pack ?? '',
           bpm: b.text,
           bpmSort: b.sort,
-          levels: e.levels ?? deriveLevels(e.song),
+          levels: deriveLevels(e.song),
         };
       }),
     [entries],
@@ -248,21 +275,16 @@ export function SongSelect({
     const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
     if (!s || s.levels[diff] == null) return;
     const entry = s.entry;
-    const loaded =
-      entry.remoteDir && entry.song.charts.length === 0
-        ? await ensureRemoteLoaded(entry)
-        : entry.song;
-    const singles = loaded.charts.filter((c) => c.stepsType === 'dance-single');
-    const use = singles.length ? singles : loaded.charts;
+    const singles = entry.song.charts.filter((c) => c.stepsType === 'dance-single');
+    const use = singles.length ? singles : entry.song.charts;
     const chart =
       use.find(
         (c) => slotOf(difficultyToString(c.difficulty)) === diff && c.meter === s.levels[diff],
       ) ?? use.find((c) => slotOf(difficultyToString(c.difficulty)) === diff);
     if (!chart) return;
-    const e2 = { ...entry, song: loaded };
-    const audio = e2.remoteDir ? await readRemoteAudio(e2) : await readSongAudio(e2);
-    const bg = e2.remoteDir ? await fetchRemoteBackground(e2) : findBackgroundFile(e2);
-    onPlay({ song: loaded, chart, encodedAudio: audio, backgroundFile: bg });
+    const audio = await readSongAudio(entry);
+    const bg = findBackgroundFile(entry);
+    onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
   }, [filtered, sel, diff, onPlay]);
 
   const reset = () => {
@@ -374,11 +396,41 @@ export function SongSelect({
         </div>
         <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
           <span>{filtered.length} SONGS</span>
+          <button
+            onClick={() => void chooseFolder()}
+            className="border border-white/[0.14] px-[10px] py-[4px] hover:border-[#ff5d47] hover:text-[#ececec]"
+            title="Load a song folder from this computer"
+          >
+            + FOLDER
+          </button>
           <button onClick={onOptions} className="hover:text-[#ececec]" title="Options">
             ⚙
           </button>
         </div>
       </div>
+
+      {/* Remembered-folder restore (browsers require a click to re-grant access) */}
+      {restoreName && (
+        <button
+          onClick={() => void finishRestore()}
+          className="flex h-[40px] flex-none items-center justify-center gap-2 border-b border-white/[0.09] text-[12px] tracking-[0.14em]"
+          style={{ color: AC, background: AC + '14' }}
+        >
+          RELOAD SONG LIBRARY “{restoreName.toUpperCase()}” — CLICK TO ALLOW FOLDER ACCESS
+        </button>
+      )}
+
+      <input
+        ref={folderRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = '';
+          void addLocalFiles(files);
+        }}
+      />
 
       {/* Detail panel */}
       <div className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]">

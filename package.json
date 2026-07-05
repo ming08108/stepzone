@@ -15,9 +15,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "song-server": "node scripts/song-server.ts",
-    "make-catalog": "node scripts/make-catalog.ts"
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@fontsource/chakra-petch": "^5.2.7",
