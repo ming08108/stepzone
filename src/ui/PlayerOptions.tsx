@@ -31,17 +31,26 @@ const DIFF_COLOR: Record<string, string> = {
 };
 
 interface Opts {
-  speed: number;
+  scrollType: 'C' | 'X';
+  cmod: number; // constant target BPM
+  xmod: number; // BPM multiplier
   bg: number;
 }
 function loadOpts(): Opts {
   try {
     const o = JSON.parse(localStorage.getItem('stepline.options') || '');
-    if (o && typeof o.speed === 'number') return { speed: o.speed, bg: o.bg | 0 };
+    if (o && typeof o === 'object') {
+      return {
+        scrollType: o.scrollType === 'X' ? 'X' : 'C',
+        cmod: typeof o.cmod === 'number' ? o.cmod : 500,
+        xmod: typeof o.xmod === 'number' ? o.xmod : typeof o.speed === 'number' ? o.speed : 2,
+        bg: o.bg | 0,
+      };
+    }
   } catch {
     /* default below */
   }
-  return { speed: 2, bg: 1 };
+  return { scrollType: 'C', cmod: 500, xmod: 2, bg: 1 };
 }
 
 /** Small looping preview: notes scrolling up to receptors at the chosen speed. */
@@ -184,31 +193,39 @@ export function PlayerOptions({
   });
   const chart = charts[Math.min(chartIdx, charts.length - 1)] ?? req.chart;
 
-  const mult = opts.speed;
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
+  // Preview scroll multiplier: CMod's constant BPM mapped onto this song's tempo,
+  // or the raw XMod multiplier.
+  const mult = opts.scrollType === 'C' ? opts.cmod / (bpm || 150) : opts.xmod;
   const diffName = difficultyToString(chart.difficulty);
   const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
 
   const go = () => {
-    update({ scrollMode: 'X', scrollValue: opts.speed, bgMode: BG_MODE[opts.bg] });
+    update({
+      scrollMode: opts.scrollType,
+      scrollValue: opts.scrollType === 'C' ? opts.cmod : opts.xmod,
+      bgMode: BG_MODE[opts.bg],
+    });
     onStart(chart);
   };
 
   const adjust = (dir: number) => {
-    if (row === 0)
-      setOpts((o) => ({
-        ...o,
-        speed: Math.max(0.5, Math.min(3.5, +(o.speed + dir * 0.25).toFixed(2))),
-      }));
-    else if (row === 1) setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
+    if (row === 0) setOpts((o) => ({ ...o, scrollType: o.scrollType === 'C' ? 'X' : 'C' }));
+    else if (row === 1)
+      setOpts((o) =>
+        o.scrollType === 'C'
+          ? { ...o, cmod: Math.max(100, Math.min(1000, o.cmod + dir * 25)) }
+          : { ...o, xmod: Math.max(0.5, Math.min(8, +(o.xmod + dir * 0.25).toFixed(2))) },
+      );
+    else if (row === 2) setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
     else setOpts((o) => ({ ...o, bg: (o.bg + dir + 3) % 3 }));
   };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp') setRow((v) => (v + 2) % 3);
-      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % 3);
+      if (e.key === 'ArrowUp') setRow((v) => (v + 3) % 4);
+      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % 4);
       else if (e.key === 'ArrowLeft') adjust(-1);
       else if (e.key === 'ArrowRight') adjust(1);
       else if (e.key === 'Enter') go();
@@ -222,9 +239,17 @@ export function PlayerOptions({
 
   const rows: Array<{ label: string; value: string; help: string; valueColor?: string }> = [
     {
-      label: 'SPEED MOD',
-      value: `${opts.speed.toFixed(2)}×`,
-      help: `How fast the arrows scroll (multiple of the song's BPM). Higher = faster and more spread out — easier to read individual steps, less time on screen. ${bpm ? `≈ ${Math.round(bpm * opts.speed)} BPM on this song.` : ''}`,
+      label: 'SCROLL TYPE',
+      value: opts.scrollType === 'C' ? 'CONSTANT' : 'MULTIPLIER',
+      help: "CONSTANT (CMod) locks one scroll speed no matter how the song's tempo changes — steady and predictable (recommended). MULTIPLIER (XMod) scales with the song's BPM, so arrows speed up and slow down with the music.",
+    },
+    {
+      label: 'SPACING',
+      value: opts.scrollType === 'C' ? `C${opts.cmod}` : `${opts.xmod.toFixed(2)}×`,
+      help:
+        opts.scrollType === 'C'
+          ? "Constant scroll speed / note spacing, in BPM. Higher = faster and more spread out. Stays fixed through the song's tempo changes."
+          : `Multiplier on the song's BPM — higher = faster and more spread out.${bpm ? ` ≈ ${Math.round(bpm * opts.xmod)} BPM on this song.` : ''}`,
     },
     {
       label: 'DIFFICULTY',
