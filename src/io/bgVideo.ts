@@ -50,6 +50,8 @@ export interface BgConvertStatus {
   name: string;
   /** 0..1 within the current file. */
   progress: number;
+  /** Jobs left including this one (n−1 more queued behind it). */
+  remaining: number;
 }
 
 const subs = new Set<(s: BgConvertStatus | null) => void>();
@@ -157,7 +159,7 @@ function queueConvert(key: string, file: File): void {
       if (await getCachedVideo(key)) return; // raced: another play converted it
       const ff = await ensureFfmpeg();
       if (!ff) return;
-      notify({ name: file.name, progress: 0 });
+      notify({ name: file.name, progress: 0, remaining: queued.size });
       const out = await convert(ff, file);
       if (out) await putCachedVideo(key, out.data, out.ext);
     } catch {

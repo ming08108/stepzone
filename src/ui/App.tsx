@@ -5,6 +5,7 @@ import { Inspector } from './Inspector';
 import { SongSelect } from './SongSelectStepline';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
+import { BgConvertBadge } from './BgConvertBadge';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
@@ -42,8 +43,9 @@ export function App() {
   const [view, setView] = useState<View>('menu');
   const [req, setReq] = useState<PlayRequest | null>(null);
 
+  let body: ReactNode;
   if (view === 'playoptions' && req) {
-    return (
+    body = (
       <PlayerOptions
         req={req}
         onStart={(chart, practice) => {
@@ -53,32 +55,37 @@ export function App() {
         onBack={() => setView('menu')}
       />
     );
-  }
-  if (view === 'play' && req) {
-    return <Play req={req} onExit={() => setView('menu')} />;
-  }
-  if (view === 'options') {
-    return <Options onBack={() => setView('menu')} onCalibrate={() => setView('calibrate')} />;
-  }
-  if (view === 'calibrate') {
-    return <Calibrate onBack={() => setView('options')} />;
-  }
-  if (view === 'inspect') {
-    return (
+  } else if (view === 'play' && req) {
+    body = <Play req={req} onExit={() => setView('menu')} />;
+  } else if (view === 'options') {
+    body = <Options onBack={() => setView('menu')} onCalibrate={() => setView('calibrate')} />;
+  } else if (view === 'calibrate') {
+    body = <Calibrate onBack={() => setView('options')} />;
+  } else if (view === 'inspect') {
+    body = (
       <Chrome title="engine inspector" onBack={() => setView('menu')}>
         <Inspector />
       </Chrome>
     );
+  } else {
+    body = (
+      <SongSelect
+        onPlay={(r) => {
+          setReq(r);
+          setView('playoptions');
+        }}
+        onInspect={() => setView('inspect')}
+        onOptions={() => setView('options')}
+      />
+    );
   }
 
+  // Background-conversion badge floats over every view (the work usually runs
+  // while the user is mid-song, exactly when no menu chrome is visible).
   return (
-    <SongSelect
-      onPlay={(r) => {
-        setReq(r);
-        setView('playoptions');
-      }}
-      onInspect={() => setView('inspect')}
-      onOptions={() => setView('options')}
-    />
+    <>
+      {body}
+      <BgConvertBadge />
+    </>
   );
 }
