@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { pickSongFolder } from '../src/io/localFolder';
+import { addSourceFromDrop, addSourceFromPicker } from '../src/io/localFolder';
 import { loadLibraryFromFiles } from '../src/io/songFiles';
 
 /** Minimal mock File System Access handles (what showDirectoryPicker returns). */
@@ -31,7 +31,7 @@ afterEach(() => {
   delete g.window;
 });
 
-describe('pickSongFolder directory walk', () => {
+describe('addSourceFromPicker directory walk', () => {
   it('collects song files with webkitRelativePath rooted at the picked folder', async () => {
     stubPicker(
       dirHandle('Songs', [
@@ -47,9 +47,10 @@ describe('pickSongFolder directory walk', () => {
         dirHandle('__MACOSX', [fileHandle('._a.ssc')]), // metadata — skipped
       ]),
     );
-    const picked = await pickSongFolder();
-    expect(picked?.name).toBe('Songs');
-    const paths = picked!.files.map((f) => f.webkitRelativePath).sort();
+    const added = await addSourceFromPicker();
+    expect(added?.id).toBeTruthy();
+    expect(added?.folder.name).toBe('Songs');
+    const paths = added!.folder.files.map((f) => f.webkitRelativePath).sort();
     expect(paths).toEqual([
       'Songs/Pack/Song A/a.ogg',
       'Songs/Pack/Song A/a.ssc',
@@ -66,8 +67,8 @@ describe('pickSongFolder directory walk', () => {
         ]),
       ]),
     );
-    const picked = await pickSongFolder();
-    const { entries } = await loadLibraryFromFiles(picked!.files);
+    const added = await addSourceFromPicker();
+    const { entries } = await loadLibraryFromFiles(added!.folder.files);
     expect(entries.map((e) => e.song.title)).toEqual(['One', 'Two']);
     expect(entries.map((e) => e.pack)).toEqual(['My Pack', 'My Pack']);
     expect(entries[0].files.some((f) => f.name === 'one.ogg')).toBe(true);
@@ -79,8 +80,8 @@ describe('pickSongFolder directory walk', () => {
     let tree: ReturnType<typeof dirHandle> = deep;
     for (let i = 5; i >= 1; i--) tree = dirHandle(`d${i}`, [tree, fileHandle(`at-${i}.ssc`)]);
     stubPicker(dirHandle('root', [tree]));
-    const picked = await pickSongFolder();
-    const names = picked!.files.map((f) => f.name);
+    const added = await addSourceFromPicker();
+    const names = added!.folder.files.map((f) => f.name);
     expect(names).toContain('at-5.ssc'); // 6 levels deep (root/d1…d5/file)
     expect(names).not.toContain('too-deep.ssc'); // 7 levels deep
   });
@@ -91,6 +92,42 @@ describe('pickSongFolder directory walk', () => {
         throw new DOMException('user canceled', 'AbortError');
       },
     };
-    expect(await pickSongFolder()).toBeNull();
+    expect(await addSourceFromPicker()).toBeNull();
+  });
+});
+
+describe('addSourceFromDrop', () => {
+  const dropOf = (items: unknown[]) => ({ items }) as unknown as DataTransfer;
+
+  it('adopts a single dropped directory with rooted paths', async () => {
+    const item = {
+      kind: 'file',
+      webkitGetAsEntry: () => ({ isDirectory: true }),
+      getAsFileSystemHandle: async () =>
+        dirHandle('Pack', [dirHandle('Song', [fileHandle('s.ssc', ssc('S'))])]),
+    };
+    const pending = addSourceFromDrop(dropOf([item]));
+    expect(pending).not.toBeNull();
+    const { id, folder } = await pending!;
+    expect(id).toBeTruthy();
+    expect(folder.name).toBe('Pack');
+    expect(folder.files.map((f) => f.webkitRelativePath)).toEqual(['Pack/Song/s.ssc']);
+  });
+
+  it('declines (synchronously) drops the legacy path must handle', () => {
+    const dir = {
+      kind: 'file',
+      webkitGetAsEntry: () => ({ isDirectory: true }),
+      getAsFileSystemHandle: async () => null,
+    };
+    expect(addSourceFromDrop(dropOf([dir, dir]))).toBeNull(); // multi-folder drop
+    const loose = {
+      kind: 'file',
+      webkitGetAsEntry: () => ({ isDirectory: false }),
+      getAsFileSystemHandle: async () => null,
+    };
+    expect(addSourceFromDrop(dropOf([loose]))).toBeNull(); // loose file
+    const noHandles = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) };
+    expect(addSourceFromDrop(dropOf([noHandles]))).toBeNull(); // non-Chromium
   });
 });

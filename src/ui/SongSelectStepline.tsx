@@ -16,10 +16,16 @@ import {
   type LibraryEntry,
 } from '../io/songFiles';
 import {
-  grantStoredFolder,
-  pickSongFolder,
-  restoreSongFolder,
+  addSourceFromDrop,
+  addSourceFromPicker,
+  grantPendingSources,
+  listSources,
+  readSource,
+  removeSource,
+  restoreSources,
+  setSourceEnabled,
   supportsFolderPicker,
+  type SongSource,
 } from '../io/localFolder';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
@@ -107,10 +113,19 @@ export function SongSelect({
   const [viewH, setViewH] = useState(400);
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // Name of a remembered song folder awaiting a click to re-grant access.
-  const [restoreName, setRestoreName] = useState<string | null>(null);
+  // Load status shown as an overlay over the list ("SCANNING…", "LOADING m/n").
+  const [loading, setLoading] = useState<{ msg: string; frac?: number } | null>(null);
+  // The remembered folder sources (io/localFolder) and their management panel.
+  const [sources, setSources] = useState<SongSource[]>([]);
+  const [showSources, setShowSources] = useState(false);
+  const restoring = useRef(false);
   const folderRef = useRef<HTMLInputElement>(null);
+
+  // Enabled sources the browser wants a fresh gesture for drive the reload
+  // banner; they clear as grants succeed (sources refreshes after each pass).
+  const pendingNames = sources
+    .filter((s) => s.enabled && s.permission === 'prompt')
+    .map((s) => s.name);
 
   const [sel, setSel] = useState(savedFilters.sel);
   const [diff, setDiff] = useState(savedFilters.diff);
@@ -141,21 +156,34 @@ export function SongSelect({
     if (entries.some((e) => e.files.length > 0)) libraryCache = entries;
   }, [entries]);
 
-  // Parse a picked/restored/dropped folder into entries. A folder selection is
-  // the library: it replaces previously loaded songs (so restore and re-pick
-  // are idempotent) but leaves the built-in example alone.
-  const addLocalFiles = useCallback(async (files: File[]) => {
+  // Parse a folder's files into entries. Entries from a remembered source are
+  // tagged with its id and replace that source's previous songs (so restore and
+  // re-read are idempotent); untagged loads (multi-folder drops, the fallback
+  // input) simply append for this session. The starter pack always stays.
+  const addSourceEntries = useCallback(async (files: File[], sourceId?: string) => {
     if (files.length === 0) return;
-    setBusy(true);
+    setLoading({ msg: 'LOADING SONGS…' });
     try {
-      const { entries: loaded } = await loadLibraryFromFiles(files);
-      if (loaded.length) {
-        setEntries((prev) => [...prev.filter((e) => e.files.length === 0), ...loaded]);
+      const { entries: loaded } = await loadLibraryFromFiles(files, (done, total) =>
+        setLoading({ msg: `LOADING SONGS… ${done} / ${total}`, frac: done / total }),
+      );
+      const tagged = sourceId ? loaded.map((e) => ({ ...e, sourceId })) : loaded;
+      if (tagged.length) {
+        setEntries((prev) => [
+          ...prev.filter((e) => !sourceId || e.sourceId !== sourceId),
+          ...tagged,
+        ]);
       }
     } finally {
-      setBusy(false);
+      setLoading(null);
     }
   }, []);
+
+  // Folder-walk progress ticks (the phase before any songs can be counted).
+  const scanTick = useCallback(
+    (n: number) => setLoading({ msg: `SCANNING FOLDER… ${n} FILES` }),
+    [],
+  );
 
   // Auto-load the remembered song folder, once per session (on a remount the
   // cache serves the list instantly). A remembered folder the browser won't
@@ -165,13 +193,14 @@ export function SongSelect({
     let cancelled = false;
     // The bundled starter pack — synthesized originals, so a fresh install has
     // real songs to play before any folder is picked. A loaded folder is
-    // appended after these (addLocalFiles keeps file-less entries).
+    // appended after these (addSourceEntries keeps file-less entries).
     setEntries(starterEntries());
     void (async () => {
-      const local = await restoreSongFolder();
-      if (cancelled || !local) return;
-      if ('needsGesture' in local) setRestoreName(local.name);
-      else await addLocalFiles(local.files);
+      const { loaded } = await restoreSources(scanTick);
+      if (cancelled) return;
+      for (const l of loaded) await addSourceEntries(l.folder.files, l.id);
+      setSources(await listSources());
+      setLoading(null);
     })();
     return () => {
       cancelled = true;
@@ -179,22 +208,74 @@ export function SongSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // "FOLDER" button: native directory picker where supported (Chromium — the
+  // The panel needs the source list even when the library came from the
+  // remount cache (the effect above returns early then).
+  useEffect(() => {
+    void listSources().then(setSources);
+  }, []);
+
+  // "+ ADD FOLDER": native directory picker where supported (Chromium — the
   // choice is remembered across reloads), <input webkitdirectory> elsewhere.
   const chooseFolder = async () => {
     if (supportsFolderPicker()) {
-      const picked = await pickSongFolder();
-      if (picked) await addLocalFiles(picked.files);
+      const added = await addSourceFromPicker(scanTick);
+      if (added) {
+        await addSourceEntries(added.folder.files, added.id);
+        setSources(await listSources());
+      }
+      setLoading(null);
     } else {
       folderRef.current?.click();
     }
   };
 
-  // Restore banner click: re-grant access to the remembered folder and load it.
+  // Re-grant access to the pending sources and load them. Sources still denied
+  // (dismissed prompt, no activation) stay in the banner for another try;
+  // truly dead folders are dropped by the library layer.
   const finishRestore = async () => {
-    setRestoreName(null);
-    const granted = await grantStoredFolder();
-    if (granted) await addLocalFiles(granted.files);
+    const { loaded } = await grantPendingSources(scanTick);
+    for (const l of loaded) await addSourceEntries(l.folder.files, l.id);
+    setSources(await listSources());
+    setLoading(null);
+  };
+
+  // While the banner is up, any real keypress doubles as the permission
+  // gesture (the menus are keyboard-first); mouse users click the banner.
+  // Synthetic (gamepad-adapter) keys carry no user activation and are skipped.
+  useEffect(() => {
+    if (pendingNames.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.isTrusted || e.key === 'Escape' || restoring.current) return;
+      restoring.current = true;
+      void finishRestore().finally(() => {
+        restoring.current = false;
+      });
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNames.length]);
+
+  // Source management (FOLDERS panel): toggle a source's songs in/out of the
+  // library, or forget the folder entirely. Enabling may prompt for permission
+  // (the click is the gesture).
+  const toggleSource = async (s: SongSource) => {
+    if (s.enabled) {
+      await setSourceEnabled(s.id, false);
+      setEntries((prev) => prev.filter((e) => e.sourceId !== s.id));
+    } else {
+      await setSourceEnabled(s.id, true);
+      const folder = await readSource(s.id, scanTick);
+      if (folder) await addSourceEntries(folder.files, s.id);
+      setLoading(null);
+    }
+    setSources(await listSources());
+  };
+
+  const removeSrc = async (s: SongSource) => {
+    await removeSource(s.id);
+    setEntries((prev) => prev.filter((e) => e.sourceId !== s.id));
+    setSources(await listSources());
   };
 
   useEffect(() => {
@@ -335,14 +416,22 @@ export function SongSelect({
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDrag(false);
-    setBusy(true);
+    // A single dropped folder becomes a remembered source like a picker choice
+    // (Chromium); anything else loads one-off via entry traversal. Both
+    // decisions happen synchronously during dispatch.
+    const adopted = addSourceFromDrop(e.dataTransfer, scanTick);
     try {
-      const { entries: loaded } = await loadLibraryFromFiles(
-        await filesFromDataTransfer(e.dataTransfer),
-      );
-      if (loaded.length) setEntries((prev) => [...prev, ...loaded]);
+      if (adopted) {
+        const { id, folder } = await adopted;
+        await addSourceEntries(folder.files, id || undefined);
+        setSources(await listSources());
+      } else {
+        setLoading({ msg: 'LOADING SONGS…' });
+        const files = await filesFromDataTransfer(e.dataTransfer);
+        await addSourceEntries(files);
+      }
     } finally {
-      setBusy(false);
+      setLoading(null);
     }
   };
 
@@ -392,11 +481,12 @@ export function SongSelect({
         <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
           <span>{filtered.length} SONGS</span>
           <button
-            onClick={() => void chooseFolder()}
-            className="border border-white/[0.14] px-[10px] py-[4px] hover:border-[#ff5d47] hover:text-[#ececec]"
-            title="Load a song folder from this computer"
+            onClick={() => setShowSources((v) => !v)}
+            className="border px-[10px] py-[4px] hover:border-[#ff5d47] hover:text-[#ececec]"
+            style={{ borderColor: showSources ? AC : 'rgba(255,255,255,.14)' }}
+            title="Manage song folders"
           >
-            + FOLDER
+            FOLDERS{sources.length > 0 ? ` (${sources.length})` : ''} ▾
           </button>
           <button onClick={onOptions} className="hover:text-[#ececec]" title="Options">
             ⚙
@@ -404,14 +494,73 @@ export function SongSelect({
         </div>
       </div>
 
-      {/* Remembered-folder restore (browsers require a click to re-grant access) */}
-      {restoreName && (
+      {/* Song-folder sources panel */}
+      {showSources && (
+        <div className="absolute right-[20px] top-[54px] z-30 w-[360px] border border-white/[0.14] bg-[#101114] p-[14px] text-[12px] tracking-[0.08em]">
+          <div className="mb-2 flex items-center justify-between text-[#ececec]/50">
+            <span>SONG FOLDERS</span>
+            <button onClick={() => setShowSources(false)} className="hover:text-[#ececec]">
+              ✕
+            </button>
+          </div>
+          {sources.length === 0 && (
+            <div className="py-2 text-[#ececec]/40">
+              NONE YET — ADD YOUR SONGS FOLDER OR A PACK
+            </div>
+          )}
+          {sources.map((s) => {
+            const count = entries.filter((e) => e.sourceId === s.id).length;
+            return (
+              <div
+                key={s.id}
+                className="flex items-center gap-2 border-t border-white/[0.06] py-[7px]"
+              >
+                <button
+                  onClick={() => void toggleSource(s)}
+                  className="w-[18px] text-center text-[13px]"
+                  style={{ color: s.enabled ? AC : 'rgba(236,236,236,.35)' }}
+                  title={s.enabled ? 'Disable (keep remembered)' : 'Enable'}
+                >
+                  {s.enabled ? '■' : '□'}
+                </button>
+                <span className="min-w-0 flex-1 truncate" style={{ opacity: s.enabled ? 1 : 0.45 }}>
+                  {s.name}
+                </span>
+                <span className="whitespace-nowrap text-[#ececec]/40">
+                  {s.enabled && s.permission === 'prompt'
+                    ? 'LOCKED'
+                    : count > 0
+                      ? `${count} SONGS`
+                      : ''}
+                </span>
+                <button
+                  onClick={() => void removeSrc(s)}
+                  className="text-[#ececec]/40 hover:text-[#ff5d47]"
+                  title="Forget this folder"
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
+          <button
+            onClick={() => void chooseFolder()}
+            className="mt-3 w-full border border-white/[0.14] py-[6px] hover:border-[#ff5d47] hover:text-[#ececec]"
+          >
+            + ADD FOLDER
+          </button>
+        </div>
+      )}
+
+      {/* Pending-source restore (browsers require a gesture to re-grant access) */}
+      {pendingNames.length > 0 && (
         <button
           onClick={() => void finishRestore()}
           className="flex h-[40px] flex-none items-center justify-center gap-2 border-b border-white/[0.09] text-[12px] tracking-[0.14em]"
           style={{ color: AC, background: AC + '14' }}
         >
-          RELOAD SONG LIBRARY “{restoreName.toUpperCase()}” — CLICK TO ALLOW FOLDER ACCESS
+          RELOAD SONG LIBRARY “{pendingNames.join(', ').toUpperCase()}” — PRESS ANY KEY OR CLICK,
+          THEN ALLOW ACCESS
         </button>
       )}
 
@@ -423,7 +572,7 @@ export function SongSelect({
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
           e.target.value = '';
-          void addLocalFiles(files);
+          void addSourceEntries(files);
         }}
       />
 
@@ -522,7 +671,6 @@ export function SongSelect({
             ◀▶ MOVE · ▲▼ ADJUST · SELECT DONE
           </span>
         )}
-        {busy && <span className="text-[12px] text-[#ececec]/50">Loading…</span>}
       </div>
 
       {/* Column headers */}
@@ -634,6 +782,34 @@ export function SongSelect({
             style={{ background: 'rgba(11,12,14,.85)', color: AC }}
           >
             DROP A SONG FOLDER / PACK
+          </div>
+        )}
+        {loading && (
+          <div
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4"
+            style={{ background: 'rgba(11,12,14,.82)' }}
+          >
+            <div
+              className="text-[15px] tracking-[0.18em]"
+              style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+            >
+              {loading.msg}
+            </div>
+            <div
+              className="h-[3px] w-[300px] overflow-hidden"
+              style={{ background: 'rgba(255,255,255,.12)' }}
+            >
+              <div
+                className="h-full transition-[width] duration-150"
+                style={{
+                  // Determinate bar while parsing (frac known); dim full bar
+                  // while scanning so it never looks stalled at 0%.
+                  width: loading.frac != null ? `${Math.round(loading.frac * 100)}%` : '100%',
+                  opacity: loading.frac != null ? 1 : 0.25,
+                  background: AC,
+                }}
+              />
+            </div>
           </div>
         )}
       </div>

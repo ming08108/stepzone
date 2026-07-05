@@ -115,11 +115,14 @@ export interface LibraryEntry {
   pack?: string;
   /** Renders this entry's audio on demand (bundled starter songs). */
   synthAudio?: () => ArrayBuffer;
+  /** The remembered folder source this entry came from (io/localFolder). */
+  sourceId?: string;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */
 export async function loadLibraryFromFiles(
   files: File[],
+  onProgress?: (done: number, total: number) => void,
 ): Promise<{ entries: LibraryEntry[]; warnings: string[] }> {
   const warnings: string[] = [];
   const groups = new Map<string, File[]>();
@@ -131,7 +134,9 @@ export async function loadLibraryFromFiles(
   }
 
   const entries: LibraryEntry[] = [];
+  let done = 0;
   for (const [dir, groupFiles] of groups) {
+    onProgress?.(++done, groups.size);
     const sim = findSimfile(groupFiles);
     if (!sim) continue;
     try {

@@ -1,12 +1,17 @@
 /**
- * Pick a local song folder (a song, a pack, or a whole Songs directory) with
- * the File System Access API, and remember it across reloads: the directory
- * handle is persisted in IndexedDB, so next launch the library reloads straight
- * from disk — no song server needed. Browsers gate re-reading a stored handle
- * behind a user-gesture permission grant, so restore is two-step: probe
- * silently (`restoreSongFolder`), then finish from a click (`grantStoredFolder`).
- * Browsers without the API (Firefox/Safari) fall back to the caller's
- * `<input webkitdirectory>` — no persistence there.
+ * The song library's local folder sources. Each source is a real directory
+ * (a song, a pack, or a whole Songs tree) referenced by a File System Access
+ * handle persisted in IndexedDB, so libraries survive reloads with no server.
+ * Sources are added from the picker (`addSourceFromPicker`) or by dropping a
+ * single folder (`addSourceFromDrop`), can be disabled or removed without
+ * touching the disk, and are deduplicated by identity (`isSameEntry`).
+ *
+ * Browsers gate re-reading a stored handle behind a user-gesture permission
+ * grant, so startup is two-step: `restoreSources` silently loads whatever is
+ * still trusted and names the rest, then `grantPendingSources` finishes from a
+ * click/keypress; choosing "Allow on every visit" in Chromium's prompt makes
+ * later restores fully silent. Browsers without the API (Firefox/Safari) fall
+ * back to the caller's `<input webkitdirectory>` — no persistence there.
  */
 
 // Only files a library can use are collected — simfiles up front, media lazily.
@@ -40,15 +45,42 @@ export interface LocalFolder {
   name: string;
 }
 
+/** Progress callback while a folder is walked: files found so far. */
+export type ScanProgress = (filesFound: number) => void;
+
+/** A remembered folder as shown in the UI (no live handle exposed). */
+export interface SongSource {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** 'granted' reads silently; 'prompt' needs a user-gesture re-grant. */
+  permission: 'granted' | 'prompt';
+}
+
 export function supportsFolderPicker(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 }
 
-// --- IndexedDB persistence of the directory handle ---------------------------
+// --- IndexedDB persistence of the source list ---------------------------------
 
 const DB_NAME = 'notefield-fs';
 const STORE = 'handles';
-const KEY = 'songFolder';
+const LIST_KEY = 'songFolders';
+const LEGACY_KEY = 'songFolder'; // pre-multi-source single handle
+
+interface StoredSource {
+  id: string;
+  enabled: boolean;
+  handle: FileSystemDirectoryHandle;
+}
+
+function newId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `sf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
@@ -72,21 +104,76 @@ async function idbRequest<T>(mode: IDBTransactionMode, op: (s: IDBObjectStore) =
   }
 }
 
-async function storeHandle(handle: FileSystemDirectoryHandle): Promise<void> {
-  await idbRequest('readwrite', (s) => s.put(handle, KEY));
-}
-
-async function loadHandle(): Promise<FileSystemDirectoryHandle | null> {
-  return (await idbRequest('readonly', (s) => s.get(KEY))) ?? null;
-}
-
-/** Drop the remembered folder (it moved, or the user picked a bad one). */
-export async function forgetStoredFolder(): Promise<void> {
+async function sameEntry(a: FileSystemHandle, b: FileSystemHandle): Promise<boolean> {
   try {
-    await idbRequest('readwrite', (s) => s.delete(KEY));
+    return await a.isSameEntry(b);
   } catch {
-    // nothing stored / IDB unavailable — already forgotten
+    return false;
   }
+}
+
+let legacyMigrated = false;
+
+/** Load the stored sources, folding in the pre-multi-source single handle. */
+async function loadList(): Promise<StoredSource[]> {
+  const list =
+    ((await idbRequest('readonly', (s) => s.get(LIST_KEY))) as StoredSource[] | undefined) ?? [];
+  if (!legacyMigrated) {
+    legacyMigrated = true;
+    const legacy = (await idbRequest('readonly', (s) => s.get(LEGACY_KEY))) as
+      | FileSystemDirectoryHandle
+      | undefined;
+    if (legacy) {
+      let dup = false;
+      for (const s of list) if (await sameEntry(legacy, s.handle)) dup = true;
+      if (!dup) list.push({ id: newId(), enabled: true, handle: legacy });
+      await idbRequest('readwrite', (s) => s.put(list, LIST_KEY));
+      await idbRequest('readwrite', (s) => s.delete(LEGACY_KEY));
+    }
+  }
+  return list;
+}
+
+async function saveList(list: StoredSource[]): Promise<void> {
+  await idbRequest('readwrite', (s) => s.put(list, LIST_KEY));
+  // Ask the browser not to evict the database holding the handles under
+  // storage pressure. Silent in Chromium; failure just means default eviction.
+  try {
+    void navigator.storage?.persist?.();
+  } catch {
+    // StorageManager unavailable — nothing to pin
+  }
+}
+
+/** Remember a handle, deduplicating against (and re-enabling) known sources. */
+async function addHandle(handle: FileSystemDirectoryHandle): Promise<string> {
+  let list: StoredSource[] = [];
+  try {
+    list = await loadList();
+  } catch {
+    // IDB unavailable (private mode) — the folder still loads this session
+    return newId();
+  }
+  for (const s of list) {
+    if (await sameEntry(s.handle, handle)) {
+      if (!s.enabled) {
+        s.enabled = true;
+        try {
+          await saveList(list);
+        } catch {
+          /* keep going — enabling is best-effort */
+        }
+      }
+      return s.id;
+    }
+  }
+  const id = newId();
+  try {
+    await saveList([...list, { id, enabled: true, handle }]);
+  } catch {
+    /* IDB write failed — session-only source */
+  }
+  return id;
 }
 
 // --- Directory walk -----------------------------------------------------------
@@ -101,6 +188,7 @@ async function collectFiles(
   path: string,
   out: File[],
   depth: number,
+  onScan?: ScanProgress,
 ): Promise<void> {
   for await (const handle of dir.values()) {
     // Skip hidden/system folders (.git, __MACOSX) — never song content.
@@ -118,12 +206,14 @@ async function collectFiles(
           // read-only in some browsers; grouping falls back to the file name
         }
         out.push(file);
+        if (onScan && out.length % 20 === 0) onScan(out.length);
       } else if (depth < MAX_DEPTH) {
         await collectFiles(
           handle as FileSystemDirectoryHandle,
           `${path}${handle.name}/`,
           out,
           depth + 1,
+          onScan,
         );
       }
     } catch {
@@ -132,78 +222,183 @@ async function collectFiles(
   }
 }
 
-async function readFolder(handle: FileSystemDirectoryHandle): Promise<LocalFolder> {
+async function readFolder(
+  handle: FileSystemDirectoryHandle,
+  onScan?: ScanProgress,
+): Promise<LocalFolder> {
   const files: File[] = [];
-  await collectFiles(handle, `${handle.name}/`, files, 1);
+  await collectFiles(handle, `${handle.name}/`, files, 1, onScan);
   return { files, name: handle.name };
 }
 
 // --- Public flows -------------------------------------------------------------
 
+export interface LoadedSource {
+  id: string;
+  folder: LocalFolder;
+}
+
+/** The remembered sources, for the management UI. */
+export async function listSources(): Promise<SongSource[]> {
+  let list: StoredSource[] = [];
+  try {
+    list = await loadList();
+  } catch {
+    return [];
+  }
+  return Promise.all(
+    list.map(async (s) => ({
+      id: s.id,
+      name: s.handle.name,
+      enabled: s.enabled,
+      permission: await s.handle
+        .queryPermission({ mode: 'read' })
+        .then((p): 'granted' | 'prompt' => (p === 'granted' ? 'granted' : 'prompt'))
+        .catch((): 'prompt' => 'prompt'),
+    })),
+  );
+}
+
+export async function removeSource(id: string): Promise<void> {
+  try {
+    const list = await loadList();
+    await saveList(list.filter((s) => s.id !== id));
+  } catch {
+    /* nothing stored / IDB unavailable */
+  }
+}
+
+export async function setSourceEnabled(id: string, enabled: boolean): Promise<void> {
+  try {
+    const list = await loadList();
+    const s = list.find((x) => x.id === id);
+    if (s && s.enabled !== enabled) {
+      s.enabled = enabled;
+      await saveList(list);
+    }
+  } catch {
+    /* nothing stored / IDB unavailable */
+  }
+}
+
 /**
- * Show the browser folder picker, remember the choice, and return its files.
- * Null when the user cancels. Call from a click handler.
+ * Show the browser folder picker, remember the choice as a source, and return
+ * its files. Null when the user cancels. Call from a click handler.
  */
-export async function pickSongFolder(): Promise<LocalFolder | null> {
+export async function addSourceFromPicker(onScan?: ScanProgress): Promise<LoadedSource | null> {
   let handle: FileSystemDirectoryHandle;
   try {
     handle = await window.showDirectoryPicker({ id: 'songs', mode: 'read' });
   } catch {
     return null; // canceled (AbortError) or blocked
   }
-  try {
-    await storeHandle(handle);
-  } catch {
-    // IDB unavailable (private mode) — the pick still works for this session
-  }
-  return readFolder(handle);
+  const id = await addHandle(handle);
+  return { id, folder: await readFolder(handle, onScan) };
 }
 
 /**
- * Try to reload the remembered folder at startup. Resolves to the files when
- * the browser still trusts the handle, `{ needsGesture }` when a click must
- * re-grant access first, or null when nothing usable is stored.
+ * Adopt a folder dropped onto the page: when the drop is exactly one directory
+ * and the browser exposes drop handles (Chromium), read it through the same
+ * handle path as the picker so it's remembered as a source. Returns null —
+ * decided synchronously, so callers can still use the legacy entry-traversal
+ * path on the same DataTransfer — for multi-item drops, loose files, or
+ * browsers without handle support. Must be called during drop dispatch,
+ * before any await.
  */
-export async function restoreSongFolder(): Promise<
-  LocalFolder | { needsGesture: true; name: string } | null
-> {
-  let handle: FileSystemDirectoryHandle | null;
+export function addSourceFromDrop(
+  dt: DataTransfer,
+  onScan?: ScanProgress,
+): Promise<LoadedSource> | null {
+  const items = Array.from(dt.items ?? []).filter((it) => it.kind === 'file');
+  if (items.length !== 1 || !('getAsFileSystemHandle' in items[0])) return null;
+  const entry = items[0].webkitGetAsEntry();
+  if (!entry?.isDirectory) return null;
+  const pending = items[0].getAsFileSystemHandle(); // request before the event goes inert
+  return (async () => {
+    const handle = await pending;
+    if (!handle || handle.kind !== 'directory') return { id: '', folder: { files: [], name: '' } };
+    const dir = handle as FileSystemDirectoryHandle;
+    const id = await addHandle(dir);
+    return { id, folder: await readFolder(dir, onScan) };
+  })();
+}
+
+/**
+ * Read one source's folder, requesting permission if needed (call from a
+ * gesture when the source is 'prompt'). Null when denied or missing; a truly
+ * dead folder (deleted/moved) is dropped from the list.
+ */
+export async function readSource(id: string, onScan?: ScanProgress): Promise<LocalFolder | null> {
+  let list: StoredSource[] = [];
   try {
-    handle = await loadHandle();
+    list = await loadList();
   } catch {
     return null;
   }
-  if (!handle) return null;
+  const s = list.find((x) => x.id === id);
+  if (!s) return null;
   try {
-    if ((await handle.queryPermission({ mode: 'read' })) === 'granted') {
-      return await readFolder(handle);
+    const state = await s.handle.queryPermission({ mode: 'read' });
+    if (state !== 'granted' && (await s.handle.requestPermission({ mode: 'read' })) !== 'granted')
+      return null;
+    return await readFolder(s.handle, onScan);
+  } catch (err) {
+    // Forget the source only when the folder is truly gone — a transient
+    // failure (e.g. no user activation) must not cost the user their library.
+    if ((err as DOMException)?.name === 'NotFoundError') await removeSource(id);
+    return null;
+  }
+}
+
+/**
+ * Startup pass: silently load every enabled source the browser still trusts;
+ * name the ones that need a user-gesture re-grant (`grantPendingSources`).
+ * Sources whose folders are gone are dropped from the list.
+ */
+export async function restoreSources(
+  onScan?: ScanProgress,
+): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
+  return sweepSources(false, onScan);
+}
+
+/**
+ * Finish a restore that needed a gesture: request permission for each pending
+ * source and load the granted ones. Call from a click/keydown handler.
+ * Sources still denied stay in `pendingNames` for another attempt.
+ */
+export async function grantPendingSources(
+  onScan?: ScanProgress,
+): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
+  return sweepSources(true, onScan);
+}
+
+async function sweepSources(
+  mayPrompt: boolean,
+  onScan?: ScanProgress,
+): Promise<{ loaded: LoadedSource[]; pendingNames: string[] }> {
+  let list: StoredSource[] = [];
+  try {
+    list = await loadList();
+  } catch {
+    return { loaded: [], pendingNames: [] };
+  }
+  const loaded: LoadedSource[] = [];
+  const pendingNames: string[] = [];
+  const dead: string[] = [];
+  for (const s of list) {
+    if (!s.enabled) continue;
+    try {
+      let state = await s.handle.queryPermission({ mode: 'read' });
+      if (state !== 'granted' && mayPrompt) {
+        state = await s.handle.requestPermission({ mode: 'read' });
+      }
+      if (state === 'granted') loaded.push({ id: s.id, folder: await readFolder(s.handle, onScan) });
+      else pendingNames.push(s.handle.name);
+    } catch (err) {
+      if ((err as DOMException)?.name === 'NotFoundError') dead.push(s.id);
+      else pendingNames.push(s.handle.name);
     }
-    return { needsGesture: true, name: handle.name };
-  } catch {
-    // handle no longer resolvable (folder deleted/moved) — forget it
-    await forgetStoredFolder();
-    return null;
   }
-}
-
-/**
- * Finish a restore that needed a gesture: request permission and read the
- * folder. Call from a click handler. Null when denied or the folder is gone
- * (the stale handle is forgotten so the prompt doesn't reappear).
- */
-export async function grantStoredFolder(): Promise<LocalFolder | null> {
-  let handle: FileSystemDirectoryHandle | null;
-  try {
-    handle = await loadHandle();
-  } catch {
-    return null;
-  }
-  if (!handle) return null;
-  try {
-    if ((await handle.requestPermission({ mode: 'read' })) !== 'granted') return null;
-    return await readFolder(handle);
-  } catch {
-    await forgetStoredFolder();
-    return null;
-  }
+  for (const id of dead) await removeSource(id);
+  return { loaded, pendingNames };
 }

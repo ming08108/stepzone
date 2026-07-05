@@ -28,10 +28,11 @@ npm test        # unit tests: MSD parser, timing, note grid, sync clock, judgmen
 npm run build   # strict typecheck + production build
 ```
 
-Songs load straight from disk: pick (or drop) a song folder, a pack, or a
-whole Songs directory on the song-select screen. In Chromium browsers the
-choice is remembered, so the library reloads on the next visit after a
-one-click permission re-grant.
+Songs load straight from disk: pick (or drop) song folders, packs, or whole
+Songs directories on the song-select screen — the FOLDERS panel manages the
+list (enable/disable/remove). In Chromium browsers every folder is remembered,
+so the library reloads on the next visit after a single keypress re-grant
+(pick "Allow on every visit" in the prompt to make it fully automatic).
 
 Play with <kbd>←</kbd> <kbd>↓</kbd> <kbd>↑</kbd> <kbd>→</kbd> (or D F J K), or a
 gamepad / dance pad. The "Inspect" tab shows the parsed song/timing/notes.
