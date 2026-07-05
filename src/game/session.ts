@@ -1,19 +1,22 @@
 /**
  * Ties the pieces into a playable session: Web Audio clock + judgment engine +
- * canvas renderer, driven by requestAnimationFrame. Input arrives via press()/
- * release() with the raw event timestamp so judging stays on the audible axis
- * (spec doc 6). See the core loop in spec doc 9 §9.5.
+ * canvas renderer, driven by requestAnimationFrame. The engine is device-
+ * agnostic: ALL input arrives via press()/release() with the raw event
+ * timestamp so judging stays on the audible axis (spec doc 6) — the unified
+ * input bus (src/input/inputBus.ts) feeds it from Play.tsx. See the core loop
+ * in spec doc 9 §9.5.
  */
 
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
-import { readGamepad } from '../input/gamepad';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
-import { remapTracks, turnPermutation, type Turn } from '../notes/transforms';
+import { remapTracks, turnPermutation } from '../notes/transforms';
+import { DEFAULT_PLAY_OPTIONS, type PlayOptions } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
+import { songMaxBpm } from '../render/scroll';
 import type { FieldFx } from '../render/shaderBackground';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
@@ -23,32 +26,14 @@ import type { TimingData } from '../timing/timingData';
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
 
-/** Playback options applied to a session. */
-export interface SessionConfig {
-  scrollMode: 'C' | 'X' | 'M';
-  scrollValue: number;
-  musicRate: number;
-  audioOffsetMs: number;
-  visualOffsetMs: number;
-  turn: Turn;
-  reverse: boolean;
-  appearance: 'visible' | 'hidden' | 'sudden';
-  bgMode: 'off' | 'dim' | 'full';
-  noteSkin: 'arcade' | 'itg';
-}
+/**
+ * Playback options applied to a session — exactly the shared PlayOptions shape
+ * (src/game/playOptions.ts), which the persisted Settings also extends, so the
+ * two can't drift.
+ */
+export type SessionConfig = PlayOptions;
 
-export const DEFAULT_SESSION_CONFIG: SessionConfig = {
-  scrollMode: 'C',
-  scrollValue: 550,
-  musicRate: 1,
-  audioOffsetMs: 0,
-  visualOffsetMs: 0,
-  turn: 'none',
-  reverse: false,
-  appearance: 'visible',
-  bgMode: 'dim',
-  noteSkin: 'itg',
-};
+export const DEFAULT_SESSION_CONFIG: SessionConfig = { ...DEFAULT_PLAY_OPTIONS };
 
 export class GameSession {
   readonly judge: Judge;
@@ -70,7 +55,6 @@ export class GameSession {
   private raf = 0;
   private running = false;
   private lastSeq = 0;
-  private readonly prevPad = [false, false, false, false];
   private readonly visualOffsetSeconds: number;
   private readonly musicRate: number;
   private bgVideo: HTMLVideoElement | null = null;
@@ -103,23 +87,25 @@ export class GameSession {
           );
 
     this.judge = new Judge(playNd, this.timing, DEFAULT_WINDOWS, config.musicRate);
-    this.renderer = new NoteFieldRenderer(nd.numTracks);
-    const maxBpm = this.timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
-    this.renderer.setScroll(config.scrollMode, config.scrollValue, maxBpm);
-    this.renderer.setColumnAngles(columnAnglesFor(chart.stepsType, nd.numTracks));
-    this.renderer.setReverse(config.reverse);
-    this.renderer.setAppearance(config.appearance);
-    this.renderer.setBgDim(config.bgMode === 'full' ? 0.25 : 0.6);
-    this.renderer.setStyle(config.noteSkin);
+    this.renderer = new NoteFieldRenderer(nd.numTracks, {
+      scrollMode: config.scrollMode,
+      scrollValue: config.scrollValue,
+      songMaxBpm: songMaxBpm(this.timing.bpms),
+      reverse: config.reverse,
+      appearance: config.appearance,
+      noteSkin: config.noteSkin,
+      bgDim: config.bgMode === 'full' ? 0.25 : 0.6,
+      columnAngles: columnAnglesFor(chart.stepsType, nd.numTracks),
+      meta: {
+        title: song.title || 'Untitled',
+        subtitle: song.artist,
+        difficulty: `${chart.stepsType}  ·  ${difficultyToString(chart.difficulty).toUpperCase()} ${chart.meter}`,
+      },
+    });
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;
     this.musicRate = config.musicRate;
-    this.renderer.setMeta({
-      title: song.title || 'Untitled',
-      subtitle: song.artist,
-      difficulty: `${chart.stepsType}  ·  ${difficultyToString(chart.difficulty).toUpperCase()} ${chart.meter}`,
-    });
 
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
@@ -160,7 +146,7 @@ export class GameSession {
   /** Attach (or clear) a WebGPU background effect layer. */
   enableFx(fx: FieldFx | null): void {
     this.fx = fx;
-    this.renderer.setTransparentBg(!!fx);
+    this.renderer.applyConfig({ transparentBg: !!fx });
     fx?.resize(this.logicalW, this.logicalH, this.dpr);
   }
 
@@ -188,8 +174,9 @@ export class GameSession {
         // Play until the later of the last note and the end of the music.
         this.endSeconds = Math.max(this.endSeconds, this.clock.durationSeconds);
         usedAudio = true;
-      } catch {
+      } catch (err) {
         // Unsupported/corrupt audio — fall back to the metronome below.
+        console.warn('Song audio failed to decode; playing the metronome instead.', err);
       }
     }
     this.usingRealAudio = usedAudio;
@@ -224,17 +211,6 @@ export class GameSession {
   private loop = (): void => {
     if (!this.running) return;
     const now = this.clock.songSecondsNow();
-
-    // Gamepad / dance pad / WebHID (poll-only; frame-quantized timing).
-    const pad = readGamepad();
-    if (pad.connected) {
-      const ts = performance.now();
-      for (let c = 0; c < this.prevPad.length && c < this.held.length; c++) {
-        if (pad.columns[c] && !this.prevPad[c]) this.press(c, ts);
-        else if (!pad.columns[c] && this.prevPad[c]) this.release(c, ts);
-        this.prevPad[c] = pad.columns[c];
-      }
-    }
 
     // Keep a background video loosely synced to the song.
     if (this.bgVideo && now >= 0) {
@@ -274,14 +250,16 @@ export class GameSession {
 
   private finish(): void {
     this.running = false;
-    this.clock.stop();
+    // dispose() (not just stop()) releases the AudioContext — browsers cap
+    // concurrent contexts and every play/retry builds a fresh session.
+    void this.clock.dispose();
     this.onEnd?.(this.judge);
   }
 
   stop(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
-    this.clock.stop();
+    void this.clock.dispose();
     this.bgVideo?.pause();
   }
 }
