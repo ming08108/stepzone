@@ -119,6 +119,8 @@ export interface LibraryEntry {
   bpm?: string;
   /** Catalog-provided dance-single meters [Beginner, Easy, Medium, Hard, Expert]. */
   levels?: Array<number | null>;
+  /** Pack (song group) this entry belongs to, when known. */
+  pack?: string;
 }
 
 /** Group files by folder and parse every song found (metadata + banner only). */
@@ -135,16 +137,20 @@ export async function loadLibraryFromFiles(
   }
 
   const entries: LibraryEntry[] = [];
-  for (const groupFiles of groups.values()) {
+  for (const [dir, groupFiles] of groups) {
     const sim = findSimfile(groupFiles);
     if (!sim) continue;
     try {
       const song = parseSimfile(await sim.text(), sim.name);
+      // Pack = the folder directly above the song folder (present when a whole
+      // pack was dropped; a lone song folder has no pack context).
+      const segs = dir.split('/').filter(Boolean);
       entries.push({
         song,
         files: groupFiles,
         sourceName: sim.name,
         bannerUrl: findBannerUrl(groupFiles, song),
+        pack: segs.length > 1 ? segs[segs.length - 2] : undefined,
       });
     } catch (e) {
       warnings.push(`Failed to parse ${sim.name}: ${e instanceof Error ? e.message : e}`);
@@ -169,6 +175,12 @@ export function isVideoFile(name: string): boolean {
   return BG_VIDEO_EXT.includes(ext(name));
 }
 
+/** True when a filename is a browser-playable background (image or video) by extension. */
+export function isPlayableBackground(name: string): boolean {
+  const e = ext(name);
+  return BG_VIDEO_EXT.includes(e) || BG_IMG_EXT.includes(e);
+}
+
 /** The song's background image/video File (browser-playable formats only), or null. */
 export function findBackgroundFile(entry: LibraryEntry): File | null {
   const { files, song } = entry;
@@ -179,8 +191,7 @@ export function findBackgroundFile(entry: LibraryEntry): File | null {
   }
   if (!file) file = files.find((f) => /(?:-bg|background)\.[a-z0-9]+$/i.test(f.name));
   if (!file) return null;
-  const e = ext(file.name);
-  return BG_VIDEO_EXT.includes(e) || BG_IMG_EXT.includes(e) ? file : null;
+  return isPlayableBackground(file.name) ? file : null;
 }
 
 /** Min/max BPM of a song (from its timing), for display/filtering. */

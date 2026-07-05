@@ -22,7 +22,7 @@ export function Stage({
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-[#0b0c0e] font-grotesk text-[#ececec] [font-variant-numeric:tabular-nums]">
       <div className="flex h-[56px] flex-none items-center justify-between border-b border-white/[0.09] px-[28px]">
         <div className="flex items-baseline gap-3">
-          <span className="text-[19px] font-bold tracking-[0.22em]">STEPLINE</span>
+          <span className="text-[19px] font-bold tracking-[0.22em]">STEPZONE</span>
           <span className="text-[13px] tracking-[0.18em]" style={{ color: STEP_AC }}>
             {label}
           </span>

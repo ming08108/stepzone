@@ -8,6 +8,13 @@
 import { ensureRemoteLoaded, readRemoteAudio } from '../io/remoteLibrary';
 import { type LibraryEntry, readSongAudio } from '../io/songFiles';
 import type { Song } from '../song/song';
+import { previewWindow } from './previewWindow';
+
+// Fade/stop envelope (seconds) and target loudness for the preview loop.
+const FADE_IN_SECONDS = 0.25;
+const FADE_OUT_SECONDS = 0.15;
+const STOP_LAG_SECONDS = 0.2; // stop the source just after the fade-out lands
+const PREVIEW_GAIN = 0.8;
 
 let ctx: AudioContext | null = null;
 function audio(): AudioContext | null {
@@ -50,8 +57,8 @@ export function stopPreview(): void {
       const now = ac.currentTime;
       current.gain.gain.cancelScheduledValues(now);
       current.gain.gain.setValueAtTime(current.gain.gain.value, now);
-      current.gain.gain.linearRampToValueAtTime(0, now + 0.15);
-      current.src.stop(now + 0.2);
+      current.gain.gain.linearRampToValueAtTime(0, now + FADE_OUT_SECONDS);
+      current.src.stop(now + STOP_LAG_SECONDS);
     } catch {
       /* already stopped */
     }
@@ -60,12 +67,11 @@ export function stopPreview(): void {
 }
 
 function begin(ac: AudioContext, buf: AudioBuffer, song: Song): void {
-  let start = song.sampleStartSeconds;
-  if (!(start >= 0) || start > buf.duration - 1) {
-    start = Math.min(buf.duration * 0.3, Math.max(0, buf.duration - 15));
-  }
-  let len = song.sampleLengthSeconds || 12;
-  len = Math.max(3, Math.min(len, buf.duration - start));
+  const { startSeconds: start, lengthSeconds: len } = previewWindow(
+    buf.duration,
+    song.sampleStartSeconds,
+    song.sampleLengthSeconds,
+  );
   const src = ac.createBufferSource();
   src.buffer = buf;
   src.loop = true;
@@ -80,20 +86,39 @@ function begin(ac: AudioContext, buf: AudioBuffer, song: Song): void {
     return;
   }
   const now = ac.currentTime;
-  gain.gain.linearRampToValueAtTime(0.8, now + 0.25); // fade in
+  gain.gain.linearRampToValueAtTime(PREVIEW_GAIN, now + FADE_IN_SECONDS); // fade in
   current = { src, gain };
 }
 
-async function run(
-  myToken: number,
-  resolve: (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: Song } | null>,
-): Promise<void> {
+type ResolvePreview = (ac: AudioContext) => Promise<{ buf: AudioBuffer; song: Song } | null>;
+
+/**
+ * The shared debounce/cancel dance both entry points use: stop whatever is
+ * playing or pending, claim a fresh token, and run `resolve` after `delayMs`
+ * unless a newer request supersedes it in the meantime.
+ */
+function schedulePreview(delayMs: number, resolve: ResolvePreview): void {
   const ac = audio();
   if (!ac) return;
-  void ac.resume().catch(() => {});
-  const res = await resolve(ac);
-  if (!res || myToken !== token) return;
-  begin(ac, res.buf, res.song);
+  stopPreview();
+  const myToken = ++token;
+  debounce = setTimeout(() => {
+    void run(myToken, resolve);
+  }, delayMs);
+}
+
+async function run(myToken: number, resolve: ResolvePreview): Promise<void> {
+  try {
+    const ac = audio();
+    if (!ac) return;
+    void ac.resume().catch(() => {});
+    const res = await resolve(ac);
+    if (!res || myToken !== token) return;
+    begin(ac, res.buf, res.song);
+  } catch {
+    // Silent by contract (see header): network/decode failures just mean
+    // no preview, never an unhandled rejection.
+  }
 }
 
 async function decodeEnc(
@@ -116,37 +141,21 @@ async function decodeEnc(
 
 /** Preview a library entry after a short settle delay (song-select hover). */
 export function previewSong(entry: LibraryEntry, delayMs = 450): void {
-  const ac = audio();
-  if (!ac) return;
-  stopPreview();
-  const myToken = ++token;
-  debounce = setTimeout(() => {
-    void run(myToken, async (ac2) => {
-      const key = entry.remoteDir ?? entry.sourceName;
-      const cached = bufCache.get(key);
-      if (cached) return { buf: cached, song: entry.song };
-      let e = entry;
-      if (entry.remoteDir && entry.song.charts.length === 0) {
-        try {
-          e = { ...entry, song: await ensureRemoteLoaded(entry) };
-        } catch {
-          return null;
-        }
-      }
-      const enc = e.remoteDir ? await readRemoteAudio(e) : await readSongAudio(e);
-      if (!enc) return null;
-      return decodeEnc(key, enc, e.song, ac2);
-    });
-  }, delayMs);
+  schedulePreview(delayMs, async (ac) => {
+    const key = entry.remoteDir ?? entry.sourceName;
+    const cached = bufCache.get(key);
+    if (cached) return { buf: cached, song: entry.song };
+    let e = entry;
+    if (entry.remoteDir && entry.song.charts.length === 0) {
+      e = { ...entry, song: await ensureRemoteLoaded(entry) };
+    }
+    const enc = e.remoteDir ? await readRemoteAudio(e) : await readSongAudio(e);
+    if (!enc) return null;
+    return decodeEnc(key, enc, e.song, ac);
+  });
 }
 
 /** Preview already-decoded-in-memory encoded audio (Player Options has it loaded). */
 export function previewEncoded(key: string, enc: ArrayBuffer, song: Song, delayMs = 250): void {
-  const ac = audio();
-  if (!ac) return;
-  stopPreview();
-  const myToken = ++token;
-  debounce = setTimeout(() => {
-    void run(myToken, (ac2) => decodeEnc(key, enc, song, ac2));
-  }, delayMs);
+  schedulePreview(delayMs, (ac) => decodeEnc(key, enc, song, ac));
 }

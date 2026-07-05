@@ -269,7 +269,7 @@ export function SongSelect({
     <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
       <header className="mb-5 flex items-center justify-between">
         <div className="text-2xl font-extrabold">
-          <span className="brand">notefield</span> <span className="pill">song select</span>
+          <span className="brand">stepzone</span> <span className="pill">song select</span>
           {stats.plays > 0 && (
             <span className="ml-2 text-xs font-normal text-muted">{stats.plays} plays</span>
           )}

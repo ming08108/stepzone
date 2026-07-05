@@ -23,9 +23,12 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
   const [measured, setMeasured] = useState<number | null>(null);
   const [, force] = useState(0);
 
+  // Every teardown path (unmount, re-START, STOP, Apply, Back) funnels through
+  // here. dispose() stops playback AND closes the AudioContext — browsers cap
+  // concurrent contexts, so each run's clock must be released, not just stopped.
   const stop = () => {
     cancelAnimationFrame(rafRef.current);
-    clockRef.current?.stop();
+    void clockRef.current?.dispose();
     clockRef.current = null;
     setRunning(false);
   };

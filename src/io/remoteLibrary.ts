@@ -15,12 +15,15 @@
 import { parseSimfile } from '../parse/loader';
 import { Song } from '../song/song';
 import type { RemoteCatalog } from './catalog';
-import type { LibraryEntry } from './songFiles';
+import { isPlayableBackground, type LibraryEntry } from './songFiles';
 
 const CACHE_NAME = 'notefield-songs-v1';
-const BG_OK = ['.mp4', '.webm', '.ogv', '.m4v', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 
-/** Fetch a URL, serving from (and populating) the local cache when possible. */
+/**
+ * Fetch a URL cache-first, populating the local cache on a miss. For immutable
+ * per-song assets (simfile/audio/banner/background) only — the mutable catalog
+ * goes network-first (see `networkFirstFetch`) so it's never frozen stale.
+ */
 export async function cachedFetch(url: string): Promise<Response> {
   try {
     const cache = await caches.open(CACHE_NAME);
@@ -32,6 +35,36 @@ export async function cachedFetch(url: string): Promise<Response> {
   } catch {
     // Cache API unavailable (insecure context / private mode): fetch directly.
     return fetch(url);
+  }
+}
+
+/**
+ * Fetch a URL network-first: fresh data when online (still cached, so it's
+ * available offline later), falling back to the last cached copy when the
+ * network is unreachable.
+ */
+async function networkFirstFetch(url: string): Promise<Response> {
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(url, res.clone());
+      } catch {
+        // Cache API unavailable/full: still return the fresh response.
+      }
+    }
+    return res;
+  } catch (err) {
+    // Offline: serve the last cached copy, if any.
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const hit = await cache.match(url);
+      if (hit) return hit;
+    } catch {
+      // Cache API unavailable too — nothing to fall back to.
+    }
+    throw err;
   }
 }
 
@@ -50,12 +83,14 @@ export async function isCached(url: string): Promise<boolean> {
  * fetched (one request) — each song's simfile/banner/audio load lazily (see
  * `ensureRemoteLoaded`), so a 2000-song library appears instantly. Rows render
  * from the catalog's title/artist; charts/BPM fill in when a song is opened.
+ * The catalog is fetched network-first (server-side additions show up on
+ * revisit), falling back to the cached copy when offline.
  */
 export async function loadRemoteLibrary(
   catalogUrl: string,
 ): Promise<{ entries: LibraryEntry[]; warnings: string[]; name?: string }> {
   const warnings: string[] = [];
-  const res = await cachedFetch(catalogUrl);
+  const res = await networkFirstFetch(catalogUrl);
   if (!res.ok) throw new Error(`Catalog HTTP ${res.status} at ${catalogUrl}`);
   const cat = (await res.json()) as RemoteCatalog;
   if (!cat || !Array.isArray(cat.songs)) throw new Error('Catalog has no "songs" array.');
@@ -80,18 +115,26 @@ export async function loadRemoteLibrary(
       remoteSm: s.sm,
       bpm: s.bpm,
       levels: s.levels,
+      // Per-song pack from the catalog; a single-pack catalog's name covers
+      // songs that don't carry one.
+      pack: s.pack || cat.name,
     });
   }
   if (entries.length === 0) warnings.push('Catalog listed no songs.');
   return { entries, warnings, name: cat.name };
 }
 
-/** Fetch + parse a remote entry's full simfile (charts/timing). Idempotent. */
+/**
+ * Fetch + parse a remote entry's full simfile (charts/timing). Idempotent: the
+ * parsed Song is written back onto `entry.song`, so repeat calls (preview then
+ * play, re-hover) return it without re-fetching or re-parsing.
+ */
 export async function ensureRemoteLoaded(entry: LibraryEntry): Promise<Song> {
   if (!entry.remoteDir || !entry.remoteSm || entry.song.charts.length > 0) return entry.song;
   const res = await cachedFetch(new URL(entry.remoteSm, entry.remoteDir).href);
   if (!res.ok) throw new Error(`Simfile HTTP ${res.status}`);
-  return parseSimfile(await res.text(), entry.remoteSm);
+  entry.song = parseSimfile(await res.text(), entry.remoteSm);
+  return entry.song;
 }
 
 /** Fetch (cached) the audio bytes for a remote entry, or null. */
@@ -105,8 +148,7 @@ export async function readRemoteAudio(entry: LibraryEntry): Promise<ArrayBuffer 
 export async function fetchRemoteBackground(entry: LibraryEntry): Promise<File | null> {
   const name = entry.song.backgroundFile;
   if (!entry.remoteDir || !name) return null;
-  const dot = name.lastIndexOf('.');
-  if (dot < 0 || !BG_OK.includes(name.slice(dot).toLowerCase())) return null;
+  if (!isPlayableBackground(name)) return null;
   const res = await cachedFetch(new URL(name, entry.remoteDir).href);
   if (!res.ok) return null;
   const blob = await res.blob();

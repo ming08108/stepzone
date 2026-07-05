@@ -1,27 +1,25 @@
 /**
  * STEPLINE Player Options — the per-play screen between song select and
- * gameplay: SCROLL TYPE / SPACING / DIFFICULTY / BACKGROUND, with a live preview
- * that renders the real chart (real NoteFieldRenderer + Judge on a silent
- * autoplay clock), then START. Choices persist to localStorage
- * ["stepline.options"]; on START they apply to the shared settings and the
- * chosen difficulty's chart is handed back to play.
+ * gameplay. DDR-style: every how-you-play-this-song mod lives here (scroll
+ * type/spacing, difficulty, turn, scroll direction, appearance, note skin,
+ * music rate, background), each a ◀▶ row with a help line for the highlighted
+ * option and a live preview that renders the real chart (real
+ * NoteFieldRenderer + Judge on a silent autoplay clock). Rows read/write the
+ * one settings store (useSettings) directly — changes apply live, persist,
+ * and feed the preview; START just hands the chosen chart back to play.
+ * System-level settings (sync/offset, display, controls) live on the Options
+ * screen instead.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { previewEncoded, stopPreview } from '../audio/songPreview';
-import { Judge } from '../gameplay/judge';
-import { DEFAULT_WINDOWS } from '../gameplay/windows';
+import { APPEARANCES, BG_MODES, NOTE_SKINS, SCROLL_MODES, TURNS } from '../game/playOptions';
 import { songBpmRange } from '../io/songFiles';
-import { TapNoteScore } from '../notes/noteTypes';
-import { columnAnglesFor } from '../render/columns';
-import { type Feedback, NoteFieldRenderer } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
+import { NoteFieldPreview } from './NoteFieldPreview';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
-
-const BG = ['OFF', 'DIM', 'FULL'] as const;
-const BG_MODE = ['off', 'dim', 'full'] as const;
 
 function slotOf(name: string): number {
   const i = ['Beginner', 'Easy', 'Medium', 'Hard', 'Challenge'].indexOf(name);
@@ -36,169 +34,18 @@ const DIFF_COLOR: Record<string, string> = {
   Edit: '#c86bff',
 };
 
-interface Opts {
-  scrollType: 'C' | 'X';
-  cmod: number; // constant target BPM
-  xmod: number; // BPM multiplier
-  bg: number;
-}
-function loadOpts(): Opts {
-  try {
-    const o = JSON.parse(localStorage.getItem('stepline.options') || '');
-    if (o && typeof o === 'object') {
-      return {
-        scrollType: o.scrollType === 'X' ? 'X' : 'C',
-        cmod: typeof o.cmod === 'number' ? o.cmod : 500,
-        xmod: typeof o.xmod === 'number' ? o.xmod : typeof o.speed === 'number' ? o.speed : 2,
-        bg: o.bg | 0,
-      };
-    }
-  } catch {
-    /* default below */
-  }
-  return { scrollType: 'C', cmod: 500, xmod: 2, bg: 1 };
+/** Step to the next/previous entry of a const union array, wrapping. */
+function cycle<T>(list: readonly T[], cur: T, dir: number): T {
+  return list[(list.indexOf(cur) + dir + list.length) % list.length];
 }
 
-/**
- * Live chart preview: drives the real NoteFieldRenderer with this chart's actual
- * notes — a Judge on a silent autoplay clock — so you see the true beat map, note
- * skin, and scroll type/spacing before starting. Loops a window of the chart;
- * scroll changes apply live without rebuilding.
- */
-function NotePreview({
-  song,
-  chart,
-  scrollMode,
-  scrollValue,
-  noteSkin,
-  reverse,
-}: {
-  song: PlayRequest['song'];
-  chart: PlayRequest['chart'];
-  scrollMode: 'C' | 'X' | 'M';
-  scrollValue: number;
-  noteSkin: 'arcade' | 'itg';
-  reverse: boolean;
-}) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const scrollRef = useRef({ mode: scrollMode, value: scrollValue });
-  scrollRef.current = { mode: scrollMode, value: scrollValue };
-
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const timing = chart.getTimingData(song.timing);
-    const nd = chart.getNoteData();
-    const maxBpm = timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
-    const angles = columnAnglesFor(chart.stepsType, nd.numTracks);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const LOOP = 9; // seconds of chart shown before looping
-
-    let judge!: Judge;
-    let renderer!: NoteFieldRenderer;
-    let feedback!: Feedback;
-    let held!: boolean[];
-    let releases!: Array<{ track: number; at: number }>;
-    let cursor = 0;
-    let lastSeq = 0;
-    let windowStart = 0;
-    let windowEnd = 0;
-
-    const resize = () => {
-      const w = canvas.clientWidth || 300;
-      const h = canvas.clientHeight || 400;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      renderer.resize(w, h, dpr);
-    };
-
-    const rebuild = () => {
-      judge = new Judge(nd, timing, DEFAULT_WINDOWS, 1);
-      renderer = new NoteFieldRenderer(nd.numTracks);
-      renderer.setColumnAngles(angles);
-      renderer.setStyle(noteSkin);
-      renderer.setReverse(reverse);
-      renderer.setBare(true); // notefield only — no HUD chrome in the preview
-      renderer.setBgDim(1); // no song background in the preview
-      renderer.setMeta({ title: '', subtitle: '', difficulty: '' });
-      resize();
-      feedback = {
-        lastJudgment: null,
-        laneFlash: new Array<number>(nd.numTracks).fill(-999),
-        laneHit: new Array<Feedback['laneHit'][number]>(nd.numTracks).fill(null),
-      };
-      held = new Array<boolean>(nd.numTracks).fill(false);
-      releases = [];
-      cursor = 0;
-      lastSeq = judge.judgmentSeq;
-      const first = judge.notes[0]?.time ?? 0;
-      const last = judge.notes[judge.notes.length - 1]?.time ?? first;
-      windowStart = Math.max(0, first - 1.4);
-      windowEnd = Math.max(windowStart + 2, Math.min(windowStart + LOOP, last + 1.2));
-    };
-
-    rebuild();
-    const ro = new ResizeObserver(() => resize());
-    ro.observe(canvas);
-
-    let raf = 0;
-    let base = 0;
-    const frame = (t: number) => {
-      if (!base) base = t;
-      let now = windowStart + (t - base) / 1000;
-      if (now >= windowEnd) {
-        rebuild();
-        base = t;
-        now = windowStart;
-      }
-      const notes = judge.notes;
-      // Autoplay: hit each note as it reaches the receptor.
-      while (cursor < notes.length && notes[cursor].time <= now) {
-        const n = notes[cursor];
-        const ev = judge.step(n.track, n.time, false);
-        feedback.laneFlash[n.track] = n.time;
-        if (ev && ev.tns !== TapNoteScore.None) {
-          feedback.laneHit[n.track] = { tns: ev.tns, atSeconds: n.time };
-        }
-        if (n.tailTime > n.time) {
-          held[n.track] = true;
-          releases.push({ track: n.track, at: n.tailTime });
-        } else {
-          judge.step(n.track, n.time, true);
-        }
-        cursor++;
-      }
-      releases = releases.filter((r) => {
-        if (r.at <= now) {
-          judge.step(r.track, r.at, true);
-          held[r.track] = false;
-          return false;
-        }
-        return true;
-      });
-      judge.update(now, held);
-      if (judge.judgmentSeq !== lastSeq) {
-        lastSeq = judge.judgmentSeq;
-        feedback.lastJudgment = { tns: judge.lastTns, atSeconds: now };
-      }
-      renderer.setScroll(scrollRef.current.mode, scrollRef.current.value, maxBpm);
-      const beat = timing.getBeatFromElapsedTime(now);
-      renderer.draw(ctx, judge, now, beat, 0, feedback);
-      raf = requestAnimationFrame(frame);
-    };
-    raf = requestAnimationFrame(frame);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, [song, chart, noteSkin, reverse]);
-
-  return <canvas ref={ref} className="h-full w-full" />;
-}
+const TYPE_LABEL = { C: 'CONSTANT', X: 'MULTIPLIER', M: 'MAX-BPM' } as const;
+const TYPE_HELP = {
+  C: 'CONSTANT (CMod) locks one scroll speed no matter how the song’s tempo changes — steady and predictable (recommended).',
+  X: 'MULTIPLIER (XMod) scales with the song’s BPM, so arrows speed up and slow down with the music.',
+  M: 'MAX-BPM (MMod) reads the speed off the song’s fastest section — XMod feel, CMod-style cap on how fast it ever gets.',
+} as const;
+const SKIN_LABEL = { arcade: 'DDR A3', itg: 'SIMPLY LOVE' } as const;
 
 export function PlayerOptions({
   req,
@@ -210,13 +57,8 @@ export function PlayerOptions({
   onBack: () => void;
 }) {
   const { settings, update } = useSettings();
-  const [opts, setOpts] = useState<Opts>(loadOpts);
   const [row, setRow] = useState(0);
   useGamepadKeys();
-
-  useEffect(() => {
-    localStorage.setItem('stepline.options', JSON.stringify(opts));
-  }, [opts]);
 
   // Loop the song sample while choosing options (#5); stop on leave/START.
   useEffect(() => {
@@ -243,38 +85,113 @@ export function PlayerOptions({
   });
   const chart = charts[Math.min(chartIdx, charts.length - 1)] ?? req.chart;
 
+  // The preview's chart data, memoized so the preview effect only rebuilds
+  // when the selection actually changes.
+  const preview = useMemo(
+    () => ({ noteData: chart.getNoteData(), timing: chart.getTimingData(req.song.timing) }),
+    [req.song, chart],
+  );
+
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
   const diffName = difficultyToString(chart.difficulty);
   const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
 
-  const go = () => {
-    update({
-      scrollMode: opts.scrollType,
-      scrollValue: opts.scrollType === 'C' ? opts.cmod : opts.xmod,
-      bgMode: BG_MODE[opts.bg],
-    });
-    onStart(chart);
-  };
+  const isX = settings.scrollMode === 'X';
+  const go = () => onStart(chart);
 
-  const adjust = (dir: number) => {
-    if (row === 0) setOpts((o) => ({ ...o, scrollType: o.scrollType === 'C' ? 'X' : 'C' }));
-    else if (row === 1)
-      setOpts((o) =>
-        o.scrollType === 'C'
-          ? { ...o, cmod: Math.max(100, Math.min(1000, o.cmod + dir * 25)) }
-          : { ...o, xmod: Math.max(0.5, Math.min(8, +(o.xmod + dir * 0.25).toFixed(2))) },
-      );
-    else if (row === 2) setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
-    else setOpts((o) => ({ ...o, bg: (o.bg + dir + 3) % 3 }));
-  };
+  const rows: Array<{
+    label: string;
+    value: string;
+    help: string;
+    valueColor?: string;
+    adjust: (dir: number) => void;
+  }> = [
+    {
+      label: 'SCROLL TYPE',
+      value: TYPE_LABEL[settings.scrollMode],
+      help: TYPE_HELP[settings.scrollMode],
+      adjust: (dir) => {
+        const m = cycle(SCROLL_MODES, settings.scrollMode, dir);
+        // C and M share BPM-target values; entering/leaving X needs a rebase.
+        const stillBpm = (settings.scrollMode !== 'X') === (m !== 'X');
+        update({
+          scrollMode: m,
+          scrollValue: stillBpm ? settings.scrollValue : m === 'X' ? 2 : 550,
+        });
+      },
+    },
+    {
+      label: 'SPACING',
+      value: isX
+        ? `${settings.scrollValue.toFixed(2)}×`
+        : `${settings.scrollMode}${Math.round(settings.scrollValue)}`,
+      help: isX
+        ? `Multiplier on the song’s BPM — higher = faster and more spread out.${bpm ? ` ≈ ${Math.round(bpm * settings.scrollValue)} BPM on this song.` : ''}`
+        : settings.scrollMode === 'C'
+          ? 'Constant scroll speed / note spacing, in BPM. Higher = faster and more spread out. Stays fixed through the song’s tempo changes.'
+          : 'Scroll speed at the song’s fastest section, in BPM — slower sections scale down proportionally.',
+      adjust: (dir) =>
+        update({
+          scrollValue: isX
+            ? Math.max(0.25, Math.min(8, +(settings.scrollValue + dir * 0.25).toFixed(2)))
+            : Math.max(50, Math.min(2000, settings.scrollValue + dir * 25)),
+        }),
+    },
+    {
+      label: 'DIFFICULTY',
+      value: `${diffName} ${chart.meter}`,
+      valueColor: dcolor,
+      help: `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
+      adjust: (dir) => setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir))),
+    },
+    {
+      label: 'TURN',
+      value: settings.turn.toUpperCase(),
+      help: 'Remaps which arrow goes to which panel: MIRROR flips the chart, LEFT/RIGHT rotate it, SHUFFLE deals a random (per-chart) remap. Same steps, new pattern.',
+      adjust: (dir) => update({ turn: cycle(TURNS, settings.turn, dir) }),
+    },
+    {
+      label: 'SCROLL DIR',
+      value: settings.reverse ? 'REVERSE' : 'NORMAL',
+      help: 'NORMAL scrolls arrows up to receptors at the top, DDR-style. REVERSE puts the receptors at the bottom and scrolls down (ITG players’ favorite).',
+      adjust: () => update({ reverse: !settings.reverse }),
+    },
+    {
+      label: 'APPEARANCE',
+      value: settings.appearance.toUpperCase(),
+      help: 'HIDDEN fades arrows out before they reach the receptors (read ahead, from memory); SUDDEN reveals them late (pure reaction). VISIBLE is the normal game.',
+      adjust: (dir) => update({ appearance: cycle(APPEARANCES, settings.appearance, dir) }),
+    },
+    {
+      label: 'NOTE SKIN',
+      value: SKIN_LABEL[settings.noteSkin],
+      help: 'Arrow artwork: DDR A3 arcade arrows, or Simply Love’s ITG-style quantization colors. Shown live in the preview.',
+      adjust: (dir) => update({ noteSkin: cycle(NOTE_SKINS, settings.noteSkin, dir) }),
+    },
+    {
+      label: 'MUSIC RATE',
+      value: `${settings.musicRate.toFixed(2)}×`,
+      help: 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
+      adjust: (dir) =>
+        update({
+          musicRate: Math.max(0.5, Math.min(2, +(settings.musicRate + dir * 0.05).toFixed(2))),
+        }),
+    },
+    {
+      label: 'BACKGROUND',
+      value: settings.bgMode.toUpperCase(),
+      help: 'The song’s background art/video behind the arrows. OFF hides it, DIM darkens it so notes stay readable, FULL shows it brighter.',
+      adjust: (dir) => update({ bgMode: cycle(BG_MODES, settings.bgMode, dir) }),
+    },
+  ];
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp') setRow((v) => (v + 3) % 4);
-      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % 4);
-      else if (e.key === 'ArrowLeft') adjust(-1);
-      else if (e.key === 'ArrowRight') adjust(1);
+      if (e.key === 'ArrowUp') setRow((v) => (v + rows.length - 1) % rows.length);
+      else if (e.key === 'ArrowDown') setRow((v) => (v + 1) % rows.length);
+      else if (e.key === 'ArrowLeft') rows[row].adjust(-1);
+      else if (e.key === 'ArrowRight') rows[row].adjust(1);
       else if (e.key === 'Enter') go();
       else if (e.key === 'Escape' || e.key === 'Shift') onBack();
       else return;
@@ -283,33 +200,6 @@ export function PlayerOptions({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
-
-  const rows: Array<{ label: string; value: string; help: string; valueColor?: string }> = [
-    {
-      label: 'SCROLL TYPE',
-      value: opts.scrollType === 'C' ? 'CONSTANT' : 'MULTIPLIER',
-      help: "CONSTANT (CMod) locks one scroll speed no matter how the song's tempo changes — steady and predictable (recommended). MULTIPLIER (XMod) scales with the song's BPM, so arrows speed up and slow down with the music.",
-    },
-    {
-      label: 'SPACING',
-      value: opts.scrollType === 'C' ? `C${opts.cmod}` : `${opts.xmod.toFixed(2)}×`,
-      help:
-        opts.scrollType === 'C'
-          ? "Constant scroll speed / note spacing, in BPM. Higher = faster and more spread out. Stays fixed through the song's tempo changes."
-          : `Multiplier on the song's BPM — higher = faster and more spread out.${bpm ? ` ≈ ${Math.round(bpm * opts.xmod)} BPM on this song.` : ''}`,
-    },
-    {
-      label: 'DIFFICULTY',
-      value: `${diffName} ${chart.meter}`,
-      valueColor: dcolor,
-      help: `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
-    },
-    {
-      label: 'BACKGROUND',
-      value: BG[opts.bg],
-      help: "The song's background art/video behind the arrows. OFF hides it, DIM darkens it so notes stay readable, FULL shows it brighter.",
-    },
-  ];
 
   return (
     <Stage
@@ -343,59 +233,58 @@ export function PlayerOptions({
       }
     >
       <div className="mx-auto flex h-full w-full max-w-[1360px]">
-        <div className="flex flex-1 flex-col justify-center gap-2 px-8">
+        <div className="flex min-w-0 flex-1 flex-col justify-center gap-[6px] px-8">
           {rows.map((r2, i) => {
             const on = i === row;
             return (
-              <div key={r2.label} className="mb-1">
-                <div
-                  onClick={() => setRow(i)}
-                  className="flex h-[54px] cursor-pointer items-center gap-4 border border-l-[3px] px-4"
-                  style={{
-                    borderColor: on ? AC : 'rgba(255,255,255,.1)',
-                    borderLeftColor: on ? AC : 'transparent',
-                    background: on ? AC + '14' : 'transparent',
+              <div
+                key={r2.label}
+                onClick={() => setRow(i)}
+                className="flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4"
+                style={{
+                  borderColor: on ? AC : 'rgba(255,255,255,.1)',
+                  borderLeftColor: on ? AC : 'transparent',
+                  background: on ? AC + '14' : 'transparent',
+                }}
+              >
+                <span className="flex-1 truncate text-[13px] tracking-[0.14em] text-[#ececec]/85">
+                  {r2.label}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRow(i);
+                    r2.adjust(-1);
                   }}
+                  style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
                 >
-                  <span className="flex-1 text-[15px] tracking-[0.14em] text-[#ececec]/85">
-                    {r2.label}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRow(i);
-                      adjust(-1);
-                    }}
-                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                  >
-                    ◀
-                  </button>
-                  <span
-                    className="min-w-[130px] text-center text-[17px] font-bold"
-                    style={r2.valueColor ? { color: r2.valueColor } : undefined}
-                  >
-                    {r2.value}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRow(i);
-                      adjust(1);
-                    }}
-                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                  >
-                    ▶
-                  </button>
-                </div>
-                <div className="mb-2 mt-1.5 px-1 text-[12px] leading-snug text-[#ececec]/45">
-                  {r2.help}
-                </div>
+                  ◀
+                </button>
+                <span
+                  className="min-w-[130px] text-center text-[15px] font-bold"
+                  style={r2.valueColor ? { color: r2.valueColor } : undefined}
+                >
+                  {r2.value}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRow(i);
+                    r2.adjust(1);
+                  }}
+                  style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                >
+                  ▶
+                </button>
               </div>
             );
           })}
+          <div className="mt-1 min-h-[44px] px-1 text-[12px] leading-snug text-[#ececec]/45">
+            {rows[row].help}
+          </div>
           <button
             onClick={go}
-            className="mt-4 h-[58px] w-full text-[18px] font-bold tracking-[0.3em]"
+            className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em]"
             style={{ background: AC, color: '#0b0c0e' }}
           >
             START ▸
@@ -407,13 +296,15 @@ export function PlayerOptions({
             PREVIEW
           </div>
           <div className="min-h-0 flex-1">
-            <NotePreview
-              song={req.song}
-              chart={chart}
-              scrollMode={opts.scrollType}
-              scrollValue={opts.scrollType === 'C' ? opts.cmod : opts.xmod}
+            <NoteFieldPreview
+              noteData={preview.noteData}
+              timing={preview.timing}
+              stepsType={chart.stepsType}
+              scrollMode={settings.scrollMode}
+              scrollValue={settings.scrollValue}
               noteSkin={settings.noteSkin}
               reverse={settings.reverse}
+              appearance={settings.appearance}
             />
           </div>
         </div>

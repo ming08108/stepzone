@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { ShaderBackground } from '../render/shaderBackground';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
-import { keyToColumn } from '../input/keymap';
-import { readGamepad } from '../input/gamepad';
+import { roleToColumn } from '../input/controls';
 import { difficultyToString } from '../song/difficulty';
 import { TapNoteScore } from '../notes/noteTypes';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import type { PlayRequest } from './playRequest';
+import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 
 type Phase = 'ready' | 'playing' | 'done';
@@ -138,10 +138,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     fxRef.current = null;
   };
 
-  // Keep the latest keybindings available to the (mount-once) key handlers.
-  const bindsRef = useRef(settings.keybindings);
-  bindsRef.current = settings.keybindings;
-
   useEffect(() => {
     const onResize = () => {
       const c = canvasRef.current;
@@ -155,26 +151,37 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     };
   }, []);
 
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
+  // Unified input (keyboard + gamepad -> roles, one bus). While playing, the
+  // directional roles are note columns: event timestamps ride through to
+  // press()/release() untouched so judging stays on the audible axis (keyboard
+  // = real event time, gamepad = frame-quantized). On the ready/done overlays,
+  // confirm activates the primary button and back exits.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+  useControls((e) => {
+    if (phaseRef.current === 'playing') {
       if (e.repeat) return;
-      const col = keyToColumn(e.code, bindsRef.current);
+      const col = roleToColumn(e.role);
       if (col === undefined) return;
-      e.preventDefault();
-      sessionRef.current?.press(col, e.timeStamp);
-    };
-    const up = (e: KeyboardEvent) => {
-      const col = keyToColumn(e.code, bindsRef.current);
-      if (col === undefined) return;
-      sessionRef.current?.release(col, e.timeStamp);
-    };
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-    };
-  }, []);
+      e.nativeEvent?.preventDefault();
+      if (e.pressed) sessionRef.current?.press(col, e.timeStampMs);
+      else sessionRef.current?.release(col, e.timeStampMs);
+      return;
+    }
+    if (!e.pressed || e.repeat) return;
+    if (e.role === 'confirm') {
+      // A focused button already activates on the native Enter keydown — only
+      // route to the primary CTA when nothing else will handle it.
+      if (e.device === 'keyboard' && document.activeElement?.tagName === 'BUTTON') return;
+      e.nativeEvent?.preventDefault();
+      ctaRef.current?.click();
+    } else if (e.role === 'back') {
+      e.nativeEvent?.preventDefault();
+      onExitRef.current();
+    }
+  });
 
   useEffect(
     () => () => {
@@ -184,30 +191,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     [],
   );
 
-  // Ready/done overlays: focus the primary button (Enter works) and accept
-  // gamepad confirm (activate) / back (exit).
+  // Ready/done overlays: focus the primary button so Enter/confirm activate it.
   useEffect(() => {
-    if (phase === 'playing') return;
-    ctaRef.current?.focus();
-    let raf = 0;
-    let seeded = false;
-    let prevC = false;
-    let prevB = false;
-    const poll = () => {
-      const g = readGamepad();
-      // Seed on the first read so a button held when the overlay opens isn't a press.
-      if (g.connected && seeded) {
-        if (g.confirm && !prevC) ctaRef.current?.click();
-        if (g.back && !prevB) onExit();
-      }
-      prevC = g.connected && g.confirm;
-      prevB = g.connected && g.back;
-      seeded = g.connected;
-      raf = requestAnimationFrame(poll);
-    };
-    raf = requestAnimationFrame(poll);
-    return () => cancelAnimationFrame(raf);
-  }, [phase, onExit]);
+    if (phase !== 'playing') ctaRef.current?.focus();
+  }, [phase]);
 
   const start = async () => {
     const canvas = canvasRef.current;
@@ -336,7 +323,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         >
           {phase === 'ready' && (
             <>
-              <div className="text-[19px] font-bold tracking-[0.22em]">STEPLINE</div>
+              <div className="text-[19px] font-bold tracking-[0.22em]">STEPZONE</div>
               <div className="mt-2 text-[40px] font-bold leading-tight">{title}</div>
               <div className="text-[18px] text-[#ececec]/60">
                 {req.song.artist || '—'}
@@ -401,11 +388,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               )}
               <button
                 ref={ctaRef}
-                onClick={start}
+                onClick={onExit}
                 className="mt-2 text-[15px] tracking-[0.22em] outline-none"
                 style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
               >
-                PRESS START TO RETRY
+                PRESS START TO CONTINUE
+              </button>
+              <button
+                onClick={start}
+                className="text-[12px] tracking-[0.14em] text-[#ececec]/50 outline-none hover:text-[#ececec] focus-visible:text-[#ececec]"
+              >
+                RETRY
               </button>
             </>
           )}

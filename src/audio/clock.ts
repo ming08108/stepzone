@@ -24,6 +24,7 @@ export class WebAudioClock {
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
   private playing = false;
+  private disposed = false;
 
   constructor() {
     // 'interactive' minimizes output buffer size (lowest latency the device allows).
@@ -93,6 +94,26 @@ export class WebAudioClock {
       this.source = null;
     }
     this.playing = false;
+  }
+
+  /**
+   * Stop playback and release the underlying AudioContext. Browsers cap the
+   * number of concurrent contexts, so every owner must dispose its clock when
+   * it is done (each play/retry and each calibration run makes a fresh one).
+   * Idempotent: safe to call twice, after stop(), or on an already-closed
+   * context. The clock is unusable afterwards.
+   */
+  async dispose(): Promise<void> {
+    this.stop();
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.ctx.state !== 'closed') {
+      try {
+        await this.ctx.close();
+      } catch {
+        // context already closed (or closing) — nothing left to release
+      }
+    }
   }
 
   /**

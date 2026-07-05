@@ -24,7 +24,7 @@ function Chrome({
     <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
       <header className="mb-6 flex items-center justify-between">
         <div className="text-xl font-bold">
-          notefield <span className="pill">{title}</span>
+          stepzone <span className="pill">{title}</span>
         </div>
         <button
           onClick={onBack}
