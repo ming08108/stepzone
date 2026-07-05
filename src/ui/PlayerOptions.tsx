@@ -1,13 +1,19 @@
 /**
  * STEPLINE Player Options — the per-play screen between song select and
- * gameplay: SPEED MOD / DIFFICULTY / BACKGROUND with a live scrolling note
- * preview, then START. Speed + background persist to localStorage
- * ["stepline.options"]; on START they apply to the shared settings (X-mod) and
- * the chosen difficulty's chart is handed back to play.
+ * gameplay: SCROLL TYPE / SPACING / DIFFICULTY / BACKGROUND, with a live preview
+ * that renders the real chart (real NoteFieldRenderer + Judge on a silent
+ * autoplay clock), then START. Choices persist to localStorage
+ * ["stepline.options"]; on START they apply to the shared settings and the
+ * chosen difficulty's chart is handed back to play.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { previewEncoded, stopPreview } from '../audio/songPreview';
+import { Judge } from '../gameplay/judge';
+import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { songBpmRange } from '../io/songFiles';
+import { TapNoteScore } from '../notes/noteTypes';
+import { columnAnglesFor } from '../render/columns';
+import { type Feedback, NoteFieldRenderer } from '../render/noteField';
 import { difficultyToString } from '../song/difficulty';
 import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
@@ -53,100 +59,143 @@ function loadOpts(): Opts {
   return { scrollType: 'C', cmod: 500, xmod: 2, bg: 1 };
 }
 
-/** Small looping preview: notes scrolling up to receptors at the chosen speed. */
-function Preview({ mult }: { mult: number }) {
+/**
+ * Live chart preview: drives the real NoteFieldRenderer with this chart's actual
+ * notes — a Judge on a silent autoplay clock — so you see the true beat map, note
+ * skin, and scroll type/spacing before starting. Loops a window of the chart;
+ * scroll changes apply live without rebuilding.
+ */
+function NotePreview({
+  song,
+  chart,
+  scrollMode,
+  scrollValue,
+  noteSkin,
+  reverse,
+}: {
+  song: PlayRequest['song'];
+  chart: PlayRequest['chart'];
+  scrollMode: 'C' | 'X' | 'M';
+  scrollValue: number;
+  noteSkin: 'arcade' | 'itg';
+  reverse: boolean;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const scrollRef = useRef({ mode: scrollMode, value: scrollValue });
+  scrollRef.current = { mode: scrollMode, value: scrollValue };
+
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const timing = chart.getTimingData(song.timing);
+    const nd = chart.getNoteData();
+    const maxBpm = timing.bpms.reduce((m, b) => Math.max(m, b.bps * 60), 0) || 200;
+    const angles = columnAnglesFor(chart.stepsType, nd.numTracks);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const LOOP = 9; // seconds of chart shown before looping
+
+    let judge!: Judge;
+    let renderer!: NoteFieldRenderer;
+    let feedback!: Feedback;
+    let held!: boolean[];
+    let releases!: Array<{ track: number; at: number }>;
+    let cursor = 0;
+    let lastSeq = 0;
+    let windowStart = 0;
+    let windowEnd = 0;
+
     const resize = () => {
-      canvas.width = canvas.clientWidth * dpr;
-      canvas.height = canvas.clientHeight * dpr;
+      const w = canvas.clientWidth || 300;
+      const h = canvas.clientHeight || 400;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      renderer.resize(w, h, dpr);
     };
-    resize();
-    const ANG = [-Math.PI / 2, Math.PI, 0, Math.PI / 2];
-    const COL = ['#ff4455', '#3d7bff'];
-    // A simple repeating pattern of (lane, beat) notes.
-    const pattern = [
-      [0, 0],
-      [2, 1],
-      [1, 2],
-      [3, 2.5],
-      [0, 3],
-      [2, 3.5],
-      [1, 4],
-      [3, 5],
-    ] as const;
+
+    const rebuild = () => {
+      judge = new Judge(nd, timing, DEFAULT_WINDOWS, 1);
+      renderer = new NoteFieldRenderer(nd.numTracks);
+      renderer.setColumnAngles(angles);
+      renderer.setStyle(noteSkin);
+      renderer.setReverse(reverse);
+      renderer.setBgDim(1); // no song background in the preview
+      renderer.setMeta({ title: '', subtitle: '', difficulty: '' });
+      resize();
+      feedback = {
+        lastJudgment: null,
+        laneFlash: new Array<number>(nd.numTracks).fill(-999),
+        laneHit: new Array<Feedback['laneHit'][number]>(nd.numTracks).fill(null),
+      };
+      held = new Array<boolean>(nd.numTracks).fill(false);
+      releases = [];
+      cursor = 0;
+      lastSeq = judge.judgmentSeq;
+      const first = judge.notes[0]?.time ?? 0;
+      const last = judge.notes[judge.notes.length - 1]?.time ?? first;
+      windowStart = Math.max(0, first - 1.4);
+      windowEnd = Math.max(windowStart + 2, Math.min(windowStart + LOOP, last + 1.2));
+    };
+
+    rebuild();
+    const ro = new ResizeObserver(() => resize());
+    ro.observe(canvas);
+
     let raf = 0;
-    let start = 0;
-    const arrow = (x: number, y: number, s: number, ang: number, fill: string | null) => {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(ang);
-      ctx.beginPath();
-      ctx.moveTo(0, -0.9 * s);
-      ctx.lineTo(0.9 * s, 0);
-      ctx.lineTo(0.45 * s, 0);
-      ctx.lineTo(0.45 * s, 0.9 * s);
-      ctx.lineTo(0, 0.45 * s);
-      ctx.lineTo(-0.45 * s, 0.9 * s);
-      ctx.lineTo(-0.45 * s, 0);
-      ctx.lineTo(-0.9 * s, 0);
-      ctx.closePath();
-      if (fill) {
-        ctx.fillStyle = fill;
-        ctx.fill();
-        ctx.lineWidth = 3.5;
-        ctx.strokeStyle = '#0a0b0d';
-        ctx.stroke();
-        ctx.scale(0.72, 0.72);
-        ctx.beginPath();
-        ctx.moveTo(0, -0.9 * s);
-        ctx.lineTo(0.9 * s, 0);
-        ctx.lineTo(0.45 * s, 0);
-        ctx.lineTo(0.45 * s, 0.9 * s);
-        ctx.lineTo(0, 0.45 * s);
-        ctx.lineTo(-0.45 * s, 0.9 * s);
-        ctx.lineTo(-0.45 * s, 0);
-        ctx.lineTo(-0.9 * s, 0);
-        ctx.closePath();
-        ctx.lineWidth = 3 / 0.72;
-        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
-        ctx.stroke();
-      } else {
-        ctx.lineWidth = 2.5;
-        ctx.strokeStyle = 'rgba(236,236,236,0.4)';
-        ctx.stroke();
-      }
-      ctx.restore();
-    };
+    let base = 0;
     const frame = (t: number) => {
-      if (!start) start = t;
-      const beat = ((t - start) / 1000) * 2; // 120bpm-ish
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      const fieldW = 4 * 72 * dpr;
-      const left = (w - fieldW) / 2 + 36 * dpr;
-      const recY = 60 * dpr;
-      const s = 26 * dpr;
-      const pxPerBeat = 90 * dpr * mult;
-      const laneX = (l: number) => left + l * 72 * dpr;
-      for (let l = 0; l < 4; l++) arrow(laneX(l), recY, s, ANG[l], null);
-      for (const [lane, b] of pattern) {
-        const nb = b + Math.ceil((beat - b) / 6) * 6; // loop every 6 beats
-        const y = recY + (nb - beat) * pxPerBeat;
-        if (y > recY - s && y < h + s) arrow(laneX(lane), y, s, ANG[lane], COL[Math.round(b) % 2]);
+      if (!base) base = t;
+      let now = windowStart + (t - base) / 1000;
+      if (now >= windowEnd) {
+        rebuild();
+        base = t;
+        now = windowStart;
       }
+      const notes = judge.notes;
+      // Autoplay: hit each note as it reaches the receptor.
+      while (cursor < notes.length && notes[cursor].time <= now) {
+        const n = notes[cursor];
+        const ev = judge.step(n.track, n.time, false);
+        feedback.laneFlash[n.track] = n.time;
+        if (ev && ev.tns !== TapNoteScore.None) {
+          feedback.laneHit[n.track] = { tns: ev.tns, atSeconds: n.time };
+        }
+        if (n.tailTime > n.time) {
+          held[n.track] = true;
+          releases.push({ track: n.track, at: n.tailTime });
+        } else {
+          judge.step(n.track, n.time, true);
+        }
+        cursor++;
+      }
+      releases = releases.filter((r) => {
+        if (r.at <= now) {
+          judge.step(r.track, r.at, true);
+          held[r.track] = false;
+          return false;
+        }
+        return true;
+      });
+      judge.update(now, held);
+      if (judge.judgmentSeq !== lastSeq) {
+        lastSeq = judge.judgmentSeq;
+        feedback.lastJudgment = { tns: judge.lastTns, atSeconds: now };
+      }
+      renderer.setScroll(scrollRef.current.mode, scrollRef.current.value, maxBpm);
+      const beat = timing.getBeatFromElapsedTime(now);
+      renderer.draw(ctx, judge, now, beat, 0, feedback);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
-  }, [mult]);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [song, chart, noteSkin, reverse]);
+
   return <canvas ref={ref} className="h-full w-full" />;
 }
 
@@ -159,7 +208,7 @@ export function PlayerOptions({
   onStart: (chart?: PlayRequest['chart']) => void;
   onBack: () => void;
 }) {
-  const { update } = useSettings();
+  const { settings, update } = useSettings();
   const [opts, setOpts] = useState<Opts>(loadOpts);
   const [row, setRow] = useState(0);
   useGamepadKeys();
@@ -195,9 +244,6 @@ export function PlayerOptions({
 
   const r = songBpmRange(req.song);
   const bpm = r.max > 0 ? Math.round(r.max) : 0;
-  // Preview scroll multiplier: CMod's constant BPM mapped onto this song's tempo,
-  // or the raw XMod multiplier.
-  const mult = opts.scrollType === 'C' ? opts.cmod / (bpm || 150) : opts.xmod;
   const diffName = difficultyToString(chart.difficulty);
   const dcolor = DIFF_COLOR[diffName] ?? '#ececec';
 
@@ -295,7 +341,7 @@ export function PlayerOptions({
         </>
       }
     >
-      <div className="mx-auto flex h-full w-full max-w-[1180px]">
+      <div className="mx-auto flex h-full w-full max-w-[1360px]">
         <div className="flex flex-1 flex-col justify-center gap-2 px-8">
           {rows.map((r2, i) => {
             const on = i === row;
@@ -355,12 +401,19 @@ export function PlayerOptions({
           </button>
         </div>
 
-        <div className="flex w-[420px] flex-none flex-col border-l border-white/[0.09]">
+        <div className="flex w-[600px] flex-none flex-col border-l border-white/[0.09]">
           <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/45">
             PREVIEW
           </div>
           <div className="min-h-0 flex-1">
-            <Preview mult={mult} />
+            <NotePreview
+              song={req.song}
+              chart={chart}
+              scrollMode={opts.scrollType}
+              scrollValue={opts.scrollType === 'C' ? opts.cmod : opts.xmod}
+              noteSkin={settings.noteSkin}
+              reverse={settings.reverse}
+            />
           </div>
         </div>
       </div>
