@@ -815,8 +815,20 @@ export class GpuNoteField {
     // no per-hit re-bake.
     const col = parseColor(tint[0]);
     const t: Tint = [col[0], col[1], col[2], 1];
-    // Number: condensed 0.84 like the A3 numerals, right-aligned at the join.
-    this.glyphs.drawNumber(this.batch, 'combo', count, joinX, baseline, px, 'right', () => t, 0.84);
+    // Bake at a fixed reference (max-zoom size) and scale to the current combo
+    // px, so the zoom ladder never re-bakes glyphs. Number condensed 0.84 like
+    // the A3 numerals, right-aligned at the join.
+    const bakePx = Math.round(this.colW * 0.9);
+    this.glyphs.drawNumber(
+      this.batch,
+      'combo',
+      count,
+      joinX,
+      baseline,
+      { px, bakePx, scaleX: 0.84 },
+      'right',
+      () => t,
+    );
     // Lowercase "combo" word (constant → one cached sprite) sharing the baseline.
     this.glyphs.drawText(
       this.batch,
@@ -824,7 +836,7 @@ export class GpuNoteField {
       'combo',
       joinX + 6 * ds,
       baseline,
-      px * 0.42,
+      { px: px * 0.42, bakePx: Math.round(bakePx * 0.42) },
       'left',
       t,
     );
@@ -1197,12 +1209,12 @@ export class GpuNoteField {
       text += digits[i];
       dim.push(isDim);
     }
-    const scorePx = 25 * ds;
-    const total = this.glyphs.measure('score', scorePx, text);
+    const scoreOpts = { px: 25 * ds };
+    const total = this.glyphs.measure('score', scoreOpts, text);
     const sy = rowH + 2 * ds;
     const sx = px + (pw - total) / 2;
     const dy = py + sy + scoreH / 2 + 8 * ds;
-    this.glyphs.drawNumber(this.batch, 'score', text, sx, dy, scorePx, 'left', (i) =>
+    this.glyphs.drawNumber(this.batch, 'score', text, sx, dy, scoreOpts, 'left', (i) =>
       dim[i] ? SCORE_DIM : SCORE_BRIGHT,
     );
   }

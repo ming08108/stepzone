@@ -24,6 +24,15 @@ import type { QuadBatch } from './quads';
 export type GlyphStyle = 'combo' | 'score';
 export type Tint = readonly [number, number, number, number];
 
+/** Display size `px`, optionally baked at `bakePx` (then scaled) with an extra
+ *  horizontal condense `scaleX`. Baking at a fixed `bakePx` across a range of
+ *  display sizes (combo's zoom ladder) means the glyphs bake only once. */
+export interface DrawOpts {
+  px: number;
+  bakePx?: number;
+  scaleX?: number;
+}
+
 interface Glyph {
   rect: AtlasRect | null;
   /** Pen advance in css px (measureText width). */
@@ -82,10 +91,22 @@ export class GlyphBank {
     return g;
   }
 
-  /** Total pen width of `text` at `px` (css px), for centering/right-align. */
-  measure(style: GlyphStyle, px: number, text: string, scaleX = 1): number {
+  /**
+   * Options for a number/text draw. `px` is the DISPLAY size; `bakePx` is the
+   * size the glyphs are actually rasterized at (defaults to px). Combo bakes
+   * once at a reference size and scales, so its zoom ladder never re-bakes.
+   * `scaleX` is an extra horizontal condense (A3 combo numerals are 0.84).
+   */
+  private opt(o: DrawOpts): { bakePx: number; scale: number; scaleX: number } {
+    const bakePx = o.bakePx ?? o.px;
+    return { bakePx, scale: o.px / bakePx, scaleX: o.scaleX ?? 1 };
+  }
+
+  /** Total pen width of `text` for centering/right-align (display css px). */
+  measure(style: GlyphStyle, o: DrawOpts, text: string): number {
+    const { bakePx, scale, scaleX } = this.opt(o);
     let total = 0;
-    for (const ch of text) total += this.glyph(style, px, ch).advance * scaleX;
+    for (const ch of text) total += this.glyph(style, bakePx, ch).advance * scale * scaleX;
     return total;
   }
 
@@ -95,14 +116,16 @@ export class GlyphBank {
     g: Glyph,
     penX: number,
     baseline: number,
+    scale: number,
     scaleX: number,
     tint: Tint,
   ): void {
     if (!g.rect) return;
-    const drawW = g.w * scaleX;
-    const cx = penX - g.padX * scaleX + drawW / 2;
-    const cy = baseline - g.baseY + g.h / 2;
-    b.push(cx, cy, drawW, g.h, g.rect, tint[0], tint[1], tint[2], tint[3]);
+    const drawW = g.w * scale * scaleX;
+    const drawH = g.h * scale;
+    const cx = penX - g.padX * scale * scaleX + drawW / 2;
+    const cy = baseline - g.baseY * scale + drawH / 2;
+    b.push(cx, cy, drawW, drawH, g.rect, tint[0], tint[1], tint[2], tint[3]);
   }
 
   /**
@@ -116,16 +139,16 @@ export class GlyphBank {
     text: string,
     x: number,
     baseline: number,
-    px: number,
+    o: DrawOpts,
     align: 'left' | 'right',
     tintOf: (i: number, ch: string) => Tint,
-    scaleX = 1,
   ): void {
-    let penX = align === 'right' ? x - this.measure(style, px, text, scaleX) : x;
+    const { bakePx, scale, scaleX } = this.opt(o);
+    let penX = align === 'right' ? x - this.measure(style, o, text) : x;
     for (let i = 0; i < text.length; i++) {
-      const g = this.glyph(style, px, text[i]);
-      this.place(b, g, penX, baseline, scaleX, tintOf(i, text[i]));
-      penX += g.advance * scaleX;
+      const g = this.glyph(style, bakePx, text[i]);
+      this.place(b, g, penX, baseline, scale, scaleX, tintOf(i, text[i]));
+      penX += g.advance * scale * scaleX;
     }
   }
 
@@ -136,13 +159,13 @@ export class GlyphBank {
     text: string,
     x: number,
     baseline: number,
-    px: number,
+    o: DrawOpts,
     align: 'left' | 'right',
     tint: Tint,
-    scaleX = 1,
   ): void {
-    const g = this.glyph(style, px, text);
-    const penX = align === 'right' ? x - g.advance * scaleX : x;
-    this.place(b, g, penX, baseline, scaleX, tint);
+    const { bakePx, scale, scaleX } = this.opt(o);
+    const g = this.glyph(style, bakePx, text);
+    const penX = align === 'right' ? x - g.advance * scale * scaleX : x;
+    this.place(b, g, penX, baseline, scale, scaleX, tint);
   }
 }
