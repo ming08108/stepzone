@@ -20,14 +20,17 @@ Per scenario it reports:
   tops out at the monitor's refresh — to see the true frame-rate ceiling,
   launch the driver with `--disable-gpu-vsync --disable-frame-rate-limit`
   (the scratch `runBench2.mjs` does).
-- **draw CPU** — main-thread time inside `draw()` (canvas: command recording;
-  WebGPU: instance building + encode). Plus a per-theme-pass breakdown via
-  the `wrapTheme` instrumentation hook (canvas backend only).
-- **max draws/s** — back-to-back draws with no vsync wait. For the WebGPU
-  field each chunk is drained to GPU completion (`queue.onSubmittedWorkDone`),
-  so this is true end-to-end throughput including rasterization, independent
-  of the display. Canvas 2D has no completion signal, so its rate is a CPU
-  command-build ceiling.
+- **GPU/frame** — the real GPU time of each _presented_ frame, via WebGPU
+  timestamp queries on the render pass (`gpuTimer.ts`). This is the honest
+  per-frame cost of what's on screen and what drives headroom. Canvas 2D can't
+  be timestamped (its raster runs later in the browser's GPU process), so it
+  shows "—". (An earlier synthetic "saturation" phase — hammering draws to an
+  arbitrary target — was removed: it stuttered the screen, fast-forwarded the
+  chart, and didn't reflect what's presented.)
+- **CPU/frame** — main-thread time inside `draw()` (instance building + encode),
+  plus a per-theme-pass breakdown via the `wrapTheme` hook (canvas backend).
+- **headroom** — how many of these frames fit one display-refresh interval, at
+  the binding cost (max of GPU and CPU per frame).
 
 Scenarios: a typical hard chart (175BPM 16ths, X2.5) and a beyond-worst-case
 stress chart (200BPM 16ths + jumps + overlapping freezes/rolls + mines at X1 ≈

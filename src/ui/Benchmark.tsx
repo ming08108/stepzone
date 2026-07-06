@@ -29,12 +29,15 @@ function fmt(n: number, digits = 1): string {
   return Number.isFinite(n) ? n.toFixed(digits) : '—';
 }
 
-/** Frame-budget headroom: how many times over the canvas could draw at 60Hz. */
-function headroom(s: ScenarioResult): number {
-  return s.drawCpuMs.avg > 0 ? 16.7 / s.drawCpuMs.avg : 0;
+/** How many of this scenario's frames fit one display-refresh interval, by the
+ *  binding per-frame cost: real GPU time where measured, else the CPU draw. */
+function headroom(s: ScenarioResult, refreshMs: number): number {
+  const cost = s.gpuMs ? Math.max(s.gpuMs.avg, s.drawCpuMs.avg) : s.drawCpuMs.avg;
+  return cost > 0 ? refreshMs / cost : 0;
 }
 
 function ResultsTable({ result }: { result: BenchResult }) {
+  const refreshMs = 1000 / result.refreshHz;
   return (
     <table className="w-full border-collapse text-[12px] [font-variant-numeric:tabular-nums]">
       <thead>
@@ -43,9 +46,9 @@ function ResultsTable({ result }: { result: BenchResult }) {
           <th className="px-2 py-1 text-right font-normal">FPS</th>
           <th className="px-2 py-1 text-right font-normal">FRAME p95</th>
           <th className="px-2 py-1 text-right font-normal">MISSED</th>
-          <th className="px-2 py-1 text-right font-normal">DRAW CPU avg</th>
-          <th className="px-2 py-1 text-right font-normal">DRAW p99</th>
-          <th className="px-2 py-1 text-right font-normal">MAX DRAWS/S</th>
+          <th className="px-2 py-1 text-right font-normal">GPU/FRAME</th>
+          <th className="px-2 py-1 text-right font-normal">GPU p95</th>
+          <th className="px-2 py-1 text-right font-normal">CPU/FRAME</th>
           <th className="px-2 py-1 text-right font-normal">HEADROOM</th>
         </tr>
       </thead>
@@ -68,10 +71,16 @@ function ResultsTable({ result }: { result: BenchResult }) {
                 >
                   {fmt(s.missedPct)}%
                 </td>
-                <td className="px-2 py-1.5 text-right">{fmt(s.drawCpuMs.avg, 2)} ms</td>
-                <td className="px-2 py-1.5 text-right">{fmt(s.drawCpuMs.p99, 2)} ms</td>
-                <td className="px-2 py-1.5 text-right">{fmt(s.satDrawsPerSec, 0)}</td>
-                <td className="px-2 py-1.5 text-right">×{fmt(headroom(s), 1)}</td>
+                <td className="px-2 py-1.5 text-right font-bold">
+                  {s.gpuMs ? `${fmt(s.gpuMs.avg, 2)} ms` : '—'}
+                </td>
+                <td className="px-2 py-1.5 text-right">
+                  {s.gpuMs ? `${fmt(s.gpuMs.p95, 2)} ms` : '—'}
+                </td>
+                <td className="px-2 py-1.5 text-right text-[#ececec]/60">
+                  {fmt(s.drawCpuMs.avg, 2)} ms
+                </td>
+                <td className="px-2 py-1.5 text-right">×{fmt(headroom(s, refreshMs), 0)}</td>
               </>
             )}
           </tr>
@@ -194,9 +203,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
             {progress.phase.toUpperCase()}
           </div>
           <div className="truncate text-[13px]">{progress.label}</div>
-          <div className="text-[13px] font-bold">
-            {progress.phase === 'saturate' ? 'SATURATING…' : `${fmt(progress.liveFps, 0)} FPS`}
-          </div>
+          <div className="text-[13px] font-bold">{fmt(progress.liveFps, 0)} FPS</div>
         </div>
       )}
 
@@ -206,7 +213,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
             <div className="mb-1 flex items-baseline gap-3">
               <span className="text-[19px] font-bold tracking-[0.22em]">RENDER BENCHMARK</span>
               <span className="text-[12px] tracking-[0.14em] text-[#ececec]/45">
-                ~40s · full-screen synthetic gameplay
+                ~30s · full-screen synthetic gameplay
               </span>
             </div>
 
@@ -238,11 +245,12 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
                 <PassBreakdown result={result} />
                 <p className="mt-3 text-[11px] leading-relaxed text-[#ececec]/40">
                   FPS + frame p95/missed = what the player sees, normally capped at this
-                  display&apos;s refresh ({fmt(result.refreshHz, 0)} Hz). MAX DRAWS/S = the real
-                  ceiling with no vsync wait — for the WebGPU field it is drained to GPU completion
-                  each chunk, so it is true end-to-end throughput (the ITG canvas row is a CPU
-                  command-build rate). DRAW CPU = main-thread time per draw(). HEADROOM = 60 Hz
-                  budget ÷ draw CPU.
+                  display&apos;s refresh ({fmt(result.refreshHz, 0)} Hz). GPU/FRAME = the real GPU
+                  time of each presented frame (WebGPU timestamp query) — the honest per-frame cost;
+                  the ITG canvas row can&apos;t be timestamped, so it shows &ldquo;—&rdquo;.
+                  CPU/FRAME = main-thread encode time per draw(). HEADROOM = how many of these
+                  frames fit one refresh interval ({fmt(1000 / result.refreshHz, 1)} ms) at the
+                  binding cost.
                 </p>
               </>
             )}
