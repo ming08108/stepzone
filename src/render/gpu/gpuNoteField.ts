@@ -11,12 +11,13 @@
  * bodies now pass OVER the receptors, like their heads and like StepMania):
  *   1 background: song media (cover-fit) or solid, + dim
  *   2 field chrome: lane filter, DANGER wash/ropes
- *   3 HUD under the arrows: judgment label, combo (A3 ComboUnderField)
+ *   3 beat/measure guide lines (scroll with the field, under the notes)
  *   4 receptors
  *   5 hold bodies
  *   6 taps / hold heads / mines
  *   7 hit explosions (additive)
- *   8 HUD over the arrows: dance gauge, song panel, score panel
+ *   8 judgment label + combo — ON TOP of the arrows, like the DDR cab
+ *   9 HUD over the arrows: dance gauge, song panel, score panel
  *
  * The dance gauge's animated fills (flowing green bands, the maxed-gauge
  * rainbow, the top sheen) are scrolling patterns clipped by a baked
@@ -131,6 +132,20 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
 
+/**
+ * Elapsed time (seconds) of every integer beat 0..ceil(throughBeat), for the
+ * beat-line pass. Takes a beat→time function (kept free of a TimingData
+ * import so the renderer stays presentation-only, like scroll.ts). The array
+ * is what setBeatTimes() consumes; a few beats of slack past the last note
+ * cover the scroll-out tail (positions past the end extrapolate anyway).
+ */
+export function beatTimes(getTime: (beat: number) => number, throughBeat: number): Float64Array {
+  const n = Math.max(1, Math.ceil(throughBeat) + 8);
+  const out = new Float64Array(n);
+  for (let bt = 0; bt < n; bt++) out[bt] = getTime(bt);
+  return out;
+}
+
 export class GpuNoteField {
   width = 800;
   height = 720;
@@ -151,6 +166,8 @@ export class GpuNoteField {
   private firstVisibleIdx = 0;
   private lastCombo = 0;
   private comboPopAt = -10;
+  /** Per-beat elapsed times for the guide-line pass (null = no beat lines). */
+  private beatLineTimes: Float64Array | null = null;
   private readonly scroll: ScrollState;
 
   // Rebuilt by ensureAtlas() when the display demands a different texture
@@ -242,6 +259,12 @@ export class GpuNoteField {
 
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.media.setSource(media);
+  }
+
+  /** Per-beat elapsed times (see beatTimes()) enabling the guide-line pass;
+   *  null turns beat lines off. */
+  setBeatTimes(times: Float64Array | null): void {
+    this.beatLineTimes = times;
   }
 
   /**
@@ -394,15 +417,9 @@ export class GpuNoteField {
     // 2. Field chrome (lane filter + DANGER) — drawn even in bare mode.
     if (white) this.pushChrome(judge, beatPulse, white);
 
-    // 3. HUD under the arrows.
-    if (!this.cfg.bare) {
-      if (judge.combo !== this.lastCombo) {
-        if (judge.combo > this.lastCombo) this.comboPopAt = now;
-        this.lastCombo = judge.combo;
-      }
-      this.pushJudgment(fb, now);
-      this.pushCombo(judge, fb, now);
-    }
+    // 3. Beat/measure guide lines — field elements under the notes (shown in
+    // bare mode too; they scroll with the chart, so all scroll modes work).
+    if (white && this.beatLineTimes) this.pushBeatLines(white);
 
     // 4. Receptors (under holds and notes — the corrected layering).
     const f = beatPulse * beatPulse;
@@ -484,7 +501,18 @@ export class GpuNoteField {
       this.pushExplosion(t, hit.tns, age / A3_EXPLOSION);
     }
 
-    // 8. HUD over the arrows.
+    // 8. Judgment + combo, ON TOP of the arrows (the DDR cab draws them over
+    // the field, not beneath it).
+    if (!this.cfg.bare) {
+      if (judge.combo !== this.lastCombo) {
+        if (judge.combo > this.lastCombo) this.comboPopAt = now;
+        this.lastCombo = judge.combo;
+      }
+      this.pushJudgment(fb, now);
+      this.pushCombo(judge, fb, now);
+    }
+
+    // 9. HUD chrome over everything (gauge frames the top, panels the edges).
     if (!this.cfg.bare && white) {
       this.pushGauge(judge, now, beatPulse);
       this.pushSongPanel(progress, white);
@@ -593,6 +621,47 @@ export class GpuNoteField {
             rot: -Math.PI / 2,
           });
       }
+    }
+  }
+
+  /**
+   * Horizontal guide lines at every beat, brighter on measure boundaries,
+   * scrolling with the field. Beats are monotonic in screen-y under every
+   * scroll mode, so a bounded scan out from nowBeat in both directions covers
+   * exactly the on-screen ones. Times past the precomputed array extrapolate
+   * with the final interval (only C-mod under a BPM change reads them; X/M
+   * ignore time entirely).
+   */
+  private pushBeatLines(white: NonNullable<ReturnType<GpuNoteField['sprWhite']>>): void {
+    const b = this.batch;
+    const s = this.scroll;
+    const { ds, height } = this;
+    const times = this.beatLineTimes;
+    if (!times) return;
+    const nb = s.nowBeat;
+    const w = this.numTracks * this.colW + 28 * ds; // span the lane-cover width
+    const cx = this.fieldLeft + (this.numTracks * this.colW) / 2;
+    const cull = 40 * ds;
+    const last = times.length - 1;
+    const dLast = last >= 1 ? times[last] - times[last - 1] : 0.5;
+    const yFor = (B: number): number =>
+      yOf(s, B <= last ? times[B] : times[last] + (B - last) * dLast, B);
+    const line = (B: number, y: number): void => {
+      const measure = B % 4 === 0;
+      b.push(cx, y, w, (measure ? 2 : 1.4) * ds, white, 1, 1, 1, measure ? 0.22 : 0.1);
+    };
+    const CAP = 512; // guard against pathologically small spacing
+    let n = 0;
+    // Down from nowBeat (inclusive of the beat at/just below it), then up.
+    for (let B = Math.floor(nb); B >= 0 && n < CAP; B--, n++) {
+      const y = yFor(B);
+      if (y < -cull || y > height + cull) break;
+      line(B, y);
+    }
+    for (let B = Math.floor(nb) + 1; n < CAP; B++, n++) {
+      const y = yFor(B);
+      if (y < -cull || y > height + cull) break;
+      line(B, y);
     }
   }
 

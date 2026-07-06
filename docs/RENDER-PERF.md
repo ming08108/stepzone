@@ -77,8 +77,11 @@ Structured for the GPU pipeline rather than ported from canvas calls:
 
 Pass order (fixes the 2D field's layering inconsistency, where hold bodies
 drew UNDER receptors while their heads drew over): background → chrome →
-judgment/combo (A3 ComboUnderField) → receptors → hold bodies → taps/heads/
-mines → explosions (additive) → gauge/panels.
+beat/measure guide lines → receptors → hold bodies → taps/heads/mines →
+explosions (additive) → judgment/combo → gauge/panels. Judgment and combo
+draw OVER the arrows (the DDR cab draws them there, not beneath). Beat lines
+scroll with the field via a bounded per-frame scan of on-screen beats
+(setBeatTimes supplies each beat's time so C-mod under a BPM change is exact).
 
 Selection is automatic, by note skin: arcade → WebGPU field, ITG → canvas
 renderer. There is no renderer setting. If WebGPU is unavailable (or the

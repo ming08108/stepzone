@@ -25,7 +25,7 @@
  * - Dance gauge: gold-cab industrial frame over the lane, split into big
  *   chevron-pill segments — flowing green stream, scrolling rainbow when
  *   full, pulsing red in danger (plus yellow neon DANGER ropes + red wash).
- * - Judgments under the arrows (A3 ComboUnderField): Title Case rounded
+ * - Judgment + combo over the field (like the cab): Title Case rounded
  *   lettering ("Marvelous!!!", "Perfect!!", …) with the squash-in pop and
  *   the Marvelous white shimmer; big tier-tinted combo numerals with the
  *   lowercase "combo" word on the baseline.

@@ -23,7 +23,7 @@ import { Judge } from '../gameplay/judge';
 import { TapNoteScore, TapNoteType } from '../notes/noteTypes';
 import { parseSimfile } from '../parse/loader';
 import { NoteFieldRenderer, type Feedback } from '../render/noteField';
-import { GpuNoteField } from '../render/gpu/gpuNoteField';
+import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { makeBenchSsc, type BenchChartOpts } from './benchChart';
 import { emptyPassTotals, instrumentTheme, type PassKey, type PassTotals } from './instrument';
 
@@ -389,6 +389,8 @@ async function buildScene(
       return { skipped: 'WebGPU unavailable' };
     }
     field.resize(width, height, dpr);
+    const lastBeat = judge.notes.length ? judge.notes[judge.notes.length - 1].beat : 0;
+    field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
     if (bg) field.setBackground(bg);
     return {
       ...common,

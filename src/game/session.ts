@@ -21,7 +21,7 @@ import {
   type PracticeSection,
 } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
-import { GpuNoteField } from '../render/gpu/gpuNoteField';
+import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { NoteFieldRenderer, type Feedback, type NoteFieldConfig } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
 import { difficultyToString } from '../song/difficulty';
@@ -55,6 +55,7 @@ export class GameSession {
   private gpuField: GpuNoteField | null = null;
   private readonly rendererConfig: Partial<NoteFieldConfig>;
   private bgMedia: HTMLVideoElement | HTMLImageElement | ImageBitmap | null = null;
+  private readonly beatLineTimes: Float64Array;
   private readonly timing: TimingData;
   private readonly held: boolean[];
   private readonly feedback: Feedback;
@@ -158,6 +159,8 @@ export class GameSession {
       const t = this.timing.getElapsedTimeFromBeat(beat);
       if (t >= 0) this.clicks.push({ time: t, accent: beat % 4 === 0 });
     }
+    // Per-beat times for the GPU field's beat-line pass.
+    this.beatLineTimes = beatTimes((beat) => this.timing.getElapsedTimeFromBeat(beat), lastBeat);
 
     let end = 0;
     for (const n of this.judge.notes) end = Math.max(end, n.tailTime);
@@ -249,6 +252,7 @@ export class GameSession {
           this.gpuField = gpu;
           gpu.onLost = () => this.fallbackToCanvas();
           gpu.resize(this.logicalW, this.logicalH, this.dpr);
+          gpu.setBeatTimes(this.beatLineTimes);
           if (this.bgMedia) gpu.setBackground(this.bgMedia);
         } else {
           this.fallbackToCanvas();

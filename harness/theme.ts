@@ -22,7 +22,7 @@ import '@fontsource/chakra-petch/700-italic.css';
 import { Judge } from '../src/gameplay/judge';
 import { HoldNoteScore, TapNoteScore } from '../src/notes/noteTypes';
 import { parseSimfile } from '../src/parse/loader';
-import { GpuNoteField } from '../src/render/gpu/gpuNoteField';
+import { beatTimes, GpuNoteField } from '../src/render/gpu/gpuNoteField';
 import { NoteFieldRenderer, type Feedback } from '../src/render/noteField';
 
 // One measure of 4ths (two hits + the two hold heads), one 48-row measure
@@ -157,6 +157,7 @@ async function main(): Promise<void> {
       return;
     }
     field.resize(canvas.width, canvas.height, 1);
+    field.setBeatTimes(beatTimes((bt) => song.timing.getElapsedTimeFromBeat(bt), 12));
     draw = (t, b) => field.draw(judge, t, b, 0.42, fb);
   } else {
     const renderer = new NoteFieldRenderer(4, config);

@@ -15,6 +15,7 @@ import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { NoteData } from '../notes/noteData';
 import {
   beatToNoteRow,
+  noteRowToBeat,
   NO_KEYSOUND,
   NO_PLAYER,
   TapNoteScore,
@@ -24,7 +25,7 @@ import {
 } from '../notes/noteTypes';
 import { isVideoFile } from '../io/songFiles';
 import { columnAnglesFor } from '../render/columns';
-import { GpuNoteField } from '../render/gpu/gpuNoteField';
+import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { type Feedback, type NoteFieldConfig, NoteFieldRenderer } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
 import type { RenderMeta } from '../render/theme';
@@ -305,6 +306,9 @@ export function NoteFieldPreview({
         if (!ctx2d) return; // context type already claimed — nothing to draw
         renderer2d = new NoteFieldRenderer(noteData.numTracks, fieldConfig);
       }
+      gpuField?.setBeatTimes(
+        beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), noteRowToBeat(noteData.lastRow())),
+      );
       (gpuField ?? renderer2d)?.setBackground(bgMedia);
       rebuild();
       songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
