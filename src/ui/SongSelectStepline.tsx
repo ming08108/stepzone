@@ -513,6 +513,15 @@ export function SongSelect({
   const song = filtered[selClamped];
   const songBest = song?.bests[diff] ?? null;
 
+  // The header art box follows each image's own shape (jackets are square,
+  // classic banners ~3:1) instead of cropping everything to one fixed frame.
+  // Clamped so extreme shapes can't blow up the header; unknown (still
+  // loading / no art) falls back to the old 16:9 frame.
+  const [artRatio, setArtRatio] = useState<number | null>(null);
+  const bannerUrl = song?.entry.bannerUrl ?? null;
+  useEffect(() => setArtRatio(null), [bannerUrl]);
+  const artW = Math.round(144 * Math.min(2.8, Math.max(1, artRatio ?? 16 / 9)));
+
   // Remember filters/selection so returning from a song restores the list (#2).
   useEffect(() => {
     savedFilters.sort = sort;
@@ -876,12 +885,22 @@ export function SongSelect({
             : undefined
         }
       >
-        <div className="relative h-[144px] w-[256px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]">
-          {song?.entry.bannerUrl ? (
+        <div
+          className="relative h-[144px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]"
+          style={{ width: artW, transition: 'width .16s ease-out' }}
+        >
+          {bannerUrl ? (
             <img
-              src={song.entry.bannerUrl}
+              key={bannerUrl}
+              src={bannerUrl}
               alt=""
               loading="lazy"
+              onLoad={(e) => {
+                const el = e.currentTarget;
+                if (el.naturalWidth > 0 && el.naturalHeight > 0) {
+                  setArtRatio(el.naturalWidth / el.naturalHeight);
+                }
+              }}
               className="h-full w-full object-cover"
             />
           ) : (
