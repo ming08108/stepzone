@@ -2,10 +2,11 @@
 
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
-import { songKey } from './favorites';
+import { chartContentHash } from '../song/chartHash';
 import { isRecord, loadJson, saveJson } from './storage';
 
-export interface ChartScore {
+/** The best-play fields mergeBest folds. */
+export interface ChartScoreCore {
   percent: number;
   grade: string;
   maxCombo: number;
@@ -15,10 +16,25 @@ export interface ChartScore {
   updated: number;
 }
 
-const STORAGE_KEY = 'notefield.scores.v1';
+/**
+ * A stored record. Keyed by chart content hash (song/chartHash), so the song
+ * and chart labels the UI groups/displays by ride along on the record itself;
+ * they are refreshed on every play (a retitled simfile keeps its records and
+ * catches up on the next play).
+ */
+export interface ChartScore extends ChartScoreCore {
+  title: string;
+  artist: string;
+  /** Difficulty enum value (song/difficulty). */
+  difficulty: number;
+  meter: number;
+}
 
+const STORAGE_KEY = 'notefield.scores.v2';
+
+/** Score-storage key: content identity, stable across metadata/sync edits. */
 export function chartKey(song: Song, chart: Steps): string {
-  return `${songKey(song.title, song.artist)}·${chart.stepsType}·${chart.difficulty}·${chart.meter}`;
+  return chartContentHash(song, chart);
 }
 
 const finiteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -28,6 +44,8 @@ function sanitizeScore(v: unknown): ChartScore | null {
   if (!isRecord(v)) return null;
   if (!finiteNum(v.percent) || typeof v.grade !== 'string') return null;
   if (!finiteNum(v.maxCombo) || !finiteNum(v.plays)) return null;
+  if (typeof v.title !== 'string' || typeof v.artist !== 'string') return null;
+  if (!finiteNum(v.difficulty) || !finiteNum(v.meter)) return null;
   const counts: Record<number, number> = {};
   if (isRecord(v.counts)) {
     for (const [k, n] of Object.entries(v.counts)) {
@@ -42,6 +60,10 @@ function sanitizeScore(v: unknown): ChartScore | null {
     counts,
     plays: v.plays,
     updated: finiteNum(v.updated) ? v.updated : 0,
+    title: v.title,
+    artist: v.artist,
+    difficulty: v.difficulty,
+    meter: v.meter,
   };
 }
 
@@ -75,12 +97,12 @@ export interface RecordInput {
  * percent; plays always increments.
  */
 export function mergeBest(
-  prev: ChartScore | undefined,
+  prev: ChartScoreCore | undefined,
   r: RecordInput,
   now: number = Date.now(),
-): { best: ChartScore; isNewRecord: boolean } {
+): { best: ChartScoreCore; isNewRecord: boolean } {
   const isNewRecord = !prev || r.percent > prev.percent;
-  const best: ChartScore = {
+  const best: ChartScoreCore = {
     percent: Math.max(r.percent, prev?.percent ?? 0),
     grade: prev && prev.percent >= r.percent ? prev.grade : r.grade,
     maxCombo: Math.max(r.maxCombo, prev?.maxCombo ?? 0),
@@ -93,14 +115,23 @@ export function mergeBest(
 
 /** Merge a finished play into the stored best; returns the best + whether it beat it. */
 export function recordPlay(
-  key: string,
+  song: Song,
+  chart: Steps,
   r: RecordInput,
 ): { best: ChartScore; isNewRecord: boolean } {
   const map = loadScores();
-  const result = mergeBest(map[key], r);
-  map[key] = result.best;
+  const key = chartKey(song, chart);
+  const { best: core, isNewRecord } = mergeBest(map[key], r);
+  const best: ChartScore = {
+    ...core,
+    title: song.displayFullTitle,
+    artist: song.artist,
+    difficulty: chart.difficulty,
+    meter: chart.meter,
+  };
+  map[key] = best;
   save(map);
-  return result;
+  return { best, isNewRecord };
 }
 
 /** Global stats across all charts. */

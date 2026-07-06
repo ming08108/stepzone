@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  chartKey,
   loadScores,
   mergeBest,
   recordPlay,
@@ -7,8 +8,11 @@ import {
   type ChartScore,
   type RecordInput,
 } from '../src/app/scores';
+import { Song } from '../src/song/song';
+import { Steps } from '../src/song/steps';
+import { Difficulty } from '../src/song/difficulty';
 
-const STORAGE_KEY = 'notefield.scores.v1';
+const STORAGE_KEY = 'notefield.scores.v2';
 
 function stubLocalStorage(): Map<string, string> {
   const store = new Map<string, string>();
@@ -32,6 +36,23 @@ afterEach(() => {
   delete (globalThis as { localStorage?: unknown }).localStorage;
 });
 
+function mkSong(title = 'Song', artist = 'Artist', subtitle = ''): Song {
+  const s = new Song();
+  s.title = title;
+  s.artist = artist;
+  s.subtitle = subtitle;
+  return s;
+}
+
+function mkChart(notes = '1000\n0100\n0010\n0001', diff = Difficulty.Hard, meter = 9): Steps {
+  const c = new Steps();
+  c.stepsType = 'dance-single';
+  c.difficulty = diff;
+  c.meter = meter;
+  c.noteDataString = notes;
+  return c;
+}
+
 const play = (over: Partial<RecordInput> = {}): RecordInput => ({
   percent: 0.9,
   grade: 'A',
@@ -47,6 +68,10 @@ const stored = (over: Partial<ChartScore> = {}): ChartScore => ({
   counts: { 5: 50, 4: 10 },
   plays: 3,
   updated: 1000,
+  title: 'Song',
+  artist: 'Artist',
+  difficulty: Difficulty.Hard,
+  meter: 9,
   ...over,
 });
 
@@ -112,24 +137,62 @@ describe('mergeBest (pure best-merge policy, review #4)', () => {
 describe('recordPlay (persistence round-trip)', () => {
   it('persists the merged best and accumulates plays across calls', () => {
     stubLocalStorage();
-    const first = recordPlay('song·chart', play({ percent: 0.8, grade: 'B' }));
+    const song = mkSong();
+    const chart = mkChart();
+    const first = recordPlay(song, chart, play({ percent: 0.8, grade: 'B' }));
     expect(first.isNewRecord).toBe(true);
 
-    const second = recordPlay('song·chart', play({ percent: 0.6, grade: 'C', maxCombo: 500 }));
+    const second = recordPlay(song, chart, play({ percent: 0.6, grade: 'C', maxCombo: 500 }));
     expect(second.isNewRecord).toBe(false);
     expect(second.best.percent).toBe(0.8);
     expect(second.best.grade).toBe('B');
     expect(second.best.maxCombo).toBe(500);
     expect(second.best.plays).toBe(2);
 
+    const key = chartKey(song, chart);
     const reloaded = loadScores();
-    expect(reloaded['song·chart']?.percent).toBe(0.8);
-    expect(reloaded['song·chart']?.plays).toBe(2);
+    expect(reloaded[key]?.percent).toBe(0.8);
+    expect(reloaded[key]?.plays).toBe(2);
     expect(totalStats()).toEqual({ plays: 2, charts: 1 });
   });
 
+  it('keys by chart content: a retitled song keeps its record, labels refresh', () => {
+    stubLocalStorage();
+    const chart = mkChart();
+    recordPlay(mkSong('Old Title'), chart, play({ percent: 0.8 }));
+    const after = recordPlay(
+      mkSong('New Title', 'Artist', '[RESYNC]'),
+      chart,
+      play({ percent: 0.7 }),
+    );
+    expect(after.best.plays).toBe(2); // same record continued...
+    expect(after.best.percent).toBe(0.8);
+    expect(after.best.title).toBe('New Title [RESYNC]'); // ...under the fresh labels
+    expect(Object.keys(loadScores())).toHaveLength(1);
+  });
+
+  it('stores the song/chart labels the UI groups by', () => {
+    stubLocalStorage();
+    const song = mkSong('Bills', 'Lunchmoney Lewis', '[HELLRAZOR SYNC VER.]');
+    const chart = mkChart('1000\n0001', Difficulty.Challenge, 12);
+    recordPlay(song, chart, play());
+    const rec = loadScores()[chartKey(song, chart)];
+    expect(rec?.title).toBe('Bills [HELLRAZOR SYNC VER.]');
+    expect(rec?.artist).toBe('Lunchmoney Lewis');
+    expect(rec?.difficulty).toBe(Difficulty.Challenge);
+    expect(rec?.meter).toBe(12);
+  });
+
+  it('different note content records separately', () => {
+    stubLocalStorage();
+    const song = mkSong();
+    recordPlay(song, mkChart('1000\n0100'), play());
+    recordPlay(song, mkChart('0010\n0001'), play());
+    expect(totalStats()).toEqual({ plays: 2, charts: 2 });
+  });
+
   it('still returns a merged result when localStorage is unavailable', () => {
-    const { best, isNewRecord } = recordPlay('k', play());
+    const { best, isNewRecord } = recordPlay(mkSong(), mkChart(), play());
     expect(isNewRecord).toBe(true);
     expect(best.plays).toBe(1);
   });
@@ -153,6 +216,7 @@ describe('loadScores validates persisted JSON (review #13)', () => {
         notAnObject: 5,
         missingFields: { percent: 0.5 },
         badTypes: { ...stored(), percent: 'high' },
+        missingLabels: { ...stored(), title: undefined },
         badCounts: { ...stored(), counts: { 5: 'many', 4: 10, x: 1 } },
       }),
     );
@@ -161,6 +225,7 @@ describe('loadScores validates persisted JSON (review #13)', () => {
     expect(map.notAnObject).toBeUndefined();
     expect(map.missingFields).toBeUndefined();
     expect(map.badTypes).toBeUndefined();
+    expect(map.missingLabels).toBeUndefined();
     // malformed count values/keys are dropped, valid ones kept
     expect(map.badCounts?.counts).toEqual({ 4: 10 });
   });

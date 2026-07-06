@@ -295,14 +295,15 @@ export interface CatalogSong {
 }
 
 interface SourceCatalog {
-  v: 1;
+  /** v2: titles are display-full titles (title + subtitle); v1 rows collide. */
+  v: 2;
   scannedAt: number;
   songs: CatalogSong[];
 }
 
 export async function saveCatalog(id: string, songs: CatalogSong[]): Promise<void> {
   try {
-    const cat: SourceCatalog = { v: 1, scannedAt: Date.now(), songs };
+    const cat: SourceCatalog = { v: 2, scannedAt: Date.now(), songs };
     await idbRequest('readwrite', (s) => s.put(cat, CATALOG_PREFIX + id));
   } catch {
     /* IDB unavailable — next reload rescans */
@@ -313,7 +314,7 @@ export async function loadCatalog(id: string): Promise<CatalogSong[] | null> {
   try {
     const cat = (await idbRequest('readonly', (s) => s.get(CATALOG_PREFIX + id))) as
       SourceCatalog | undefined;
-    return cat && cat.v === 1 && Array.isArray(cat.songs) ? cat.songs : null;
+    return cat && cat.v === 2 && Array.isArray(cat.songs) ? cat.songs : null;
   } catch {
     return null;
   }

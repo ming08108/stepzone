@@ -176,7 +176,7 @@ export function PlayerOptions({
         };
       }
       previewEncoded(
-        req.song.title || req.song.musicFile,
+        req.song.displayFullTitle || req.song.musicFile,
         req.encodedAudio,
         req.song,
         250,
@@ -383,7 +383,7 @@ export function PlayerOptions({
       headerRight={
         <div className="flex items-center gap-3 text-right">
           <div>
-            <div className="text-[15px] font-bold">{req.song.title || 'Untitled'}</div>
+            <div className="text-[15px] font-bold">{req.song.displayFullTitle || 'Untitled'}</div>
             <div className="text-[12px] text-[#ececec]/55">
               {req.song.artist}
               {bpm ? ` · BPM ${bpm}` : ''}
@@ -568,7 +568,7 @@ export function PlayerOptions({
               clock={previewPositionSeconds}
               hud
               meta={{
-                title: req.song.title || 'Untitled',
+                title: req.song.displayFullTitle || 'Untitled',
                 subtitle: req.song.artist,
                 difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
               }}

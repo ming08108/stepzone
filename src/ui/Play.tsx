@@ -10,7 +10,6 @@ import { songKey } from '../app/favorites';
 import { submitScore, type LeaderboardView } from '../app/leaderboard';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import { addSongPlay, addSteps } from '../app/stats';
-import { chartHash } from '../song/chartHash';
 import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
@@ -219,7 +218,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     cleanupBg();
     if (!playCountedRef.current) {
       playCountedRef.current = true;
-      addSongPlay(songKey(req.song.title, req.song.artist));
+      addSongPlay(songKey(req.song.displayFullTitle, req.song.artist));
     }
 
     const session = new GameSession(req.song, req.chart, canvas, {
@@ -241,20 +240,23 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       bankSteps(session);
       playCountedRef.current = false; // a RETRY from here is a new play
       const counts = { ...judge.tapCounts };
-      // Practice runs never reach here (they loop until exit), but make sure a
-      // section-only score can never land in the real records.
-      const { best, isNewRecord } = req.practice
-        ? { best: null, isNewRecord: false }
-        : recordPlay(chartKey(req.song, req.chart), {
-            percent: judge.percentDancePoints,
-            grade: judge.grade,
-            maxCombo: judge.maxCombo,
-            counts,
-          });
-      setResult({
+      const score = {
         percent: judge.percentDancePoints,
         grade: judge.grade,
         maxCombo: judge.maxCombo,
+      };
+      // Practice runs never reach here (they loop until exit), but make sure a
+      // section-only score can never land in the real records. Rate-modded
+      // plays aren't comparable to full-speed ones, so they don't count either.
+      // ONE gate for both boards: the local record and the shared leaderboard
+      // accept exactly the same plays, under the same identity (chartKey — the
+      // content hash recordPlay itself keys on).
+      const unranked = req.practice != null || settings.musicRate !== 1;
+      const { best, isNewRecord } = unranked
+        ? { best: null, isNewRecord: false }
+        : recordPlay(req.song, req.chart, { ...score, counts });
+      setResult({
+        ...score,
         failed: judge.failed,
         counts,
         best,
@@ -262,20 +264,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         offsets: [...session.offsets],
       });
       setPhase('done');
-      // Shared leaderboard (optional): submit the finished play by chart hash
-      // and pin the board onto the results once the server answers. Practice
-      // runs never reach onEnd; failures resolve to null and show nothing.
-      if (!req.practice && settings.leaderboardUrl) {
-        void (async () => {
-          const view = await submitScore(settings.leaderboardUrl, {
-            chartHash: await chartHash(req.song, req.chart),
-            player: settings.playerName.trim() || 'PLAYER',
-            percent: judge.percentDancePoints,
-            grade: judge.grade,
-            maxCombo: judge.maxCombo,
-          });
+      // Shared leaderboard (optional): the same play, same key; the board pins
+      // onto the results when the server answers (null on any failure).
+      if (!unranked && settings.leaderboardUrl) {
+        void submitScore(settings.leaderboardUrl, {
+          chartHash: chartKey(req.song, req.chart),
+          player: settings.playerName.trim() || 'PLAYER',
+          ...score,
+        }).then((view) => {
           if (view && sessionRef.current === session) setLb(view);
-        })();
+        });
       }
     };
     sessionRef.current = session;
@@ -351,7 +349,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     else void el.requestFullscreen?.();
   };
 
-  const title = req.song.title || 'Untitled';
+  const title = req.song.displayFullTitle || 'Untitled';
   const diffName = difficultyToString(req.chart.difficulty);
   const dcolor = difficultyColor(diffName);
   const r = songBpmRange(req.song);
@@ -433,6 +431,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               {result.isNewRecord && (
                 <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
                   ★ NEW RECORD
+                </div>
+              )}
+              {settings.musicRate !== 1 && (
+                <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
+                  RATE ×{settings.musicRate.toFixed(2)} — SCORE NOT SAVED
                 </div>
               )}
               <div className="mt-2 w-[280px]">

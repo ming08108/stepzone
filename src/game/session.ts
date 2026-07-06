@@ -102,7 +102,7 @@ export class GameSession {
             turnPermutation(
               config.turn,
               nd.numTracks,
-              `${song.title}${chart.stepsType}${chart.meter}`,
+              `${song.displayFullTitle}${chart.stepsType}${chart.meter}`,
             ),
           );
 
@@ -129,7 +129,7 @@ export class GameSession {
       bgDim: config.bgMode === 'full' ? 0.25 : 0.6,
       columnAngles: columnAnglesFor(chart.stepsType, nd.numTracks),
       meta: {
-        title: song.title || 'Untitled',
+        title: song.displayFullTitle || 'Untitled',
         subtitle: song.artist,
         difficulty: `${chart.stepsType}  ·  ${difficultyToString(chart.difficulty).toUpperCase()} ${chart.meter}`,
       },
