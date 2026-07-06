@@ -7,8 +7,10 @@ import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
+import { submitScore, type LeaderboardView } from '../app/leaderboard';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import { addSongPlay, addSteps } from '../app/stats';
+import { chartHash } from '../song/chartHash';
 import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
@@ -116,6 +118,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const fxRef = useRef<ShaderBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
+  // The shared board for the finished play, arriving async after results show.
+  const [lb, setLb] = useState<LeaderboardView | null>(null);
   const [loopNum, setLoopNum] = useState(1);
   // Bank a session's hit steps into the lifetime counter exactly once —
   // whichever comes first of finishing, retrying, or leaving mid-song.
@@ -258,6 +262,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         offsets: [...session.offsets],
       });
       setPhase('done');
+      // Shared leaderboard (optional): submit the finished play by chart hash
+      // and pin the board onto the results once the server answers. Practice
+      // runs never reach onEnd; failures resolve to null and show nothing.
+      if (!req.practice && settings.leaderboardUrl) {
+        void (async () => {
+          const view = await submitScore(settings.leaderboardUrl, {
+            chartHash: await chartHash(req.song, req.chart),
+            player: settings.playerName.trim() || 'PLAYER',
+            percent: judge.percentDancePoints,
+            grade: judge.grade,
+            maxCombo: judge.maxCombo,
+          });
+          if (view && sessionRef.current === session) setLb(view);
+        })();
+      }
     };
     sessionRef.current = session;
 
@@ -311,6 +330,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
     }
     setResult(null);
+    setLb(null);
     setPhase('playing');
     await session.start(req.encodedAudio);
   };
@@ -434,6 +454,35 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               {result.best && (
                 <div className="text-[13px] tracking-[0.1em] text-[#ececec]/50">
                   BEST {(result.best.percent * 100).toFixed(2)}% · {result.best.plays} PLAYS
+                </div>
+              )}
+              {lb && (
+                <div className="mt-1 w-[280px]">
+                  <div className="flex justify-between border-b border-white/20 pb-0.5 text-[11px] tracking-[0.22em] text-[#ececec]/50">
+                    <span>GLOBAL</span>
+                    {lb.rank != null && (
+                      <span style={{ color: AC }}>
+                        #{lb.rank} OF {lb.total}
+                      </span>
+                    )}
+                  </div>
+                  {lb.entries.map((e) => {
+                    const you = e.player === (settings.playerName.trim() || 'PLAYER');
+                    return (
+                      <div
+                        key={e.rank}
+                        className="flex items-baseline gap-2 border-b border-white/[0.06] py-0.5 text-[13px] tracking-[0.06em]"
+                        style={you ? { color: AC } : undefined}
+                      >
+                        <span className="w-[22px] flex-none text-right opacity-60">{e.rank}</span>
+                        <span className="min-w-0 flex-1 truncate text-left">{e.player}</span>
+                        <span className="flex-none font-bold tabular-nums">
+                          {(e.percent * 100).toFixed(2)}%
+                        </span>
+                        <span className="w-[30px] flex-none text-right opacity-70">{e.grade}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               <button

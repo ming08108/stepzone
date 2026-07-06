@@ -21,3 +21,6 @@ pnpm-debug.log*
 *.zip
 todo*.txt
 todos*.txt
+
+# Leaderboard server state (server/leaderboard.mjs)
+server/leaderboard-data.json

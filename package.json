@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "leaderboard": "node server/leaderboard.mjs"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",

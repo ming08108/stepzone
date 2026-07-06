@@ -258,6 +258,32 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
             </Row>
           </Section>
 
+          <Section title="LEADERBOARD">
+            <Row label="PLAYER NAME">
+              <input
+                type="text"
+                maxLength={16}
+                value={settings.playerName}
+                onChange={(e) => update({ playerName: e.target.value })}
+                className="w-[220px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none focus:border-[#ff5d47]"
+              />
+              <span className="text-[12px] text-[#ececec]/40">shown on shared leaderboards</span>
+            </Row>
+            <Row label="SERVER URL">
+              <input
+                type="text"
+                maxLength={200}
+                value={settings.leaderboardUrl}
+                onChange={(e) => update({ leaderboardUrl: e.target.value })}
+                placeholder="http://localhost:8791 — empty = off"
+                className="w-[340px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none focus:border-[#ff5d47] placeholder:text-[#ececec]/25"
+              />
+              <span className="text-[12px] text-[#ececec]/40">
+                run one with `npm run leaderboard`; scores are matched by chart hash
+              </span>
+            </Row>
+          </Section>
+
           <Section title="CONTROLS">
             <div className="mb-2 border border-white/10 px-4 py-2.5 text-[12px] tracking-[0.06em] text-[#ececec]/60">
               {pads.length === 0 ? (

@@ -38,12 +38,18 @@ export interface Settings extends PlayOptions {
   bindings: Bindings;
   /** Use the experimental WebGPU renderer (falls back to Canvas). */
   webgpu: boolean;
+  /** Name shown on shared leaderboards (app/leaderboard.ts). */
+  playerName: string;
+  /** Leaderboard server base URL (server/leaderboard.mjs); '' = leaderboards off. */
+  leaderboardUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   ...DEFAULT_PLAY_OPTIONS,
   bindings: defaultBindings(),
   webgpu: true,
+  playerName: 'PLAYER',
+  leaderboardUrl: '',
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';
@@ -57,6 +63,8 @@ const pick = <T>(v: unknown, allowed: readonly T[], dflt: T): T =>
 const num = (v: unknown, dflt: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : dflt;
 const bool = (v: unknown, dflt: boolean): boolean => (typeof v === 'boolean' ? v : dflt);
+const str = (v: unknown, dflt: string, max: number): string =>
+  typeof v === 'string' ? v.trim().slice(0, max) : dflt;
 
 /** Well-formed persisted code->role entries; empty (or absent) falls back to defaults. */
 function sanitizeKeyboardBindings(v: unknown): Record<string, ControlRole> {
@@ -137,6 +145,8 @@ function sanitizeSettings(v: unknown): { settings: Settings; migrated: boolean }
       turn: pick(p.turn, TURNS, d.turn),
       reverse: bool(p.reverse, d.reverse),
       webgpu: bool(p.webgpu, d.webgpu),
+      playerName: str(p.playerName, d.playerName, 16),
+      leaderboardUrl: str(p.leaderboardUrl, d.leaderboardUrl, 200),
       bgMode: pick(p.bgMode, BG_MODES, d.bgMode),
       noteSkin: pick(p.noteSkin, NOTE_SKINS, d.noteSkin),
     },
