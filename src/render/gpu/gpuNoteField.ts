@@ -26,7 +26,13 @@
  */
 
 import type { Judge } from '../../gameplay/judge';
-import { getNoteType, noteRowToBeat, TapNoteScore, TapNoteType } from '../../notes/noteTypes';
+import {
+  beatToNoteRow,
+  getNoteType,
+  noteRowToBeat,
+  TapNoteScore,
+  TapNoteType,
+} from '../../notes/noteTypes';
 import { columnAnglesFor } from '../columns';
 import {
   ARROW_HALF,
@@ -54,6 +60,9 @@ import {
   A3_JUDGMENT,
   COMBO_PLAIN,
   COMBO_TINT,
+  GOLD_DARK,
+  GOLD_LIGHT,
+  GOLD_MID,
   HOLD_GREEN,
   HOLD_GREY,
   HOLD_PURPLE,
@@ -61,29 +70,32 @@ import {
   JUDGMENT_LIFE,
   NOTE_GREEN,
   NOTE_GREY,
+  PANEL_BG,
   QUANT_BAND,
   QUANT_TUBE,
   TUBE_GREY,
   measureWidth,
   paintBoom,
-  paintCombo,
+  paintDifficulty,
   paintGaugeChrome,
   paintGaugeDividers,
+  paintGrade,
   paintHoldTile,
   paintJudgment,
   paintMineArcs,
   paintMineOrb,
   paintNote,
   paintReceptor,
-  paintScorePanel,
   paintSongPanel,
   roundFont,
   traceSegments,
   type HoldSkin,
 } from '../themes/ddrA3';
 import { GpuAtlas } from './atlas';
+import { GlyphBank, type Tint } from './glyphs';
 import { MediaLayer } from './media';
 import { cropUV, QuadBatch } from './quads';
+import { ShapeBatch, type ColorFn } from './shapes';
 import { NoteType } from '../../notes/noteTypes';
 
 /** Renderer config subset the GPU field consumes (arcade skin only in v1). */
@@ -132,6 +144,16 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
 
+/** Money-score digit tints (glyphs bake white; these are the exact A3 colors). */
+const SCORE_BRIGHT: Tint = parseColor('#f6f6f8');
+const SCORE_DIM: Tint = parseColor('#494a4f');
+
+// Panel-geometry colors (ShapeBatch fills/strokes).
+const PANEL_BG_COL: ColorFn = () => parseColor(PANEL_BG);
+const GOLD_MID_COL: ColorFn = () => parseColor(GOLD_MID);
+const GOLD_L = parseColor(GOLD_LIGHT);
+const GOLD_D = parseColor(GOLD_DARK);
+
 /**
  * Elapsed time (seconds) of every integer beat 0..ceil(throughBeat), for the
  * beat-line pass. Takes a beat→time function (kept free of a TimingData
@@ -174,6 +196,9 @@ export class GpuNoteField {
   // size or bake resolution (4K fullscreen, monitor dpr changes).
   private atlas!: GpuAtlas;
   private batch!: QuadBatch;
+  private hudBatch!: QuadBatch;
+  private shapes!: ShapeBatch;
+  private glyphs!: GlyphBank;
   private atlasSize = 0;
   private atlasScale = 0;
   private readonly media: MediaLayer;
@@ -206,7 +231,12 @@ export class GpuNoteField {
 
     // Rebake text sprites once real web fonts arrive (same as SpriteStore).
     if (typeof document !== 'undefined' && document.fonts?.ready) {
-      document.fonts.ready.then(() => this.atlas.clear()).catch(() => undefined);
+      document.fonts.ready
+        .then(() => {
+          this.atlas.clear();
+          this.glyphs.clear();
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -288,9 +318,16 @@ export class GpuNoteField {
     this.atlasSize = size;
     this.atlasScale = scale;
     this.batch?.destroy();
+    this.hudBatch?.destroy();
     this.atlas?.destroy();
     this.atlas = new GpuAtlas(this.device, size, scale);
-    this.batch = new QuadBatch(this.device, this.format, this.atlas.texture.createView());
+    const atlasView = this.atlas.texture.createView();
+    this.batch = new QuadBatch(this.device, this.format, atlasView);
+    // Separate quad batch for the HUD panels' text/digits: it flushes AFTER the
+    // panel-background shapes so the text sits on top of them.
+    this.hudBatch = new QuadBatch(this.device, this.format, atlasView);
+    this.shapes ??= new ShapeBatch(this.device, this.format);
+    this.glyphs = new GlyphBank(this.atlas);
   }
 
   applyConfig(patch: Partial<GpuFieldConfig>): void {
@@ -328,6 +365,111 @@ export class GpuNoteField {
     this.canvas.height = Math.max(1, Math.round(height * dpr));
     this.layout();
     this.firstVisibleIdx = 0;
+  }
+
+  /**
+   * Draw one synthetic frame that touches every sprite and both blend
+   * pipelines, so the atlas bakes and the WebGPU/driver pipelines compile
+   * up front instead of hitching on the first notes / first explosion. Call
+   * it once after resize(), before the real loop (the session does it behind
+   * the READY splash; the bench before its measured window). The frame is
+   * immediately overwritten by the first real draw().
+   *
+   * The fakes are cast to Judge/ActiveNote — prewarm only reads the render
+   * path's fields (track, row, beat, time, note.type, the tail/hold fields),
+   * and building a real Judge here would couple the renderer to the model.
+   */
+  prewarm(): void {
+    if (this.lost) return;
+    try {
+      const mk = (
+        track: number,
+        beat: number,
+        type: TapNoteType,
+        extra: Record<string, unknown> = {},
+      ) => ({
+        track,
+        row: beatToNoteRow(beat),
+        beat,
+        time: beat * 0.3,
+        note: { type },
+        tailTime: beat * 0.3 + 1,
+        tailRow: beatToNoteRow(beat + 2),
+        isRoll: false,
+        isHold: type === TapNoteType.HoldHead,
+        hidden: false,
+        holdResolved: false,
+        hns: 0,
+        holdInitiated: false,
+        holdLife: 1,
+        tns: 0,
+        offset: 0,
+        judgable: true,
+        ...extra,
+      });
+      // Ascending beat/time so the windowed loops don't break early; covers the
+      // 4th/16th/12th/8th quant colours, a mine, and all three hold skins:
+      // green (live), purple (roll), grey (dropped → holdResolved, hns≠Held).
+      const notes = [
+        mk(0, 1, TapNoteType.Tap),
+        mk(3, 1.25, TapNoteType.Tap),
+        mk(2, 1 + 1 / 3, TapNoteType.Tap),
+        mk(1, 1.5, TapNoteType.Tap),
+        mk(2, 2.5, TapNoteType.Mine),
+        mk(0, 3, TapNoteType.HoldHead),
+        mk(1, 3.5, TapNoteType.HoldHead, { isRoll: true }),
+        mk(3, 4, TapNoteType.HoldHead, { holdResolved: true }),
+      ];
+      const mkJudge = (life: number) =>
+        ({
+          notes,
+          combo: 137,
+          maxCombo: 137,
+          life,
+          failed: false,
+          grade: 'AA',
+          percentDancePoints: 0.418607,
+          judgmentSeq: 1,
+          lastTns: TapNoteScore.W1,
+        }) as unknown as Judge;
+      const fb: Feedback = {
+        lastJudgment: { tns: TapNoteScore.W1, atSeconds: 0 }, // judgment sprite
+        laneFlash: [0, -999, -999, -999], // receptor press sprite
+        laneHit: [
+          { tns: TapNoteScore.W1, atSeconds: 0 }, // explosion → additive pipeline + boom/ray
+          null,
+          { tns: TapNoteScore.W2, atSeconds: 0 },
+          null,
+        ],
+      };
+      // Danger gauge, then a full/hot gauge — bakes the danger, green-fill, and
+      // maxed-rainbow sprites so no gauge state bakes mid-song.
+      this.draw(mkJudge(0.12), 0.01, 0.02, 0.5, fb);
+      this.draw(mkJudge(1), 0.02, 0.04, 0.5, fb);
+      // Bake every judgment tier's lettering so no first "Great!"/"Miss" bakes.
+      const jpx = 37 * this.ds;
+      const jpad = 18 * this.ds;
+      for (const key of Object.keys(A3_JUDGMENT)) {
+        const tns = Number(key);
+        const j = A3_JUDGMENT[tns];
+        const ink = JUDGMENT_INK[tns] ?? JUDGMENT_INK[TapNoteScore.W4];
+        const tw = measureWidth(roundFont(jpx), j.label);
+        if (tw === null) break; // no canvas (unit env) — nothing to bake
+        this.atlas.sprite(`judg:${tns}`, tw + 2 * jpad, jpx * 1.1 + 2 * jpad, (c) =>
+          paintJudgment(c, j.label, ink, jpx, this.ds, jpad, false),
+        );
+      }
+      // Bake every grade sprite so a grade-up (D→C→…→AAA) never bakes mid-song.
+      // (Grade set mirrors gameplay/scoring.ts GRADE_TIERS.)
+      for (const grade of ['AAA', 'AA', 'A', 'B', 'C', 'D']) this.gradeSprite(grade);
+      // Bake all digit/comma glyphs (both styles) so a climbing combo/score
+      // never bakes a first-seen digit mid-song. Combo bakes at its reference.
+      const chars = '0123456789,';
+      this.glyphs.measure('combo', { px: 1, bakePx: Math.round(this.colW * 0.9) }, chars);
+      this.glyphs.measure('score', { px: 25 * this.ds }, chars);
+    } catch {
+      // Prewarm is best-effort; a failure must not break real rendering.
+    }
   }
 
   private layout(): void {
@@ -411,6 +553,7 @@ export class GpuNoteField {
     if (ds !== this.lastDs) {
       this.lastDs = ds;
       this.atlas.clear();
+      this.glyphs.clear();
     }
     const beatPulse = 1 - (beat - Math.floor(beat));
     const s = this.scroll;
@@ -419,6 +562,8 @@ export class GpuNoteField {
 
     const b = this.batch;
     b.begin(width, height);
+    this.hudBatch.begin(width, height); // panel text, flushed over the panel shapes
+    this.shapes.begin(width, height); // panel backgrounds (geometry)
     const white = this.sprWhite();
 
     // 2. Field chrome (lane filter + DANGER) — drawn even in bare mode.
@@ -544,7 +689,9 @@ export class GpuNoteField {
         ],
       });
       this.media.draw(pass, width, height);
-      this.batch.flush(pass);
+      this.batch.flush(pass); // field + gauge (textured quads)
+      this.shapes.flush(pass); // panel backgrounds (geometry) over the field
+      this.hudBatch.flush(pass); // panel text/digits over their backgrounds
       pass.end();
       this.device.queue.submit([enc.finish()]);
     } catch {
@@ -715,31 +862,42 @@ export class GpuNoteField {
     const c = judge.combo;
     const count = String(c);
     const zoom = c >= 1000 ? 0.78 : c >= 100 ? 0.9 : 0.6 + 0.03 * Math.min(9, Math.floor(c / 10));
-    const px = this.colW * zoom;
+    const basePx = this.colW * zoom;
     const k = Math.max(0, Math.min(1, (now - this.comboPopAt) / 0.05));
-    const pop = 1 + 0.3 * (1 - k);
-    const baseline = yMid + px * 0.36;
+    const pop = 1 + 0.3 * (1 - k); // ~x1.3 bounce settling in 0.05s on each step
+    const px = basePx * pop;
+    const baseline = yMid + basePx * 0.36;
     const joinX = cx + 0.34 * this.colW;
-    const numW = measureWidth(roundFont(px), count);
-    const wordW = measureWidth(roundFont(px * 0.42), 'combo');
-    if (numW === null || wordW === null) return;
-    const pad = px * 0.14;
-    const joinOff = pad + numW * 0.84;
-    const w = joinOff + 6 * ds + wordW + pad;
-    const baseY = px * 0.92;
-    const h = px * 1.12;
-    const spr = this.atlas.slot('combo', `${count}|${tint[1]}|${Math.round(px * 10)}`, w, h, (cc) =>
-      paintCombo(cc, count, tint, px, ds, joinOff, baseY),
+    // Tint the white-baked glyphs by the tier's bright color (plain/W1 = white,
+    // so the common case is unchanged). Digits reuse cached per-glyph sprites —
+    // no per-hit re-bake.
+    const col = parseColor(tint[0]);
+    const t: Tint = [col[0], col[1], col[2], 1];
+    // Bake at a fixed reference (max-zoom size) and scale to the current combo
+    // px, so the zoom ladder never re-bakes glyphs. Number condensed 0.84 like
+    // the A3 numerals, right-aligned at the join.
+    const bakePx = Math.round(this.colW * 0.9);
+    this.glyphs.drawNumber(
+      this.batch,
+      'combo',
+      count,
+      joinX,
+      baseline,
+      { px, bakePx, scaleX: 0.84 },
+      'right',
+      () => t,
     );
-    // Anchor: drawImage(-joinOff, -baseY) from translate(joinX, baseline) scale(pop).
-    if (spr)
-      this.batch.push(
-        joinX + pop * (w / 2 - joinOff),
-        baseline + pop * (h / 2 - baseY),
-        w * pop,
-        h * pop,
-        spr,
-      );
+    // Lowercase "combo" word (constant → one cached sprite) sharing the baseline.
+    this.glyphs.drawText(
+      this.batch,
+      'combo',
+      'combo',
+      joinX + 6 * ds,
+      baseline,
+      { px: px * 0.42, bakePx: Math.round(bakePx * 0.42) },
+      'left',
+      t,
+    );
   }
 
   private holdSkinOf(alive: boolean, roll: boolean): { skin: HoldSkin; variant: string } {
@@ -1042,25 +1200,34 @@ export class GpuNoteField {
     white: NonNullable<ReturnType<GpuNoteField['sprWhite']>>,
   ): void {
     const { ds, width, height } = this;
-    const b = this.batch;
     const pw = Math.min(0.36 * width, 430 * ds);
     const ph = 52 * ds;
     const px = (width - pw) / 2;
     const py = height - ph - 8 * ds;
     const meta = this.cfg.meta;
+    // Black panel band as geometry; title/artist text bakes once (constant).
+    this.shapes.poly(
+      [
+        [px, py],
+        [px + pw, py],
+        [px + pw, py + ph],
+        [px, py + ph],
+      ],
+      PANEL_BG_COL,
+    );
     const spr = this.atlas.slot(
       'song',
       `${meta.title}|${meta.subtitle}|${Math.round(pw)}`,
       pw,
       ph,
-      (c) => paintSongPanel(c, pw, ph, ds, meta.title, meta.subtitle),
+      (c) => paintSongPanel(c, pw, ph, ds, meta.title, meta.subtitle, false),
     );
-    if (spr) b.push(px + pw / 2, py + ph / 2, pw, ph, spr);
+    if (spr) this.hudBatch.push(px + pw / 2, py + ph / 2, pw, ph, spr);
     const prog = Math.max(0, Math.min(1, progress));
     const barY = py + ph - 1.25 * ds;
-    b.push(px + pw / 2, barY, pw, 2.5 * ds, white, 1, 1, 1, 0.12);
+    this.hudBatch.push(px + pw / 2, barY, pw, 2.5 * ds, white, 1, 1, 1, 0.12);
     if (prog > 0)
-      b.push(
+      this.hudBatch.push(
         px + (pw * prog) / 2,
         barY,
         pw * prog,
@@ -1073,35 +1240,110 @@ export class GpuNoteField {
       );
   }
 
+  /** Bake (once) the gold grade sprite ("AAA".."D") + its layout metrics.
+   *  Shared by the panel and prewarm (which bakes every grade so a grade-up
+   *  mid-song never rasterizes). */
+  private gradeSprite(grade: string): {
+    rect: ReturnType<GpuAtlas['sprite']>;
+    gw: number;
+    gsw: number;
+  } {
+    const ds = this.ds;
+    const rowH = 23 * ds;
+    const gpad = 4 * ds;
+    const gw = measureWidth(roundFont(14 * ds), grade) ?? 20 * ds;
+    const gsw = gw + 2 * gpad;
+    const rect = this.atlas.sprite(`grade:${grade}:${Math.round(ds * 10)}`, gsw, rowH, (c) =>
+      paintGrade(c, grade, ds, gpad),
+    );
+    return { rect, gw, gsw };
+  }
+
   private pushScorePanel(judge: Judge): void {
     const { ds, height } = this;
+    const sh = this.shapes;
     const pw = 280 * ds;
     const px = 16 * ds;
     const rowH = 23 * ds;
     const scoreH = 38 * ds;
     const py = height - rowH - scoreH - 12 * ds;
-    const m = 4 * ds;
+    const diff = this.cfg.meta.difficulty.toUpperCase();
+    const grade = judge.grade;
+    // Panel-local (X,Y) → screen (px+X, py+Y).
+    const P = (x: number, y: number): [number, number] => [px + x, py + y];
+
+    // Row 1: angled black plate + gold hairline.
+    const row1: Array<[number, number]> = [P(14 * ds, 0), P(pw, 0), P(pw, rowH), P(4 * ds, rowH)];
+    sh.poly(row1, PANEL_BG_COL);
+    sh.outline(row1, 1.2 * ds, GOLD_MID_COL);
+    // Gold slash divider.
+    sh.edge(px + pw * 0.68, py + 3 * ds, px + pw * 0.64, py + rowH - 3 * ds, 2 * ds, GOLD_MID_COL);
+
+    // Row 2: hexagonal money bar + vertical gold-gradient trim.
+    const sy = rowH + 2 * ds;
+    const cut = 12 * ds;
+    const hex: Array<[number, number]> = [
+      P(cut, sy),
+      P(pw - cut, sy),
+      P(pw, sy + scoreH / 2),
+      P(pw - cut, sy + scoreH),
+      P(cut, sy + scoreH),
+      P(0, sy + scoreH / 2),
+    ];
+    sh.poly(hex, PANEL_BG_COL);
+    const top = py + sy;
+    const trim: ColorFn = (_x, y) => {
+      const t = Math.max(0, Math.min(1, (y - top) / scoreH));
+      return [
+        GOLD_L[0] + (GOLD_D[0] - GOLD_L[0]) * t,
+        GOLD_L[1] + (GOLD_D[1] - GOLD_L[1]) * t,
+        GOLD_L[2] + (GOLD_D[2] - GOLD_L[2]) * t,
+        1,
+      ];
+    };
+    sh.outline(hex, 1.6 * ds, trim);
+
+    // Difficulty label (bake-once, constant per session) → HUD text batch.
+    const diffSpr = this.atlas.sprite(`diff:${diff}:${Math.round(pw)}`, pw, rowH, (c) =>
+      paintDifficulty(c, diff, ds, pw),
+    );
+    if (diffSpr) this.hudBatch.push(px + pw / 2, py + rowH / 2, pw, rowH, diffSpr);
+    // Grade (one sprite per grade value, right-aligned → no frame re-bake).
+    const g = this.gradeSprite(grade);
+    if (g.rect)
+      this.hudBatch.push(px + pw - 10 * ds - g.gw / 2, py + rowH / 2, g.gsw, rowH, g.rect);
+
+    // Money digits, centered in the hex bar, leading zeros dimmed (glyph quads).
     const digits = String(
       Math.max(0, Math.min(9999999, Math.round(judge.percentDancePoints * 1000000))),
     ).padStart(7, '0');
-    const diff = this.cfg.meta.difficulty.toUpperCase();
-    const grade = judge.grade;
-    const w = pw + 2 * m;
-    const h = rowH + scoreH + 2 * ds + 2 * m;
-    const spr = this.atlas.slot(
-      'score',
-      `${digits}|${grade}|${diff}|${Math.round(pw)}`,
-      w,
-      h,
-      (c) => paintScorePanel(c, pw, rowH, scoreH, ds, m, digits, diff, grade),
+    const firstSig = digits.search(/[1-9]/);
+    let text = '';
+    const dim: boolean[] = [];
+    for (let i = 0; i < 7; i++) {
+      const isDim = firstSig === -1 || i < firstSig;
+      if (i === 1 || i === 4) {
+        text += ',';
+        dim.push(firstSig === -1 || i - 1 < firstSig);
+      }
+      text += digits[i];
+      dim.push(isDim);
+    }
+    const scoreOpts = { px: 25 * ds };
+    const total = this.glyphs.measure('score', scoreOpts, text);
+    const sx = px + (pw - total) / 2;
+    const dy = py + sy + scoreH / 2 + 8 * ds;
+    this.glyphs.drawNumber(this.hudBatch, 'score', text, sx, dy, scoreOpts, 'left', (i) =>
+      dim[i] ? SCORE_DIM : SCORE_BRIGHT,
     );
-    if (spr) this.batch.push(px - m + w / 2, py - m + h / 2, w, h, spr);
   }
 
   destroy(): void {
     this.lost = true;
     try {
       this.batch.destroy();
+      this.hudBatch.destroy();
+      this.shapes.destroy();
       this.media.destroy();
       this.atlas.destroy();
       this.device.destroy();

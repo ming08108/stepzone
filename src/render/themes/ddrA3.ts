@@ -537,9 +537,14 @@ export function paintSongPanel(
   ds: number,
   title: string,
   subtitle: string,
+  /** Fill the black panel band. The GPU field draws it as geometry and passes
+   *  false so only the (bake-once) title/artist text lands in the sprite. */
+  bg = true,
 ): void {
-  c.fillStyle = PANEL_BG;
-  c.fillRect(0, 0, pw, ph);
+  if (bg) {
+    c.fillStyle = PANEL_BG;
+    c.fillRect(0, 0, pw, ph);
+  }
   c.textAlign = 'center';
   c.fillStyle = '#f4f4f6';
   c.font = squareFont(700, 19 * ds);
@@ -551,32 +556,15 @@ export function paintSongPanel(
   }
 }
 
-/** Score panel content: difficulty/grade row + hexagonal money-score bar. */
-export function paintScorePanel(
+/** Difficulty label ("EXPERT 16": tier-coloured name + white meter), drawn at
+ *  the score row's native position in a `pw`-wide sprite. Constant per session,
+ *  so the GPU field bakes it once and draws the geometry frame separately. */
+export function paintDifficulty(
   c: CanvasRenderingContext2D,
-  pw: number,
-  rowH: number,
-  scoreH: number,
-  ds: number,
-  m: number,
-  digits: string,
   diff: string,
-  grade: string,
+  ds: number,
+  pw: number,
 ): void {
-  c.translate(m, m);
-  // Row 1: difficulty + grade, angled left edge.
-  c.beginPath();
-  c.moveTo(14 * ds, 0);
-  c.lineTo(pw, 0);
-  c.lineTo(pw, rowH);
-  c.lineTo(4 * ds, rowH);
-  c.closePath();
-  c.fillStyle = PANEL_BG;
-  c.fill();
-  c.strokeStyle = GOLD_MID;
-  c.lineWidth = 1.2 * ds;
-  c.stroke();
-
   let dc = GOLD_LIGHT;
   for (const [name, color] of DIFF_COLOR) {
     if (diff.includes(name)) {
@@ -584,7 +572,6 @@ export function paintScorePanel(
       break;
     }
   }
-  // Trailing meter number renders white, like A3's "EXPERT 16".
   const meter = /^(.*?)\s*(\d+)$/.exec(diff);
   c.textAlign = 'left';
   c.font = squareFont(700, 13 * ds);
@@ -601,66 +588,21 @@ export function paintScorePanel(
     c.fillStyle = dc;
     c.fillText(diff, 16 * ds, 16 * ds, pw * 0.62);
   }
-  c.textAlign = 'right';
+}
+
+/** Grade ("AA") drawn left-aligned at (`pad`, 16.5ds); the GPU field bakes one
+ *  sprite per grade value and right-aligns it, so a grade change swaps sprites
+ *  instead of re-baking the whole score frame. */
+export function paintGrade(
+  c: CanvasRenderingContext2D,
+  grade: string,
+  ds: number,
+  pad: number,
+): void {
+  c.textAlign = 'left';
   c.fillStyle = '#ffd83c';
   c.font = roundFont(14 * ds);
-  c.fillText(grade, pw - 10 * ds, 16.5 * ds);
-  // Gold slash divider.
-  c.strokeStyle = GOLD_MID;
-  c.lineWidth = 2 * ds;
-  c.beginPath();
-  c.moveTo(pw * 0.68, 3 * ds);
-  c.lineTo(pw * 0.64, rowH - 3 * ds);
-  c.stroke();
-
-  // Row 2: hexagonal score bar.
-  const sy = rowH + 2 * ds;
-  const cut = 12 * ds;
-  c.beginPath();
-  c.moveTo(cut, sy);
-  c.lineTo(pw - cut, sy);
-  c.lineTo(pw, sy + scoreH / 2);
-  c.lineTo(pw - cut, sy + scoreH);
-  c.lineTo(cut, sy + scoreH);
-  c.lineTo(0, sy + scoreH / 2);
-  c.closePath();
-  c.fillStyle = PANEL_BG;
-  c.fill();
-  const trim = c.createLinearGradient(0, sy, 0, sy + scoreH);
-  trim.addColorStop(0, GOLD_LIGHT);
-  trim.addColorStop(1, GOLD_DARK);
-  c.strokeStyle = trim;
-  c.lineWidth = 1.6 * ds;
-  c.stroke();
-
-  // 7-digit money score with commas, leading zeros dimmed.
-  const firstSig = digits.search(/[1-9]/);
-  let text = '';
-  const dim: boolean[] = [];
-  for (let i = 0; i < 7; i++) {
-    const isDim = firstSig === -1 || i < firstSig;
-    if (i === 1 || i === 4) {
-      text += ',';
-      dim.push(firstSig === -1 || i - 1 < firstSig); // comma follows its digit
-    }
-    text += digits[i];
-    dim.push(isDim);
-  }
-  c.font = roundFont(25 * ds);
-  c.textAlign = 'left';
-  c.lineJoin = 'round';
-  const widths = Array.from(text, (ch) => c.measureText(ch).width);
-  const total = widths.reduce((a, b) => a + b, 0);
-  let dx = (pw - total) / 2;
-  const dy = sy + scoreH / 2 + 8 * ds;
-  for (let i = 0; i < text.length; i++) {
-    c.strokeStyle = OUTLINE_INK;
-    c.lineWidth = 3.5 * ds;
-    c.strokeText(text[i], dx, dy);
-    c.fillStyle = dim[i] ? '#494a4f' : '#f6f6f8';
-    c.fillText(text[i], dx, dy);
-    dx += widths[i];
-  }
+  c.fillText(grade, pad, 16.5 * ds);
 }
 
 /** Paint the judgment lettering with baked glow/rims at a left baseline. */

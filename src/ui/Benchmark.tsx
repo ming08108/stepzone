@@ -19,6 +19,9 @@ import { useMenuNav } from './useMenuNav';
 type Phase = 'idle' | 'running' | 'done' | 'error';
 
 const PANEL = 'border border-white/15 bg-black/70 backdrop-blur-[2px]';
+/** Live progress overlay: solid (no backdrop-blur) so per-update repaints stay
+ *  cheap even over a 4K field. */
+const RUN_PANEL = 'border border-white/15 bg-black/85';
 const BTN =
   'border px-4 py-1.5 text-[13px] tracking-[0.12em] text-[#ececec]/85 hover:text-[#ececec]';
 
@@ -181,15 +184,19 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
       <div ref={containerRef} className="absolute inset-0" />
 
       {phase === 'running' && progress && (
-        <div className={`absolute right-4 top-4 z-[2] px-4 py-2 ${PANEL}`}>
-          <div className="text-[11px] tracking-[0.18em] text-[#ececec]/60">
+        // No backdrop-blur: at 4K it re-samples the whole field behind the
+        // panel on every ~400ms update (an ~18ms raster). Fixed width + a
+        // fixed 3-line layout (FPS line always present) so updating the text
+        // never resizes the panel — no layout shift either.
+        <div className={`absolute right-4 top-4 z-[2] w-[240px] px-4 py-2 ${RUN_PANEL}`}>
+          <div className="truncate text-[11px] tracking-[0.18em] text-[#ececec]/60">
             BENCHMARK {progress.scenarioIndex + 1}/{progress.scenarioCount} ·{' '}
             {progress.phase.toUpperCase()}
           </div>
-          <div className="text-[13px]">{progress.label}</div>
-          {progress.phase !== 'saturate' && (
-            <div className="text-[13px] font-bold">{fmt(progress.liveFps, 0)} FPS</div>
-          )}
+          <div className="truncate text-[13px]">{progress.label}</div>
+          <div className="text-[13px] font-bold">
+            {progress.phase === 'saturate' ? 'SATURATING…' : `${fmt(progress.liveFps, 0)} FPS`}
+          </div>
         </div>
       )}
 

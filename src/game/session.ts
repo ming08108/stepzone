@@ -254,6 +254,9 @@ export class GameSession {
           gpu.resize(this.logicalW, this.logicalH, this.dpr);
           gpu.setBeatTimes(this.beatLineTimes);
           if (this.bgMedia) gpu.setBackground(this.bgMedia);
+          // Bake the atlas + compile pipelines now, behind the READY splash, so
+          // the first real notes/explosion don't hitch.
+          gpu.prewarm();
         } else {
           this.fallbackToCanvas();
         }

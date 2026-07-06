@@ -86,19 +86,34 @@ Takeaways:
 
 Structured for the GPU pipeline rather than ported from canvas calls:
 
-- `atlas.ts` — every static visual (arrows, receptors, hold tiles/caps, HUD
-  chrome, judgment lettering) is rasterized ONCE by the same exported ddrA3
-  paint functions the 2D theme uses (pixel-twin art, no duplication), shelf-
-  packed into one 2048² texture. Dynamic text (combo, score) lives in slots
-  repainted in place when content changes.
+- `atlas.ts` — the signature arrow/receptor/hold/mine/gauge/explosion art is
+  rasterized ONCE (via the exported ddrA3 paint functions — pixel-twin, no
+  duplication) into a texture (2048², or 4096² for 4K), shelf-packed.
 - `quads.ts` — one instanced-quad pipeline; an instance is 96 bytes
   (center/size/rotation, uv rect, premultiplied tint, u/v tiling + scroll
   phase, optional mask uv rect). Blend segments (source-over / additive)
   collapse into draw calls in push order.
+- `glyphs.ts` — combo/score **numbers** composite from per-digit glyph sprites
+  (baked once per size) as tinted quads, so a changing number never
+  re-rasterizes. Combo bakes at one reference size and scales.
+- `shapes.ts` — a colored-triangle pipeline draws the score/song **panel
+  backgrounds** (angled plate, hexagon, black band) and their gold trim as
+  geometry, so the panels never touch canvas. Panel text sits in a second quad
+  batch flushed after the shapes.
 - `media.ts` — song background image (sampled texture) or video
   (`importExternalTexture`) cover-fit on the same surface, dimmed by a quad.
 - `gpuNoteField.ts` — shares the design grid, scroll math, cull cursor and
-  Judge-view with the 2D renderer; builds ~100-250 instances per frame.
+  Judge-view with the 2D renderer; builds ~100-250 instances per frame. A
+  one-time `prewarm()` (behind the READY splash / before the bench's measured
+  window) draws a synthetic frame + bakes every sprite variant — all quant
+  colours, three hold skins, mine, explosion, all judgment tiers, every grade,
+  all digits, and each gauge state — and compiles both blend pipelines, so
+  nothing bakes or compiles once a song is running.
+
+**Canvas usage:** the only canvas rasterization is baking those static sprites
+and text glyphs into the atlas, and it all happens up front in `prewarm()`. No
+canvas runs on the per-frame path; a Chrome trace shows every
+`DoEndRasterCHROMIUM` at prewarm time, none mid-song.
 
 Pass order (fixes the 2D field's layering inconsistency, where hold bodies
 drew UNDER receptors while their heads drew over): background → chrome →

@@ -406,6 +406,7 @@ async function buildScene(
     const lastBeat = judge.notes.length ? judge.notes[judge.notes.length - 1].beat : 0;
     field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
     if (bg) field.setBackground(bg);
+    field.prewarm(); // bake atlas + compile pipelines before the measured window
     return {
       ...common,
       render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
