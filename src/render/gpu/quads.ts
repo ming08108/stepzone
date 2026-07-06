@@ -1,14 +1,20 @@
 /**
  * Instanced sprite-quad pipeline — the entire per-frame draw path of the
  * WebGPU note field. Every visible thing (arrows, receptors, hold layers,
- * HUD, text) is one 64-byte instance: center/size/rotation, an atlas uv rect,
- * and a premultiplied tint. The frame is a single render pass over one
- * instance buffer; consecutive instances sharing a blend mode collapse into
- * one draw call (normal frames are 3: over → additive explosions → over HUD).
+ * HUD, text) is one 96-byte instance: center/size/rotation, an atlas uv rect,
+ * a premultiplied tint, tiling controls, and an optional mask uv rect. The
+ * frame is a single render pass over one instance buffer; consecutive
+ * instances sharing a blend mode collapse into one draw call (normal frames
+ * are 3: over → additive explosions → over HUD).
  *
- * Instance extras kept deliberately tiny:
+ * Instance extras:
  *  - repeatV > 1 tiles the sprite vertically (hold chevron/rail pattern) via
  *    fract() in the shader; flipV mirrors it (reverse scroll).
+ *  - repeatU/phaseU tile and scroll horizontally — the dance gauge's flowing
+ *    bands and maxed-gauge rainbow are scrolling patterns.
+ *  - mask multiplies by a second atlas rect's alpha, sampled across the whole
+ *    quad — patterns clip to the gauge's chevron-pill segments exactly like
+ *    the 2D theme's ctx.clip() did.
  *  - uv rects may be cropped sub-rects (gauge fill by life, short hold
  *    gradients) — see cropUV.
  */
@@ -23,16 +29,20 @@ struct View { size: vec2f, _pad: vec2f };
 
 struct In {
   @location(0) a0: vec4f, // cx, cy, halfW, halfH   (css px)
-  @location(1) a1: vec4f, // rot, repeatV, flipV, unused
+  @location(1) a1: vec4f, // rot, repeatV, flipV, repeatU
   @location(2) a2: vec4f, // uv rect u0 v0 u1 v1
   @location(3) a3: vec4f, // premultiplied tint
+  @location(4) a4: vec4f, // mask uv rect (all-zero = no mask)
+  @location(5) a5: vec4f, // phaseU, maskFlag, unused, unused
 };
 struct Out {
   @builtin(position) pos: vec4f,
   @location(0) luv: vec2f,
   @location(1) uvRect: vec4f,
   @location(2) tint: vec4f,
-  @location(3) rep: vec2f, // repeatV, flipV
+  @location(3) rep: vec3f,  // repeatV, flipV, repeatU
+  @location(4) maskUV: vec4f,
+  @location(5) extra: vec2f, // phaseU, maskFlag
 };
 
 @vertex
@@ -52,7 +62,9 @@ fn vs(@builtin(vertex_index) vid: u32, q: In) -> Out {
   out.luv = corner * 0.5 + vec2f(0.5);
   out.uvRect = q.a2;
   out.tint = q.a3;
-  out.rep = q.a1.yz;
+  out.rep = vec3f(q.a1.y, q.a1.z, q.a1.w);
+  out.maskUV = q.a4;
+  out.extra = q.a5.xy;
   return out;
 }
 
@@ -62,15 +74,24 @@ fn fs(v: Out) -> @location(0) vec4f {
   if (v.rep.y > 0.5) { ly = 1.0 - ly; }
   var vv = ly;
   if (v.rep.x > 1.0001) { vv = fract(ly * v.rep.x); }
+  var uu = v.luv.x;
+  if (v.rep.z > 1.0001 || v.extra.x != 0.0) { uu = fract(uu * max(v.rep.z, 1.0) + v.extra.x); }
   let uv = vec2f(
-    mix(v.uvRect.x, v.uvRect.z, v.luv.x),
+    mix(v.uvRect.x, v.uvRect.z, uu),
     mix(v.uvRect.y, v.uvRect.w, vv),
   );
-  return textureSample(atlas, samp, uv) * v.tint;
+  var col = textureSample(atlas, samp, uv) * v.tint;
+  // Mask: always sampled (uniform control flow), applied only when flagged.
+  let muv = vec2f(
+    mix(v.maskUV.x, v.maskUV.z, v.luv.x),
+    mix(v.maskUV.y, v.maskUV.w, v.luv.y),
+  );
+  let m = textureSample(atlas, samp, muv);
+  return col * mix(1.0, m.a, v.extra.y);
 }
 `;
 
-const FLOATS_PER_INSTANCE = 16;
+const FLOATS_PER_INSTANCE = 24;
 
 /** Sub-rect of an atlas rect (fractions 0..1 of the sprite's own extent). */
 export function cropUV(
@@ -96,6 +117,12 @@ export interface QuadOpts {
   rot?: number;
   repeatV?: number;
   flipV?: boolean;
+  /** Horizontal tiling: how many pattern periods span the quad. */
+  repeatU?: number;
+  /** Horizontal scroll phase (fraction of a period; wraps via fract). */
+  phaseU?: number;
+  /** Clip by this atlas rect's alpha, stretched across the quad. */
+  mask?: AtlasRect;
   /** Additive blend (explosions). Instances group into blend segments in push order. */
   add?: boolean;
 }
@@ -120,7 +147,7 @@ export class QuadBatch {
       {
         arrayStride: FLOATS_PER_INSTANCE * 4,
         stepMode: 'instance',
-        attributes: [0, 1, 2, 3].map((i) => ({
+        attributes: [0, 1, 2, 3, 4, 5].map((i) => ({
           shaderLocation: i,
           offset: i * 16,
           format: 'float32x4' as const,
@@ -219,6 +246,7 @@ export class QuadBatch {
 
     const o = this.count * FLOATS_PER_INSTANCE;
     const d = this.data;
+    const mask = opts?.mask;
     d[o] = cx;
     d[o + 1] = cy;
     d[o + 2] = w / 2;
@@ -226,7 +254,7 @@ export class QuadBatch {
     d[o + 4] = opts?.rot ?? 0;
     d[o + 5] = opts?.repeatV ?? 0;
     d[o + 6] = opts?.flipV ? 1 : 0;
-    d[o + 7] = 0;
+    d[o + 7] = opts?.repeatU ?? 0;
     d[o + 8] = uv.u0;
     d[o + 9] = uv.v0;
     d[o + 10] = uv.u1;
@@ -235,6 +263,14 @@ export class QuadBatch {
     d[o + 13] = g * a;
     d[o + 14] = b * a;
     d[o + 15] = a;
+    d[o + 16] = mask?.u0 ?? 0;
+    d[o + 17] = mask?.v0 ?? 0;
+    d[o + 18] = mask?.u1 ?? 0;
+    d[o + 19] = mask?.v1 ?? 0;
+    d[o + 20] = opts?.phaseU ?? 0;
+    d[o + 21] = mask ? 1 : 0;
+    d[o + 22] = 0;
+    d[o + 23] = 0;
     this.count++;
   }
 

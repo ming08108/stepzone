@@ -18,10 +18,10 @@
  *   7 hit explosions (additive)
  *   8 HUD over the arrows: dance gauge, song panel, score panel
  *
- * Known v1 divergences from the 2D theme, all in the dance gauge: the flowing
- * green bands, scrolling rainbow and partial-segment fill are approximated
- * with per-segment tint/alpha animation (the exact effects need masked
- * scrolling patterns; the beat-synced read is the same at play distance).
+ * The dance gauge's animated fills (flowing green bands, the maxed-gauge
+ * rainbow, the top sheen) are scrolling patterns clipped by a baked
+ * segment-shape alpha mask — the instanced-quad shader's mask/repeatU/phaseU
+ * path — reproducing the 2D theme's ctx.clip() compositing exactly.
  */
 
 import type { Judge } from '../../gameplay/judge';
@@ -125,13 +125,6 @@ function parseColor(s: string): [number, number, number, number] {
   if (!m) return [1, 1, 1, 1];
   const p = m[1].split(',').map((v) => parseFloat(v));
   return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
-}
-
-/** HSV hue (0..1, s=v=1) → rgb, for the maxed-gauge rainbow cycle. */
-function hueRgb(h: number): [number, number, number] {
-  const k = (n: number) => (n + h * 6) % 6;
-  const f = (n: number) => 1 - Math.max(0, Math.min(1, Math.min(k(n), 4 - k(n))));
-  return [f(5), f(3), f(1)];
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
@@ -853,48 +846,44 @@ export class GpuNoteField {
     if (life > 0) {
       const fw = Math.max(2 * ds, fillW * life);
       const frac = Math.min(1, fw / fillW);
-      if (hot || danger) {
-        const mask = this.atlas.sprite(`gauge:mask:${Math.round(tw)}`, fillW, gh, (c) => {
-          const path = new Path2D();
-          traceSegments(path, tw, gh, ds);
-          c.fillStyle = '#ffffff';
-          c.fill(path);
-        });
-        if (mask && danger) {
+      // White chevron-pill segment shapes — the alpha mask every animated
+      // fill layer clips against (what ctx.clip(segments) did in 2D).
+      const mask = this.atlas.sprite(`gauge:mask:${Math.round(tw)}`, fillW, gh, (c) => {
+        const path = new Path2D();
+        traceSegments(path, tw, gh, ds);
+        c.fillStyle = '#ffffff';
+        c.fill(path);
+      });
+      const maskCrop = mask ? cropUV(mask, 0, 0, frac, 1) : null;
+      if (danger) {
+        if (maskCrop) {
           const a = 0.55 + 0.45 * beatPulse;
-          b.push(
-            tx + fw / 2,
-            gy + gh / 2,
-            fw,
-            gh,
-            cropUV(mask, 0, 0, frac, 1),
-            244 / 255,
-            32 / 255,
-            8 / 255,
-            a,
-          );
-        } else if (mask && hot) {
-          // Scrolling rainbow, approximated per segment.
-          const segs = 8;
-          const segGap = 4 * ds;
-          const segW = (tw - segGap * (segs - 1)) / segs;
-          for (let i = 0; i < segs; i++) {
-            const x0 = i * (segW + segGap);
-            const x1 = Math.min(fillW, x0 + segW + 8 * ds);
-            const [r, g, bb] = hueRgb((1 - ((now * 0.35 + i / 7) % 1) + 1) % 1);
-            b.push(
-              tx + (x0 + x1) / 2,
-              gy + gh / 2,
-              x1 - x0,
-              gh,
-              cropUV(mask, x0 / fillW, 0, x1 / fillW, 1),
-              r,
-              g,
-              bb,
-              1,
-            );
-          }
+          b.push(tx + fw / 2, gy + gh / 2, fw, gh, maskCrop, 244 / 255, 32 / 255, 8 / 255, a);
         }
+      } else if (hot) {
+        // Maxed gauge: one baked color cycle scrolling through the segments
+        // (period tw, like the 2D gradient that spanned off-tw..off+tw).
+        const rainbow = this.atlas.sprite('gauge:rainbow', 256, 16, (c) => {
+          const cycle = [
+            '#ff2fd4',
+            '#ff3a3a',
+            '#ffd52a',
+            '#2fe23a',
+            '#2ad4ff',
+            '#4a3aff',
+            '#ff2fd4',
+          ];
+          const g = c.createLinearGradient(0, 0, 256, 0);
+          for (let i = 0; i < cycle.length; i++) g.addColorStop(i / (cycle.length - 1), cycle[i]);
+          c.fillStyle = g;
+          c.fillRect(0, 0, 256, 16);
+        });
+        if (rainbow && maskCrop)
+          b.push(tx + fw / 2, gy + gh / 2, fw, gh, rainbow, 1, 1, 1, 1, {
+            repeatU: fw / tw,
+            phaseU: -((now * 0.35) % 1),
+            mask: maskCrop,
+          });
       } else {
         const fill = this.atlas.sprite(`gauge:fill:${Math.round(tw)}`, fillW, gh, (c) => {
           const path = new Path2D();
@@ -910,41 +899,32 @@ export class GpuNoteField {
           c.restore();
         });
         if (fill) b.push(tx + fw / 2, gy + gh / 2, fw, gh, cropUV(fill, 0, 0, frac, 1));
-        // Flowing lighter bands, approximated as a per-segment white pulse
-        // drifting along the stream.
-        const mask = this.atlas.sprite(`gauge:mask:${Math.round(tw)}`, fillW, gh, (c) => {
-          const path = new Path2D();
-          traceSegments(path, tw, gh, ds);
+        // Flowing lighter bands drifting along the stream: the exact 2D band
+        // parallelogram baked as one tile, scrolled with repeatU/phaseU,
+        // clipped by the segment mask.
+        const period = 56 * ds;
+        const band = this.atlas.sprite(`gauge:band:${Math.round(gh)}`, period, gh, (c) => {
           c.fillStyle = '#ffffff';
-          c.fill(path);
+          c.beginPath();
+          c.moveTo(0, gh);
+          c.lineTo(gh * 0.7, 0);
+          c.lineTo(gh * 0.7 + 10 * ds, 0);
+          c.lineTo(10 * ds, gh);
+          c.closePath();
+          c.fill();
         });
-        if (mask) {
-          const segs = 8;
-          const segGap = 4 * ds;
-          const segW = (tw - segGap * (segs - 1)) / segs;
-          for (let i = 0; i < segs; i++) {
-            const x0 = i * (segW + segGap);
-            if (x0 >= fw) break;
-            const x1 = Math.min(fw, x0 + segW + 8 * ds);
-            const wave = Math.sin(2 * Math.PI * (now * 0.5 - i / segs));
-            const a = Math.max(0, wave) * 0.16;
-            if (a <= 0.01) continue;
-            b.push(
-              tx + (x0 + x1) / 2,
-              gy + gh / 2,
-              x1 - x0,
-              gh,
-              cropUV(mask, x0 / fillW, 0, x1 / fillW, 1),
-              1,
-              1,
-              1,
-              a,
-            );
-          }
-        }
-        // Top sheen inside the fill.
+        if (band && maskCrop)
+          b.push(tx + fw / 2, gy + gh / 2, fw, gh, band, 1, 1, 1, 0.22, {
+            repeatU: fw / period,
+            phaseU: -((now * 0.5) % 1),
+            mask: maskCrop,
+          });
+        // Top sheen inside the fill, clipped to the segments like the 2D clip.
         const white = this.sprWhite();
-        if (white) b.push(tx + fw / 2, gy + 3.5 * ds, fw, 3 * ds, white, 1, 1, 1, 0.28);
+        if (white && mask)
+          b.push(tx + fw / 2, gy + 3.5 * ds, fw, 3 * ds, white, 1, 1, 1, 0.28, {
+            mask: cropUV(mask, 0, (2 * ds) / gh, frac, (5 * ds) / gh),
+          });
       }
     }
 

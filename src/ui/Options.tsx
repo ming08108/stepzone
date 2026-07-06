@@ -62,30 +62,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Toggle({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="border px-4 py-1.5 text-[13px] tracking-wide capitalize"
-      style={
-        active
-          ? { borderColor: AC, background: AC + '1a', color: '#ececec' }
-          : { borderColor: 'rgba(255,255,255,.15)', color: 'rgba(236,236,236,.55)' }
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
 const val =
   'ml-auto w-[92px] flex-none text-right text-[15px] font-bold [font-variant-numeric:tabular-nums]';
 const slider = 'h-1 flex-1 accent-[#ff5d47]';
@@ -256,20 +232,6 @@ export function Options({
           </Section>
 
           <Section title="DISPLAY">
-            <Row label="RENDERER">
-              {(['webgpu', 'canvas'] as const).map((r) => (
-                <Toggle
-                  key={r}
-                  active={settings.renderer === r}
-                  onClick={() => update({ renderer: r })}
-                >
-                  {r === 'webgpu' ? 'WebGPU' : 'Canvas'}
-                </Toggle>
-              ))}
-              <span className="text-[12px] text-[#ececec]/40">
-                note-field backend — WebGPU (arcade skin) falls back to Canvas automatically
-              </span>
-            </Row>
             <Row label="BENCHMARK">
               <button
                 onClick={onBenchmark}

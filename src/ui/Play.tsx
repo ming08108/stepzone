@@ -224,7 +224,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       bgMode: settings.bgMode,
       noteSkin: settings.noteSkin,
       practice: req.practice ?? null,
-      renderer: settings.renderer,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     setLoopNum(1);

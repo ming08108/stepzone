@@ -205,10 +205,10 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
 
             {phase === 'idle' && (
               <p className="mb-4 mt-3 max-w-[560px] text-[13px] leading-relaxed text-[#ececec]/60">
-                Measures note-field rendering on this machine, on both the Canvas and WebGPU
-                backends: a typical hard chart, a beyond-worst-case stress chart on both skins, and
-                the stress chart with a background image composited behind the field. Results can be
-                copied as JSON to compare computers.
+                Measures note-field rendering on this machine: the WebGPU arcade field on a typical
+                hard chart, a beyond-worst-case stress chart, and the stress chart with a background
+                image composited behind it — plus the ITG skin&apos;s canvas renderer on the same
+                stress chart. Results can be copied as JSON to compare computers.
               </p>
             )}
 

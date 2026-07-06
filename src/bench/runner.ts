@@ -57,34 +57,11 @@ const STRESS_CHART: BenchChartOpts = {
 
 export const BENCH_SCENARIOS: BenchScenario[] = [
   {
-    id: 'arcade-typical',
-    label: 'ARCADE · TYPICAL CHART',
-    noteSkin: 'arcade',
-    chart: { bpm: 175, measures: 28, jumpEveryBeats: 2, holdEveryBeats: 4, holdLenBeats: 1 },
-    scrollValue: 2.5,
-  },
-  {
-    id: 'arcade-stress',
-    label: 'ARCADE · STRESS + DANGER',
-    noteSkin: 'arcade',
-    chart: STRESS_CHART,
-    scrollValue: 1,
-    life: 0.12,
-  },
-  {
     id: 'itg-stress',
     label: 'ITG · STRESS',
     noteSkin: 'itg',
     chart: STRESS_CHART,
     scrollValue: 1,
-  },
-  {
-    id: 'arcade-stress-bgimage',
-    label: 'ARCADE · STRESS + BG IMAGE',
-    noteSkin: 'arcade',
-    chart: STRESS_CHART,
-    scrollValue: 1,
-    bgImage: true,
   },
   // The same suite on the WebGPU note field (arcade skin only in v1).
   {
@@ -424,6 +401,9 @@ async function buildScene(
     };
   }
 
+  // The arcade canvas theme was removed — a canvas+arcade scenario would
+  // silently measure the Simply Love fallback look instead.
+  if (scn.noteSkin === 'arcade') return { skipped: 'arcade is WebGPU-only' };
   const { canvas, width, height, dpr } = makeCanvas(container);
   const ctx = canvas.getContext('2d');
   if (!ctx) {

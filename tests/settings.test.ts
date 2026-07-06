@@ -118,13 +118,13 @@ describe('loadSettings validates persisted JSON (review #13)', () => {
     const store = stubLocalStorage();
     store.set(
       STORAGE_KEY,
-      JSON.stringify({ musicRate: 'fast', scrollValue: null, reverse: 'yes', renderer: 'vulkan' }),
+      JSON.stringify({ musicRate: 'fast', scrollValue: null, reverse: 'yes', bgMode: 'vivid' }),
     );
     const s = loadSettings();
     expect(s.musicRate).toBe(DEFAULT_SETTINGS.musicRate);
     expect(s.scrollValue).toBe(DEFAULT_SETTINGS.scrollValue);
     expect(s.reverse).toBe(DEFAULT_SETTINGS.reverse);
-    expect(s.renderer).toBe(DEFAULT_SETTINGS.renderer);
+    expect(s.bgMode).toBe(DEFAULT_SETTINGS.bgMode);
   });
 
   it('filters malformed bindings entries, keeps valid ones', () => {

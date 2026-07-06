@@ -30,15 +30,19 @@ backends and with a background image composited.
 
 ## Numbers (RTX 3080, 238Hz display, 1600×900@1dpr, Chrome 149)
 
-| scenario                | fps | missed | draw CPU avg | max draws/s |
-| ----------------------- | --- | ------ | ------------ | ----------- |
-| canvas arcade typical   | 237 | 0.3%   | 0.28 ms      | 5 335       |
-| canvas arcade stress    | 238 | 0.1%   | 0.59 ms      | 1 901       |
-| canvas ITG stress       | 159 | 50.6%  | 1.02 ms      | 130         |
-| canvas arcade + bgimage | 240 | 0.0%   | 0.56 ms      | 2 476       |
-| webgpu typical          | 238 | 0.1%   | 0.14 ms      | 16 901      |
-| webgpu stress           | 238 | 0.1%   | 0.15 ms      | 12 896      |
-| webgpu stress + bgimage | 235 | 0.1%   | 0.15 ms      | 9 979       |
+| scenario                  | fps | missed | draw CPU avg | max draws/s |
+| ------------------------- | --- | ------ | ------------ | ----------- |
+| canvas arcade typical \*  | 237 | 0.3%   | 0.28 ms      | 5 335       |
+| canvas arcade stress \*   | 238 | 0.1%   | 0.59 ms      | 1 901       |
+| canvas ITG stress         | 159 | 50.6%  | 1.02 ms      | 130         |
+| canvas arcade + bgimage\* | 240 | 0.0%   | 0.56 ms      | 2 476       |
+| webgpu typical            | 238 | 0.1%   | 0.14 ms      | 16 901      |
+| webgpu stress             | 238 | 0.1%   | 0.15 ms      | 12 896      |
+| webgpu stress + bgimage   | 235 | 0.1%   | 0.15 ms      | 9 979       |
+
+\* Historical: the arcade canvas theme (`DdrA3Theme`) was removed after this
+investigation — the arcade look is WebGPU-only now, so the suite runs the
+three WebGPU scenarios plus the ITG canvas stress.
 
 Takeaways:
 
@@ -62,10 +66,10 @@ Structured for the GPU pipeline rather than ported from canvas calls:
   paint functions the 2D theme uses (pixel-twin art, no duplication), shelf-
   packed into one 2048² texture. Dynamic text (combo, score) lives in slots
   repainted in place when content changes.
-- `quads.ts` — one instanced-quad pipeline; an instance is 64 bytes
-  (center/size/rotation, uv rect, premultiplied tint, vertical-repeat for
-  hold patterns). Blend segments (source-over / additive) collapse into draw
-  calls in push order.
+- `quads.ts` — one instanced-quad pipeline; an instance is 96 bytes
+  (center/size/rotation, uv rect, premultiplied tint, u/v tiling + scroll
+  phase, optional mask uv rect). Blend segments (source-over / additive)
+  collapse into draw calls in push order.
 - `media.ts` — song background image (sampled texture) or video
   (`importExternalTexture`) cover-fit on the same surface, dimmed by a quad.
 - `gpuNoteField.ts` — shares the design grid, scroll math, cull cursor and
@@ -76,16 +80,18 @@ drew UNDER receptors while their heads drew over): background → chrome →
 judgment/combo (A3 ComboUnderField) → receptors → hold bodies → taps/heads/
 mines → explosions (additive) → gauge/panels.
 
-Selection: OPTIONS → DISPLAY → RENDERER (persisted `settings.renderer`,
-default `webgpu`). The GPU path is arcade-skin only; the ITG skin, WebGPU
-being unavailable, init failure, or mid-song device loss all land on the
-canvas renderer (device loss swaps in a fresh canvas element — a canvas can
-never change context types).
+Selection is automatic, by note skin: arcade → WebGPU field, ITG → canvas
+renderer. There is no renderer setting. If WebGPU is unavailable (or the
+device is lost mid-song) the session falls back to the canvas renderer on a
+fresh canvas element — which draws the Simply Love look, since the arcade
+canvas theme no longer exists. `render/themes/ddrA3.ts` remains as the
+procedural-art module (palettes + paint functions) the GPU atlas bakes from.
 
-Known v1 divergences, all in the dance gauge: flowing green bands, the maxed
-rainbow, and partial-segment fill are per-segment tint/alpha approximations of
-the canvas theme's masked scrolling patterns.
+The dance gauge's animated fills (flowing bands, maxed-gauge rainbow, top
+sheen) render as scrolling patterns clipped by a baked segment-shape alpha
+mask — the quad shader's mask/repeatU/phaseU path — matching the 2D theme's
+`ctx.clip()` compositing exactly.
 
 Follow-ups worth considering: port the Simply Love skin to the GPU field (it
-is the theme that actually needs it — see numbers), and drop `SPRITE_SCALE`
+is the theme that actually needs it — see numbers), and drop the ×2 sprite
 supersampling on hidpi displays where dpr≥2 already covers it.

@@ -22,6 +22,7 @@ import '@fontsource/chakra-petch/700-italic.css';
 import { Judge } from '../src/gameplay/judge';
 import { HoldNoteScore, TapNoteScore } from '../src/notes/noteTypes';
 import { parseSimfile } from '../src/parse/loader';
+import { GpuNoteField } from '../src/render/gpu/gpuNoteField';
 import { NoteFieldRenderer, type Feedback } from '../src/render/noteField';
 
 // One measure of 4ths (two hits + the two hold heads), one 48-row measure
@@ -127,16 +128,14 @@ async function main(): Promise<void> {
     ],
   };
 
-  const renderer = new NoteFieldRenderer(4, {
+  const canvas = document.getElementById('field') as HTMLCanvasElement;
+  const config = {
     noteSkin: skin,
     reverse,
     bare,
     songMaxBpm: 120,
     meta: { title: 'Sector', subtitle: 'RYOQUCHA', difficulty: 'EXPERT 16' },
-  });
-  const canvas = document.getElementById('field') as HTMLCanvasElement;
-  renderer.resize(canvas.width, canvas.height, 1);
-  const ctx = canvas.getContext('2d')!;
+  } as const;
 
   // Make sure the canvas font faces are actually loaded before drawing.
   await Promise.all([
@@ -147,17 +146,36 @@ async function main(): Promise<void> {
   ]).catch(() => undefined);
   await document.fonts.ready;
 
-  renderer.draw(ctx, judge, now, beat, 0.42, fb);
+  // The arcade look renders on the WebGPU field; ITG stays on the canvas
+  // renderer. Same draw(now, beat) contract either way.
+  let draw: (t: number, b: number) => void;
+  if (skin === 'arcade') {
+    const field = await GpuNoteField.create(canvas, 4, config);
+    if (!field) {
+      document.body.insertAdjacentText('afterbegin', 'WebGPU unavailable — arcade needs it');
+      (window as unknown as { __ready: boolean }).__ready = true;
+      return;
+    }
+    field.resize(canvas.width, canvas.height, 1);
+    draw = (t, b) => field.draw(judge, t, b, 0.42, fb);
+  } else {
+    const renderer = new NoteFieldRenderer(4, config);
+    renderer.resize(canvas.width, canvas.height, 1);
+    const ctx = canvas.getContext('2d')!;
+    draw = (t, b) => renderer.draw(ctx, judge, t, b, 0.42, fb);
+  }
+
+  draw(now, beat);
 
   // ?bench=1 — time many full-frame draws (scrubbing time so notes move and
   // caches face realistic churn) and report avg ms/frame on the page.
   if (q.get('bench') === '1') {
     const frames = 600;
-    renderer.draw(ctx, judge, now, beat, 0.42, fb); // warm caches/fonts
+    draw(now, beat); // warm caches/fonts
     const t0 = performance.now();
     for (let i = 0; i < frames; i++) {
       const t = now + (i % 120) * 0.008; // sweep ~1s of chart time
-      renderer.draw(ctx, judge, t, t * 2, 0.42, fb);
+      draw(t, t * 2);
     }
     const ms = (performance.now() - t0) / frames;
     const el = document.createElement('div');

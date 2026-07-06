@@ -32,22 +32,15 @@ import { isRecord, loadJson, removeJson, saveJson } from './storage';
 export type { ScrollMode } from '../game/playOptions';
 export type { Bindings } from '../input/controls';
 
-/** Note-field renderer backends (settings.renderer). */
-export const RENDERERS = ['webgpu', 'canvas'] as const;
-export type Renderer = (typeof RENDERERS)[number];
-
-/** Play options plus the persistence-only extras (input binds, renderer flag). */
+/** Play options plus the persistence-only extras (input binds). */
 export interface Settings extends PlayOptions {
   /** All input binds: keyboard code -> role, gamepad role -> button override. */
   bindings: Bindings;
-  /** Note-field backend: 'webgpu' (arcade skin; auto-falls-back) or 'canvas'. */
-  renderer: Renderer;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   ...DEFAULT_PLAY_OPTIONS,
   bindings: defaultBindings(),
-  renderer: 'webgpu',
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';
@@ -140,7 +133,6 @@ function sanitizeSettings(v: unknown): { settings: Settings; migrated: boolean }
       bindings,
       turn: pick(p.turn, TURNS, d.turn),
       reverse: bool(p.reverse, d.reverse),
-      renderer: pick(p.renderer, RENDERERS, d.renderer),
       bgMode: pick(p.bgMode, BG_MODES, d.bgMode),
       noteSkin: pick(p.noteSkin, NOTE_SKINS, d.noteSkin),
     },

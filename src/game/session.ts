@@ -40,9 +40,6 @@ const TAIL_SECONDS = 2;
 export type SessionConfig = PlayOptions & {
   /** Loop this beat range over and over (practice mode); null = play through. */
   practice?: PracticeSection | null;
-  /** Note-field backend. 'webgpu' (arcade skin only) falls back to canvas
-   *  when unavailable — and mid-song on device loss. */
-  renderer?: 'webgpu' | 'canvas';
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = { ...DEFAULT_PLAY_OPTIONS };
@@ -235,10 +232,11 @@ export class GameSession {
    * omit it (or pass null) to play a synthesized metronome instead.
    */
   async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
-    // Pick the field renderer first (once per session). The GPU path is
-    // arcade-skin only in v1; anything failing lands on the canvas renderer.
+    // Pick the field renderer first (once per session). The arcade skin is
+    // WebGPU-only (its canvas theme was removed); anything failing here lands
+    // on the canvas renderer, which draws the Simply Love look.
     if (!this.renderer && !this.gpuField) {
-      if (this.config.renderer === 'webgpu' && this.config.noteSkin === 'arcade') {
+      if (this.config.noteSkin === 'arcade') {
         const gpu = await GpuNoteField.create(this.canvas, this.held.length, this.rendererConfig);
         // stop() may have run during the await (StrictMode's doubled mount
         // starts and immediately replaces a session) — don't touch the
