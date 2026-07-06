@@ -26,7 +26,13 @@
  */
 
 import type { Judge } from '../../gameplay/judge';
-import { getNoteType, noteRowToBeat, TapNoteScore, TapNoteType } from '../../notes/noteTypes';
+import {
+  beatToNoteRow,
+  getNoteType,
+  noteRowToBeat,
+  TapNoteScore,
+  TapNoteType,
+} from '../../notes/noteTypes';
 import { columnAnglesFor } from '../columns';
 import {
   ARROW_HALF,
@@ -339,6 +345,77 @@ export class GpuNoteField {
     this.canvas.height = Math.max(1, Math.round(height * dpr));
     this.layout();
     this.firstVisibleIdx = 0;
+  }
+
+  /**
+   * Draw one synthetic frame that touches every sprite and both blend
+   * pipelines, so the atlas bakes and the WebGPU/driver pipelines compile
+   * up front instead of hitching on the first notes / first explosion. Call
+   * it once after resize(), before the real loop (the session does it behind
+   * the READY splash; the bench before its measured window). The frame is
+   * immediately overwritten by the first real draw().
+   *
+   * The fakes are cast to Judge/ActiveNote — prewarm only reads the render
+   * path's fields (track, row, beat, time, note.type, the tail/hold fields),
+   * and building a real Judge here would couple the renderer to the model.
+   */
+  prewarm(): void {
+    if (this.lost) return;
+    try {
+      const mk = (track: number, beat: number, type: TapNoteType) => ({
+        track,
+        row: beatToNoteRow(beat),
+        beat,
+        time: beat * 0.3,
+        note: { type },
+        tailTime: beat * 0.3 + 1,
+        tailRow: beatToNoteRow(beat + 2),
+        isRoll: false,
+        isHold: type === TapNoteType.HoldHead,
+        hidden: false,
+        holdResolved: false,
+        hns: 0,
+        holdInitiated: false,
+        holdLife: 1,
+        tns: 0,
+        offset: 0,
+        judgable: true,
+      });
+      // Ascending beat/time so the windowed loops don't break early; covers the
+      // 4th/16th/12th/8th quant colours, a hold, and a mine.
+      const notes = [
+        mk(0, 1, TapNoteType.Tap),
+        mk(3, 1.25, TapNoteType.Tap),
+        mk(2, 1 + 1 / 3, TapNoteType.Tap),
+        mk(1, 1.5, TapNoteType.Tap),
+        mk(2, 2.5, TapNoteType.Mine),
+        mk(0, 3, TapNoteType.HoldHead),
+      ];
+      const judge = {
+        notes,
+        combo: 137,
+        maxCombo: 137,
+        life: 0.12, // danger chrome + gauge danger sprites
+        failed: false,
+        grade: 'AA',
+        percentDancePoints: 0.418607,
+        judgmentSeq: 1,
+        lastTns: TapNoteScore.W1,
+      } as unknown as Judge;
+      const fb: Feedback = {
+        lastJudgment: { tns: TapNoteScore.W1, atSeconds: 0 }, // judgment sprite
+        laneFlash: [0, -999, -999, -999], // receptor press sprite
+        laneHit: [
+          { tns: TapNoteScore.W1, atSeconds: 0 }, // explosion → additive pipeline + boom/ray
+          null,
+          { tns: TapNoteScore.W2, atSeconds: 0 },
+          null,
+        ],
+      };
+      this.draw(judge, 0.01, 0.02, 0.5, fb);
+    } catch {
+      // Prewarm is best-effort; a failure must not break real rendering.
+    }
   }
 
   private layout(): void {
