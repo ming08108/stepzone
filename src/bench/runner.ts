@@ -5,13 +5,18 @@
  * judgments, combo pops and hold engagement all render like real gameplay.
  *
  * Each scenario measures two things:
- *  - rAF phase (ground truth): frame-to-frame deltas under vsync — what the
- *    player actually experiences — plus the CPU cost of every draw() call and
- *    a per-theme-pass breakdown (bench/instrument.ts).
- *  - saturation phase: back-to-back draws with no vsync wait — a CPU
- *    throughput ceiling (draws/sec). Canvas rasterizes in the browser's GPU
- *    process, so this is a command-recording proxy, not total GPU cost; the
- *    rAF numbers are the honest end-to-end signal.
+ *  - rAF phase (ground truth): frame-to-frame deltas — what the player
+ *    actually experiences — plus the CPU cost of every draw() call and a
+ *    per-theme-pass breakdown (bench/instrument.ts). Normally vsync-bound, so
+ *    FPS tops out at the display refresh; run the driver with vsync disabled
+ *    (--disable-gpu-vsync --disable-frame-rate-limit) to let it report the
+ *    true uncapped frame rate.
+ *  - saturation phase: back-to-back draws with no vsync wait — the throughput
+ *    ceiling (draws/sec). For the WebGPU field each chunk is drained via
+ *    queue.onSubmittedWorkDone(), so the number is real end-to-end GPU
+ *    throughput including rasterization, independent of the display. Canvas
+ *    2D has no completion signal, so its rate stays a CPU command-build
+ *    ceiling (rasterization happens later in the browser's GPU process).
  *
  * The runner owns its canvases (created inside a caller-provided container)
  * because a canvas element can hold only one context type ever — each
@@ -114,7 +119,9 @@ export interface ScenarioResult {
   missedPct: number;
   /** CPU time inside renderer.draw() per frame, ms. */
   drawCpuMs: FrameStats;
-  /** Back-to-back draws per second with no vsync wait (CPU ceiling). */
+  /** Throughput ceiling, draws/sec with no vsync wait. WebGPU: true
+   *  end-to-end GPU rate (each chunk drained to completion). Canvas 2D: CPU
+   *  command-build rate (no GPU-completion signal). */
   satDrawsPerSec: number;
   /** Average CPU ms/frame per theme pass; 'other' = background + cull + loop. */
   passes: Record<PassKey | 'other', number>;
@@ -162,8 +169,11 @@ export interface RunOptions {
 
 const WARMUP_SECONDS = 0.8;
 const MEASURE_SECONDS = 5;
-const SATURATE_WALL_MS = 1000;
-const SATURATE_MAX_DRAWS = 2400;
+const SATURATE_WALL_MS = 800;
+/** Draws between GPU drains: enough to amortize the sync, few enough to keep
+ *  the in-flight queue (and swapchain overdraw) bounded. */
+const SATURATE_CHUNK = 128;
+const SATURATE_MAX_DRAWS = 100_000; // safety cap; the wall clock is the real bound
 const SATURATE_STEP_SECONDS = 1 / 240;
 /** Song-seconds at rAF start — drops the runner mid-stream immediately. */
 const START_OFFSET_SECONDS = 2;
@@ -316,6 +326,10 @@ interface Scene {
   endSeconds: number;
   /** Render one frame (autoplay/judging already ticked by the caller). */
   render: (now: number, beat: number, progress: number) => void;
+  /** Block until the GPU has finished submitted work (WebGPU backend only) —
+   *  the saturation phase drains it so its rate is real end-to-end throughput
+   *  rather than the CPU command-recording rate. Absent for canvas 2D. */
+  drainGpu?: () => Promise<void>;
   cleanup: () => void;
 }
 
@@ -395,6 +409,7 @@ async function buildScene(
     return {
       ...common,
       render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
+      drainGpu: () => field.gpuIdle(),
       cleanup: () => {
         field.destroy();
         bg?.close();
@@ -570,9 +585,16 @@ async function runScenario(
     const sat0 = performance.now();
     let satDraws = 0;
     while (performance.now() - sat0 < SATURATE_WALL_MS && satDraws < SATURATE_MAX_DRAWS) {
-      songNow += SATURATE_STEP_SECONDS;
-      drawOnce(songNow);
-      satDraws++;
+      for (let i = 0; i < SATURATE_CHUNK; i++) {
+        songNow += SATURATE_STEP_SECONDS;
+        drawOnce(songNow);
+        satDraws++;
+      }
+      // Wait for the GPU to actually finish this chunk (WebGPU backend), so
+      // the elapsed time counts real rasterization and the queue can't build
+      // unbounded. Canvas 2D has no drain — its rate stays a CPU
+      // command-build ceiling.
+      if (scene.drainGpu) await scene.drainGpu();
     }
     const satElapsed = performance.now() - sat0;
 

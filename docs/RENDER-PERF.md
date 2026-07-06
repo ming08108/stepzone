@@ -14,14 +14,20 @@ also logged to the console) for comparing machines.
 
 Per scenario it reports:
 
-- **FPS / frame p95 / missed** — rAF frame-to-frame deltas under vsync;
-  "missed" counts deltas over 1.5× the display refresh. This is what the
-  player experiences and includes browser-GPU-process raster time.
+- **FPS / frame p95 / missed** — rAF frame-to-frame deltas; "missed" counts
+  deltas over 1.5× the display refresh. This is what the player experiences,
+  and includes browser-GPU-process raster time. Normally vsync-bound, so FPS
+  tops out at the monitor's refresh — to see the true frame-rate ceiling,
+  launch the driver with `--disable-gpu-vsync --disable-frame-rate-limit`
+  (the scratch `runBench2.mjs` does).
 - **draw CPU** — main-thread time inside `draw()` (canvas: command recording;
   WebGPU: instance building + encode). Plus a per-theme-pass breakdown via
   the `wrapTheme` instrumentation hook (canvas backend only).
-- **max draws/s** — back-to-back draws with no vsync wait; a CPU throughput
-  ceiling.
+- **max draws/s** — back-to-back draws with no vsync wait. For the WebGPU
+  field each chunk is drained to GPU completion (`queue.onSubmittedWorkDone`),
+  so this is true end-to-end throughput including rasterization, independent
+  of the display. Canvas 2D has no completion signal, so its rate is a CPU
+  command-build ceiling.
 
 Scenarios: a typical hard chart (175BPM 16ths, X2.5) and a beyond-worst-case
 stress chart (200BPM 16ths + jumps + overlapping freezes/rolls + mines at X1 ≈
@@ -42,7 +48,26 @@ backends and with a background image composited.
 
 \* Historical: the arcade canvas theme (`DdrA3Theme`) was removed after this
 investigation — the arcade look is WebGPU-only now, so the suite runs the
-three WebGPU scenarios plus the ITG canvas stress.
+three WebGPU scenarios plus the ITG canvas stress. The `max draws/s` above is
+the old command-recording proxy; the metric now drains the GPU each chunk
+(real throughput — see below), so current numbers read lower and truer.
+
+### Uncapped (vsync disabled, `--disable-gpu-vsync --disable-frame-rate-limit`)
+
+Removing the display cap shows the real frame-rate ceiling. `max draws/s` here
+is the GPU-drained throughput.
+
+| scenario                | fps (uncapped) | draw CPU avg | max draws/s |
+| ----------------------- | -------------- | ------------ | ----------- |
+| webgpu typical          | **4 525**      | 0.09 ms      | 5 433       |
+| webgpu stress           | **3 420**      | 0.10 ms      | 5 209       |
+| webgpu stress + bgimage | **3 380**      | 0.11 ms      | 4 950       |
+| canvas ITG stress       | **146**        | 1.06 ms      | 138         |
+
+The WebGPU field runs the stress chart at ~3 400 fps (~0.3 ms/frame end to
+end) — it was only ever pinned to 238 Hz by the monitor. The ITG canvas theme
+tops out at ~146 fps _with vsync off too_: that is its true ceiling, ~23× below
+the GPU field, which is why it (not the arcade look) is the port worth doing.
 
 Takeaways:
 

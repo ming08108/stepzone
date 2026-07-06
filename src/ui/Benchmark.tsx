@@ -230,10 +230,12 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
                 <ResultsTable result={result} />
                 <PassBreakdown result={result} />
                 <p className="mt-3 text-[11px] leading-relaxed text-[#ececec]/40">
-                  FPS + frame p95/missed = what the player sees (vsync-bound). DRAW CPU = main-
-                  thread time recording canvas commands; rasterization runs in the GPU process, so
-                  low CPU with missed frames points at the GPU side. HEADROOM = 60Hz budget ÷ draw
-                  CPU.
+                  FPS + frame p95/missed = what the player sees, normally capped at this
+                  display&apos;s refresh ({fmt(result.refreshHz, 0)} Hz). MAX DRAWS/S = the real
+                  ceiling with no vsync wait — for the WebGPU field it is drained to GPU completion
+                  each chunk, so it is true end-to-end throughput (the ITG canvas row is a CPU
+                  command-build rate). DRAW CPU = main-thread time per draw(). HEADROOM = 60 Hz
+                  budget ÷ draw CPU.
                 </p>
               </>
             )}

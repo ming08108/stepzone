@@ -257,6 +257,13 @@ export class GpuNoteField {
     return this.lost;
   }
 
+  /** Resolves once all GPU work submitted so far has actually completed — the
+   *  benchmark awaits this to measure true throughput past the vsync cap
+   *  (rAF alone only ever reports the display's refresh rate). */
+  gpuIdle(): Promise<void> {
+    return this.device.queue.onSubmittedWorkDone();
+  }
+
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.media.setSource(media);
   }
