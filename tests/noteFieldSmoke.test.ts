@@ -1,10 +1,12 @@
 /**
- * Smoke-exercises the full renderer draw paths for both themes (DDR A3 and
- * Simply Love) against a no-op canvas context: layout, chrome, HUD underlay/
- * overlay, holds, mines, receptors, explosions, judgment + combo animations,
- * bare mode, reverse, and all three scroll modes. Catches
- * runtime errors the type checker can't (the pixel output itself is not
- * asserted).
+ * Smoke-exercises the full canvas-renderer draw paths against a no-op canvas
+ * context: layout, chrome, HUD underlay/overlay, holds, mines, receptors,
+ * explosions, judgment + combo animations, bare mode, reverse, and all three
+ * scroll modes. Catches runtime errors the type checker can't (the pixel
+ * output itself is not asserted). Both skins run: 'itg' is the real Simply
+ * Love theme; 'arcade' exercises the no-WebGPU fallback path, which maps to
+ * the same theme (the A3 canvas theme was removed — the arcade look lives in
+ * render/gpu/, which needs a real GPU and is verified via the harness).
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';

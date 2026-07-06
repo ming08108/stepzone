@@ -45,7 +45,7 @@ export type NoteSkin = (typeof NOTE_SKINS)[number];
 
 /**
  * Options that shape a play session. `Settings` extends this (adding the
- * persistence-only fields `bindings` and `webgpu`), and `SessionConfig` in
+ * persistence-only fields `bindings` and `renderer`), and `SessionConfig` in
  * src/game/session.ts is exactly this shape — field-by-field mapping:
  *
  * | PlayOptions field | SessionConfig field | Settings field  |

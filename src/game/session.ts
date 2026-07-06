@@ -21,9 +21,9 @@ import {
   type PracticeSection,
 } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
-import { NoteFieldRenderer, type Feedback } from '../render/noteField';
+import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
+import { NoteFieldRenderer, type Feedback, type NoteFieldConfig } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
-import type { FieldFx } from '../render/shaderBackground';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
@@ -47,8 +47,15 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = { ...DEFAULT_PLAY_OPTIONS }
 export class GameSession {
   readonly judge: Judge;
   private readonly clock = new WebAudioClock();
-  private readonly renderer: NoteFieldRenderer;
-  private readonly ctx2d: CanvasRenderingContext2D;
+  // The field renderer is decided in start(): GPU init is async, and a canvas
+  // element can only ever hold one context type — so nothing touches the
+  // canvas until then. Exactly one of gpuField / (renderer + ctx2d) is live.
+  private renderer: NoteFieldRenderer | null = null;
+  private ctx2d: CanvasRenderingContext2D | null = null;
+  private gpuField: GpuNoteField | null = null;
+  private readonly rendererConfig: Partial<NoteFieldConfig>;
+  private bgMedia: HTMLVideoElement | HTMLImageElement | ImageBitmap | null = null;
+  private readonly beatLineTimes: Float64Array;
   private readonly timing: TimingData;
   private readonly held: boolean[];
   private readonly feedback: Feedback;
@@ -67,6 +74,8 @@ export class GameSession {
   private dpr = 1;
   private raf = 0;
   private running = false;
+  /** Set by stop(); start() bails out if it fired during an await. */
+  private stopped = false;
   private lastSeq = 0;
   private readonly visualOffsetSeconds: number;
   private readonly musicRate: number;
@@ -76,7 +85,6 @@ export class GameSession {
   private readonly loopEndSeconds: number = 0;
   private loopCount = 1;
   private bgVideo: HTMLVideoElement | null = null;
-  private fx: FieldFx | null = null;
   private energy = 0;
   private logicalW = 800;
   private logicalH = 720;
@@ -88,8 +96,8 @@ export class GameSession {
   constructor(
     song: Song,
     chart: Steps,
-    private readonly canvas: HTMLCanvasElement,
-    config: SessionConfig = DEFAULT_SESSION_CONFIG,
+    private canvas: HTMLCanvasElement,
+    private readonly config: SessionConfig = DEFAULT_SESSION_CONFIG,
   ) {
     this.timing = chart.getTimingData(song.timing);
     const nd = chart.getNoteData();
@@ -120,7 +128,7 @@ export class GameSession {
       config.musicRate,
       practice ? { startSeconds: this.loopStartSeconds, endSeconds: this.loopEndSeconds } : null,
     );
-    this.renderer = new NoteFieldRenderer(nd.numTracks, {
+    this.rendererConfig = {
       scrollMode: config.scrollMode,
       scrollValue: config.scrollValue,
       songMaxBpm: songMaxBpm(this.timing.bpms),
@@ -133,15 +141,11 @@ export class GameSession {
         subtitle: song.artist,
         difficulty: `${chart.stepsType}  ·  ${difficultyToString(chart.difficulty).toUpperCase()} ${chart.meter}`,
       },
-    });
+    };
     this.clock.sync.playbackRate = config.musicRate;
     this.clock.sync.audioOffsetSeconds = config.audioOffsetMs / 1000;
     this.visualOffsetSeconds = config.visualOffsetMs / 1000;
     this.musicRate = config.musicRate;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('2D canvas context unavailable');
-    this.ctx2d = ctx;
     this.held = new Array<boolean>(nd.numTracks).fill(false);
     this.feedback = {
       lastJudgment: null,
@@ -155,6 +159,8 @@ export class GameSession {
       const t = this.timing.getElapsedTimeFromBeat(beat);
       if (t >= 0) this.clicks.push({ time: t, accent: beat % 4 === 0 });
     }
+    // Per-beat times for the GPU field's beat-line pass.
+    this.beatLineTimes = beatTimes((beat) => this.timing.getElapsedTimeFromBeat(beat), lastBeat);
 
     let end = 0;
     for (const n of this.judge.notes) end = Math.max(end, n.tailTime);
@@ -170,16 +176,16 @@ export class GameSession {
 
   /** Set (or clear) the background video/image drawn behind the field. */
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
-    this.renderer.setBackground(media);
+    this.bgMedia = media;
+    this.gpuField?.setBackground(media);
+    this.renderer?.setBackground(media);
     this.bgVideo = media instanceof HTMLVideoElement ? media : null;
     if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;
   }
 
-  /** Attach (or clear) a WebGPU background effect layer. */
-  enableFx(fx: FieldFx | null): void {
-    this.fx = fx;
-    this.renderer.applyConfig({ transparentBg: !!fx });
-    fx?.resize(this.logicalW, this.logicalH, this.dpr);
+  /** True once start() picked (and successfully initialized) the GPU field. */
+  get usingGpuRenderer(): boolean {
+    return this.gpuField !== null;
   }
 
   /** Resize to a logical (CSS) size; the backing store is scaled by devicePixelRatio. */
@@ -187,10 +193,41 @@ export class GameSession {
     this.dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
     this.logicalW = width;
     this.logicalH = height;
-    this.canvas.width = Math.round(width * this.dpr);
-    this.canvas.height = Math.round(height * this.dpr);
-    this.renderer.resize(width, height, this.dpr);
-    this.fx?.resize(width, height, this.dpr);
+    if (this.gpuField) {
+      this.gpuField.resize(width, height, this.dpr); // sets the backing store
+    } else {
+      this.canvas.width = Math.round(width * this.dpr);
+      this.canvas.height = Math.round(height * this.dpr);
+      this.renderer?.resize(width, height, this.dpr);
+    }
+  }
+
+  /** Build the 2D renderer on `el` (start()'s canvas path, or GPU fallback). */
+  private setupCanvasRenderer(el: HTMLCanvasElement): void {
+    const ctx = el.getContext('2d');
+    if (!ctx) throw new Error('2D canvas context unavailable');
+    this.canvas = el;
+    this.ctx2d = ctx;
+    this.renderer = new NoteFieldRenderer(this.held.length, this.rendererConfig);
+    if (this.bgMedia) this.renderer.setBackground(this.bgMedia);
+    this.resize(this.logicalW, this.logicalH);
+  }
+
+  /**
+   * Drop to the canvas renderer after the GPU path failed (init or device
+   * loss). The old canvas may already hold a dead 'webgpu' context — and a
+   * canvas can never switch context types — so it is replaced with a fresh
+   * element in the same spot.
+   */
+  private fallbackToCanvas(): void {
+    if (this.renderer) return; // already fell back
+    this.gpuField?.destroy();
+    this.gpuField = null;
+    const old = this.canvas;
+    const fresh = old.cloneNode(false) as HTMLCanvasElement;
+    old.parentElement?.insertBefore(fresh, old);
+    old.remove();
+    this.setupCanvasRenderer(fresh);
   }
 
   /**
@@ -198,6 +235,33 @@ export class GameSession {
    * omit it (or pass null) to play a synthesized metronome instead.
    */
   async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
+    // Pick the field renderer first (once per session). The arcade skin is
+    // WebGPU-only (its canvas theme was removed); anything failing here lands
+    // on the canvas renderer, which draws the Simply Love look.
+    if (!this.renderer && !this.gpuField) {
+      if (this.config.noteSkin === 'arcade') {
+        const gpu = await GpuNoteField.create(this.canvas, this.held.length, this.rendererConfig);
+        // stop() may have run during the await (StrictMode's doubled mount
+        // starts and immediately replaces a session) — don't touch the
+        // disposed clock, and don't leak the fresh device.
+        if (this.stopped) {
+          gpu?.destroy();
+          return;
+        }
+        if (gpu) {
+          this.gpuField = gpu;
+          gpu.onLost = () => this.fallbackToCanvas();
+          gpu.resize(this.logicalW, this.logicalH, this.dpr);
+          gpu.setBeatTimes(this.beatLineTimes);
+          if (this.bgMedia) gpu.setBackground(this.bgMedia);
+        } else {
+          this.fallbackToCanvas();
+        }
+      } else {
+        this.setupCanvasRenderer(this.canvas);
+      }
+    }
+    if (this.stopped) return;
     await this.clock.resume();
     let usedAudio = false;
     if (encodedAudio) {
@@ -304,10 +368,11 @@ export class GameSession {
       : now <= 0
         ? 0
         : Math.min(1, now / this.endSeconds);
-    // WebGPU aurora behind the (transparent) field, if attached.
-    const fxEnergy = Math.max(this.energy, Math.min(0.55, this.judge.combo / 90));
-    this.fx?.render(Math.max(0, visualNow), beat, fxEnergy);
-    this.renderer.draw(this.ctx2d, this.judge, visualNow, beat, progress, this.feedback);
+    if (this.gpuField) {
+      this.gpuField.draw(this.judge, visualNow, beat, progress, this.feedback);
+    } else if (this.renderer && this.ctx2d) {
+      this.renderer.draw(this.ctx2d, this.judge, visualNow, beat, progress, this.feedback);
+    }
 
     if (this.practice) {
       // Loop forever (until the player exits): past the section's post-roll —
@@ -331,8 +396,18 @@ export class GameSession {
 
   stop(): void {
     this.running = false;
+    this.stopped = true;
     cancelAnimationFrame(this.raf);
     void this.clock.dispose();
     this.bgVideo?.pause();
+    // Release the GPU device (finish() keeps it so the last frame stays up
+    // behind the results overlay; stop() means the surface is going away).
+    // Detach onLost first: destroy() resolves device.lost, and the fallback
+    // must not fire for an intentional teardown.
+    if (this.gpuField) {
+      this.gpuField.onLost = undefined;
+      this.gpuField.destroy();
+      this.gpuField = null;
+    }
   }
 }

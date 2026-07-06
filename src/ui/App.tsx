@@ -5,11 +5,12 @@ import { Inspector } from './Inspector';
 import { SongSelect } from './SongSelectStepline';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
+import { Benchmark } from './Benchmark';
 import { BgConvertBadge } from './BgConvertBadge';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
-type View = 'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate';
+type View = 'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark';
 
 function Chrome({
   title,
@@ -40,7 +41,11 @@ function Chrome({
 }
 
 export function App() {
-  const [view, setView] = useState<View>('menu');
+  // ?bench / ?bench=auto deep-links straight into the render benchmark
+  // (the automated perf harness drives it this way).
+  const [view, setView] = useState<View>(() =>
+    new URLSearchParams(location.search).has('bench') ? 'benchmark' : 'menu',
+  );
   const [req, setReq] = useState<PlayRequest | null>(null);
 
   let body: ReactNode;
@@ -58,7 +63,15 @@ export function App() {
   } else if (view === 'play' && req) {
     body = <Play req={req} onExit={() => setView('menu')} />;
   } else if (view === 'options') {
-    body = <Options onBack={() => setView('menu')} onCalibrate={() => setView('calibrate')} />;
+    body = (
+      <Options
+        onBack={() => setView('menu')}
+        onCalibrate={() => setView('calibrate')}
+        onBenchmark={() => setView('benchmark')}
+      />
+    );
+  } else if (view === 'benchmark') {
+    body = <Benchmark onBack={() => setView('options')} />;
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else if (view === 'inspect') {

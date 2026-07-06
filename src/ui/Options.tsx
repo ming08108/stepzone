@@ -62,30 +62,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Toggle({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="border px-4 py-1.5 text-[13px] tracking-wide capitalize"
-      style={
-        active
-          ? { borderColor: AC, background: AC + '1a', color: '#ececec' }
-          : { borderColor: 'rgba(255,255,255,.15)', color: 'rgba(236,236,236,.55)' }
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
 const val =
   'ml-auto w-[92px] flex-none text-right text-[15px] font-bold [font-variant-numeric:tabular-nums]';
 const slider = 'h-1 flex-1 accent-[#ff5d47]';
@@ -96,7 +72,15 @@ const bindBtn =
 
 type Capture = { role: ControlRole; device: 'keyboard' | 'gamepad' };
 
-export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibrate: () => void }) {
+export function Options({
+  onBack,
+  onCalibrate,
+  onBenchmark,
+}: {
+  onBack: () => void;
+  onCalibrate: () => void;
+  onBenchmark: () => void;
+}) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
   const [pads, setPads] = useState<PadInfo[]>([]);
@@ -248,12 +232,16 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
           </Section>
 
           <Section title="DISPLAY">
-            <Row label="WEBGPU AURORA">
-              <Toggle active={settings.webgpu} onClick={() => update({ webgpu: !settings.webgpu })}>
-                {settings.webgpu ? 'On' : 'Off'}
-              </Toggle>
+            <Row label="BENCHMARK">
+              <button
+                onClick={onBenchmark}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+              >
+                Run render benchmark ▸
+              </button>
               <span className="text-[12px] text-[#ececec]/40">
-                beat-reactive GPU shader (no bg image)
+                ~40s; measures note-field FPS on this device
               </span>
             </Row>
           </Section>

@@ -114,17 +114,17 @@ describe('loadSettings validates persisted JSON (review #13)', () => {
     expect(loadSettings().scrollValue).toBeLessThanOrEqual(8);
   });
 
-  it('replaces wrong-typed numbers and booleans with defaults', () => {
+  it('replaces wrong-typed numbers, booleans and unions with defaults', () => {
     const store = stubLocalStorage();
     store.set(
       STORAGE_KEY,
-      JSON.stringify({ musicRate: 'fast', scrollValue: null, reverse: 'yes', webgpu: 0 }),
+      JSON.stringify({ musicRate: 'fast', scrollValue: null, reverse: 'yes', bgMode: 'vivid' }),
     );
     const s = loadSettings();
     expect(s.musicRate).toBe(DEFAULT_SETTINGS.musicRate);
     expect(s.scrollValue).toBe(DEFAULT_SETTINGS.scrollValue);
     expect(s.reverse).toBe(DEFAULT_SETTINGS.reverse);
-    expect(s.webgpu).toBe(DEFAULT_SETTINGS.webgpu);
+    expect(s.bgMode).toBe(DEFAULT_SETTINGS.bgMode);
   });
 
   it('filters malformed bindings entries, keeps valid ones', () => {
