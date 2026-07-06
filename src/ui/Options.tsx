@@ -275,11 +275,11 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
                 maxLength={200}
                 value={settings.leaderboardUrl}
                 onChange={(e) => update({ leaderboardUrl: e.target.value })}
-                placeholder="http://localhost:8791 — empty = off"
+                placeholder="/ when hosted with its api (Vercel), or http://host:8791 — empty = off"
                 className="w-[340px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none focus:border-[#ff5d47] placeholder:text-[#ececec]/25"
               />
               <span className="text-[12px] text-[#ececec]/40">
-                run one with `npm run leaderboard`; scores are matched by chart hash
+                see server/README.md — scores are matched by chart hash
               </span>
             </Row>
           </Section>

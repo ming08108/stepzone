@@ -26,23 +26,9 @@ import { createServer } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { cleanPlayer, TOP_N, validScore } from './validate.mjs';
 
-const TOP_N = 10;
 const SAVE_DEBOUNCE_MS = 500;
-
-const isHash = (v) => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-
-/** Sanitize an inbound player name: control chars out, trimmed, 1-16 chars. */
-function cleanPlayer(v) {
-  if (typeof v !== 'string') return null;
-  const p = [...v]
-    .filter((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) !== 0x7f)
-    .join('')
-    .trim()
-    .slice(0, 16);
-  return p.length > 0 ? p : null;
-}
 
 /** Create the leaderboard HTTP server. `dataFile: null` keeps state in memory. */
 export function createLeaderboard({ dataFile = null } = {}) {
@@ -136,28 +122,10 @@ export function createLeaderboard({ dataFile = null } = {}) {
       } catch {
         return json(res, 400, { error: 'bad body' });
       }
-      const player = cleanPlayer(body.player);
-      if (
-        !isHash(body.chartHash) ||
-        !player ||
-        !isNum(body.percent) ||
-        body.percent < 0 ||
-        body.percent > 1 ||
-        typeof body.grade !== 'string' ||
-        body.grade.length > 4 ||
-        !isNum(body.maxCombo) ||
-        body.maxCombo < 0
-      ) {
-        return json(res, 400, { error: 'bad score' });
-      }
-      submit({
-        chartHash: body.chartHash,
-        player,
-        percent: body.percent,
-        grade: body.grade,
-        maxCombo: Math.floor(body.maxCombo),
-      });
-      return json(res, 200, view(body.chartHash, player));
+      const score = validScore(body);
+      if (!score) return json(res, 400, { error: 'bad score' });
+      submit(score);
+      return json(res, 200, view(score.chartHash, score.player));
     }
 
     const get = url.pathname.match(/^\/api\/scores\/([0-9a-f]{16})$/);
