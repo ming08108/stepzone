@@ -87,22 +87,31 @@ Takeaways:
 
 ## The WebGPU note field (`src/render/gpu/`)
 
-Structured for the GPU pipeline rather than ported from canvas calls:
+Structured for the GPU pipeline rather than ported from canvas calls. Both
+looks run on it: `skin.ts` defines a `GpuSkin` that owns all the ART, while
+`gpuNoteField.ts` owns the shared mechanics (scroll, cull cursor, batches,
+render-pass encode) and delegates each element to the skin — `ddrA3Skin.ts`
+(arcade DDR A3) or `simplyLoveSkin.ts` (ITG / Simply Love). This mirrors the
+2D renderer's `Theme` split, so the same pass order drives both.
 
 - `atlas.ts` — the signature arrow/receptor/hold/mine/gauge/explosion art is
-  rasterized ONCE (via the exported ddrA3 paint functions — pixel-twin, no
-  duplication) into a texture (2048², or 4096² for 4K), shelf-packed.
+  rasterized ONCE (via the exported ddrA3 / simplyLove paint functions —
+  pixel-twin, no duplication) into a texture (2048², or 4096² for 4K),
+  shelf-packed.
 - `quads.ts` — one instanced-quad pipeline; an instance is 96 bytes
-  (center/size/rotation, uv rect, premultiplied tint, u/v tiling + scroll
+  (center/size/rotation, uv rect, premultiplied tint, u+v tiling + scroll
   phase, optional mask uv rect). Blend segments (source-over / additive)
-  collapse into draw calls in push order.
+  collapse into draw calls in push order. The vertical scroll phase drives
+  SL's per-beat arrow stem stripe and the hold sheen.
 - `glyphs.ts` — combo/score **numbers** composite from per-digit glyph sprites
   (baked once per size) as tinted quads, so a changing number never
   re-rasterizes. Combo bakes at one reference size and scales.
-- `shapes.ts` — a colored-triangle pipeline draws the score/song **panel
-  backgrounds** (angled plate, hexagon, black band) and their gold trim as
-  geometry, so the panels never touch canvas. Panel text sits in a second quad
-  batch flushed after the shapes.
+- `shapes.ts` — a colored-triangle pipeline draws the **panel backgrounds** as
+  geometry (arcade's angled plate/hexagon/gold trim; SL's song-meter +
+  LifeMeterBar frames and the blue→purple density-graph silhouette), so the
+  panels never touch canvas. Two shape batches: one flushed OVER the notes
+  (panels beside/above the field), one UNDER (SL's field filter + density,
+  which the notes scroll over). Panel text sits in a quad batch over the shapes.
 - `media.ts` — song background image (sampled texture) or video
   (`importExternalTexture`) cover-fit on the same surface, dimmed by a quad.
 - `gpuNoteField.ts` — shares the design grid, scroll math, cull cursor and
@@ -126,18 +135,20 @@ draw OVER the arrows (the DDR cab draws them there, not beneath). Beat lines
 scroll with the field via a bounded per-frame scan of on-screen beats
 (setBeatTimes supplies each beat's time so C-mod under a BPM change is exact).
 
-Selection is automatic, by note skin: arcade → WebGPU field, ITG → canvas
-renderer. There is no renderer setting. If WebGPU is unavailable (or the
-device is lost mid-song) the session falls back to the canvas renderer on a
-fresh canvas element — which draws the Simply Love look, since the arcade
-canvas theme no longer exists. `render/themes/ddrA3.ts` remains as the
-procedural-art module (palettes + paint functions) the GPU atlas bakes from.
+Both skins render on the WebGPU field — there is no renderer setting. If WebGPU
+is unavailable (or the device is lost mid-song) the session falls back to the
+canvas renderer, which draws the Simply Love look. `render/themes/ddrA3.ts` and
+`render/themes/simplyLove.ts` remain as the procedural-art modules (palettes +
+paint functions) the GPU atlas bakes from — the canvas SL theme also still
+serves the fallback and the song-select previews.
 
 The dance gauge's animated fills (flowing bands, maxed-gauge rainbow, top
 sheen) render as scrolling patterns clipped by a baked segment-shape alpha
 mask — the quad shader's mask/repeatU/phaseU path — matching the 2D theme's
-`ctx.clip()` compositing exactly.
+`ctx.clip()` compositing exactly. SL's per-beat arrow stripe uses the same
+mask path with vertical scroll; its dance % is a repaint-in-place atlas slot
+(a single small changing string), the combo composites per-digit glyphs, and
+the density graph is per-measure NPS trapezoids with a vertical color gradient.
 
-Follow-ups worth considering: port the Simply Love skin to the GPU field (it
-is the theme that actually needs it — see numbers), and drop the ×2 sprite
-supersampling on hidpi displays where dpr≥2 already covers it.
+Follow-up worth considering: drop the ×2 sprite supersampling on hidpi displays
+where dpr≥2 already covers it.
