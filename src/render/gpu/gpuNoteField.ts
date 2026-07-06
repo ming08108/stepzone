@@ -382,7 +382,12 @@ export class GpuNoteField {
   prewarm(): void {
     if (this.lost) return;
     try {
-      const mk = (track: number, beat: number, type: TapNoteType) => ({
+      const mk = (
+        track: number,
+        beat: number,
+        type: TapNoteType,
+        extra: Record<string, unknown> = {},
+      ) => ({
         track,
         row: beatToNoteRow(beat),
         beat,
@@ -400,9 +405,11 @@ export class GpuNoteField {
         tns: 0,
         offset: 0,
         judgable: true,
+        ...extra,
       });
       // Ascending beat/time so the windowed loops don't break early; covers the
-      // 4th/16th/12th/8th quant colours, a hold, and a mine.
+      // 4th/16th/12th/8th quant colours, a mine, and all three hold skins:
+      // green (live), purple (roll), grey (dropped → holdResolved, hns≠Held).
       const notes = [
         mk(0, 1, TapNoteType.Tap),
         mk(3, 1.25, TapNoteType.Tap),
@@ -410,18 +417,21 @@ export class GpuNoteField {
         mk(1, 1.5, TapNoteType.Tap),
         mk(2, 2.5, TapNoteType.Mine),
         mk(0, 3, TapNoteType.HoldHead),
+        mk(1, 3.5, TapNoteType.HoldHead, { isRoll: true }),
+        mk(3, 4, TapNoteType.HoldHead, { holdResolved: true }),
       ];
-      const judge = {
-        notes,
-        combo: 137,
-        maxCombo: 137,
-        life: 0.12, // danger chrome + gauge danger sprites
-        failed: false,
-        grade: 'AA',
-        percentDancePoints: 0.418607,
-        judgmentSeq: 1,
-        lastTns: TapNoteScore.W1,
-      } as unknown as Judge;
+      const mkJudge = (life: number) =>
+        ({
+          notes,
+          combo: 137,
+          maxCombo: 137,
+          life,
+          failed: false,
+          grade: 'AA',
+          percentDancePoints: 0.418607,
+          judgmentSeq: 1,
+          lastTns: TapNoteScore.W1,
+        }) as unknown as Judge;
       const fb: Feedback = {
         lastJudgment: { tns: TapNoteScore.W1, atSeconds: 0 }, // judgment sprite
         laneFlash: [0, -999, -999, -999], // receptor press sprite
@@ -432,7 +442,31 @@ export class GpuNoteField {
           null,
         ],
       };
-      this.draw(judge, 0.01, 0.02, 0.5, fb);
+      // Danger gauge, then a full/hot gauge — bakes the danger, green-fill, and
+      // maxed-rainbow sprites so no gauge state bakes mid-song.
+      this.draw(mkJudge(0.12), 0.01, 0.02, 0.5, fb);
+      this.draw(mkJudge(1), 0.02, 0.04, 0.5, fb);
+      // Bake every judgment tier's lettering so no first "Great!"/"Miss" bakes.
+      const jpx = 37 * this.ds;
+      const jpad = 18 * this.ds;
+      for (const key of Object.keys(A3_JUDGMENT)) {
+        const tns = Number(key);
+        const j = A3_JUDGMENT[tns];
+        const ink = JUDGMENT_INK[tns] ?? JUDGMENT_INK[TapNoteScore.W4];
+        const tw = measureWidth(roundFont(jpx), j.label);
+        if (tw === null) break; // no canvas (unit env) — nothing to bake
+        this.atlas.sprite(`judg:${tns}`, tw + 2 * jpad, jpx * 1.1 + 2 * jpad, (c) =>
+          paintJudgment(c, j.label, ink, jpx, this.ds, jpad, false),
+        );
+      }
+      // Bake every grade sprite so a grade-up (D→C→…→AAA) never bakes mid-song.
+      // (Grade set mirrors gameplay/scoring.ts GRADE_TIERS.)
+      for (const grade of ['AAA', 'AA', 'A', 'B', 'C', 'D']) this.gradeSprite(grade);
+      // Bake all digit/comma glyphs (both styles) so a climbing combo/score
+      // never bakes a first-seen digit mid-song. Combo bakes at its reference.
+      const chars = '0123456789,';
+      this.glyphs.measure('combo', { px: 1, bakePx: Math.round(this.colW * 0.9) }, chars);
+      this.glyphs.measure('score', { px: 25 * this.ds }, chars);
     } catch {
       // Prewarm is best-effort; a failure must not break real rendering.
     }
@@ -1206,6 +1240,25 @@ export class GpuNoteField {
       );
   }
 
+  /** Bake (once) the gold grade sprite ("AAA".."D") + its layout metrics.
+   *  Shared by the panel and prewarm (which bakes every grade so a grade-up
+   *  mid-song never rasterizes). */
+  private gradeSprite(grade: string): {
+    rect: ReturnType<GpuAtlas['sprite']>;
+    gw: number;
+    gsw: number;
+  } {
+    const ds = this.ds;
+    const rowH = 23 * ds;
+    const gpad = 4 * ds;
+    const gw = measureWidth(roundFont(14 * ds), grade) ?? 20 * ds;
+    const gsw = gw + 2 * gpad;
+    const rect = this.atlas.sprite(`grade:${grade}:${Math.round(ds * 10)}`, gsw, rowH, (c) =>
+      paintGrade(c, grade, ds, gpad),
+    );
+    return { rect, gw, gsw };
+  }
+
   private pushScorePanel(judge: Judge): void {
     const { ds, height } = this;
     const sh = this.shapes;
@@ -1256,14 +1309,9 @@ export class GpuNoteField {
     );
     if (diffSpr) this.hudBatch.push(px + pw / 2, py + rowH / 2, pw, rowH, diffSpr);
     // Grade (one sprite per grade value, right-aligned → no frame re-bake).
-    const gpad = 4 * ds;
-    const gw = measureWidth(roundFont(14 * ds), grade) ?? 20 * ds;
-    const gsw = gw + 2 * gpad;
-    const gradeSpr = this.atlas.sprite(`grade:${grade}:${Math.round(ds * 10)}`, gsw, rowH, (c) =>
-      paintGrade(c, grade, ds, gpad),
-    );
-    if (gradeSpr)
-      this.hudBatch.push(px + pw - 10 * ds - gw / 2, py + rowH / 2, gsw, rowH, gradeSpr);
+    const g = this.gradeSprite(grade);
+    if (g.rect)
+      this.hudBatch.push(px + pw - 10 * ds - g.gw / 2, py + rowH / 2, g.gsw, rowH, g.rect);
 
     // Money digits, centered in the hex bar, leading zeros dimmed (glyph quads).
     const digits = String(
