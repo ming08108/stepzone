@@ -60,6 +60,9 @@ import {
   A3_JUDGMENT,
   COMBO_PLAIN,
   COMBO_TINT,
+  GOLD_DARK,
+  GOLD_LIGHT,
+  GOLD_MID,
   HOLD_GREEN,
   HOLD_GREY,
   HOLD_PURPLE,
@@ -67,20 +70,22 @@ import {
   JUDGMENT_LIFE,
   NOTE_GREEN,
   NOTE_GREY,
+  PANEL_BG,
   QUANT_BAND,
   QUANT_TUBE,
   TUBE_GREY,
   measureWidth,
   paintBoom,
+  paintDifficulty,
   paintGaugeChrome,
   paintGaugeDividers,
+  paintGrade,
   paintHoldTile,
   paintJudgment,
   paintMineArcs,
   paintMineOrb,
   paintNote,
   paintReceptor,
-  paintScorePanel,
   paintSongPanel,
   roundFont,
   traceSegments,
@@ -90,6 +95,7 @@ import { GpuAtlas } from './atlas';
 import { GlyphBank, type Tint } from './glyphs';
 import { MediaLayer } from './media';
 import { cropUV, QuadBatch } from './quads';
+import { ShapeBatch, type ColorFn } from './shapes';
 import { NoteType } from '../../notes/noteTypes';
 
 /** Renderer config subset the GPU field consumes (arcade skin only in v1). */
@@ -142,6 +148,12 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
 const SCORE_BRIGHT: Tint = parseColor('#f6f6f8');
 const SCORE_DIM: Tint = parseColor('#494a4f');
 
+// Panel-geometry colors (ShapeBatch fills/strokes).
+const PANEL_BG_COL: ColorFn = () => parseColor(PANEL_BG);
+const GOLD_MID_COL: ColorFn = () => parseColor(GOLD_MID);
+const GOLD_L = parseColor(GOLD_LIGHT);
+const GOLD_D = parseColor(GOLD_DARK);
+
 /**
  * Elapsed time (seconds) of every integer beat 0..ceil(throughBeat), for the
  * beat-line pass. Takes a beat→time function (kept free of a TimingData
@@ -184,6 +196,8 @@ export class GpuNoteField {
   // size or bake resolution (4K fullscreen, monitor dpr changes).
   private atlas!: GpuAtlas;
   private batch!: QuadBatch;
+  private hudBatch!: QuadBatch;
+  private shapes!: ShapeBatch;
   private glyphs!: GlyphBank;
   private atlasSize = 0;
   private atlasScale = 0;
@@ -304,9 +318,15 @@ export class GpuNoteField {
     this.atlasSize = size;
     this.atlasScale = scale;
     this.batch?.destroy();
+    this.hudBatch?.destroy();
     this.atlas?.destroy();
     this.atlas = new GpuAtlas(this.device, size, scale);
-    this.batch = new QuadBatch(this.device, this.format, this.atlas.texture.createView());
+    const atlasView = this.atlas.texture.createView();
+    this.batch = new QuadBatch(this.device, this.format, atlasView);
+    // Separate quad batch for the HUD panels' text/digits: it flushes AFTER the
+    // panel-background shapes so the text sits on top of them.
+    this.hudBatch = new QuadBatch(this.device, this.format, atlasView);
+    this.shapes ??= new ShapeBatch(this.device, this.format);
     this.glyphs = new GlyphBank(this.atlas);
   }
 
@@ -508,6 +528,8 @@ export class GpuNoteField {
 
     const b = this.batch;
     b.begin(width, height);
+    this.hudBatch.begin(width, height); // panel text, flushed over the panel shapes
+    this.shapes.begin(width, height); // panel backgrounds (geometry)
     const white = this.sprWhite();
 
     // 2. Field chrome (lane filter + DANGER) — drawn even in bare mode.
@@ -633,7 +655,9 @@ export class GpuNoteField {
         ],
       });
       this.media.draw(pass, width, height);
-      this.batch.flush(pass);
+      this.batch.flush(pass); // field + gauge (textured quads)
+      this.shapes.flush(pass); // panel backgrounds (geometry) over the field
+      this.hudBatch.flush(pass); // panel text/digits over their backgrounds
       pass.end();
       this.device.queue.submit([enc.finish()]);
     } catch {
@@ -1142,25 +1166,34 @@ export class GpuNoteField {
     white: NonNullable<ReturnType<GpuNoteField['sprWhite']>>,
   ): void {
     const { ds, width, height } = this;
-    const b = this.batch;
     const pw = Math.min(0.36 * width, 430 * ds);
     const ph = 52 * ds;
     const px = (width - pw) / 2;
     const py = height - ph - 8 * ds;
     const meta = this.cfg.meta;
+    // Black panel band as geometry; title/artist text bakes once (constant).
+    this.shapes.poly(
+      [
+        [px, py],
+        [px + pw, py],
+        [px + pw, py + ph],
+        [px, py + ph],
+      ],
+      PANEL_BG_COL,
+    );
     const spr = this.atlas.slot(
       'song',
       `${meta.title}|${meta.subtitle}|${Math.round(pw)}`,
       pw,
       ph,
-      (c) => paintSongPanel(c, pw, ph, ds, meta.title, meta.subtitle),
+      (c) => paintSongPanel(c, pw, ph, ds, meta.title, meta.subtitle, false),
     );
-    if (spr) b.push(px + pw / 2, py + ph / 2, pw, ph, spr);
+    if (spr) this.hudBatch.push(px + pw / 2, py + ph / 2, pw, ph, spr);
     const prog = Math.max(0, Math.min(1, progress));
     const barY = py + ph - 1.25 * ds;
-    b.push(px + pw / 2, barY, pw, 2.5 * ds, white, 1, 1, 1, 0.12);
+    this.hudBatch.push(px + pw / 2, barY, pw, 2.5 * ds, white, 1, 1, 1, 0.12);
     if (prog > 0)
-      b.push(
+      this.hudBatch.push(
         px + (pw * prog) / 2,
         barY,
         pw * prog,
@@ -1175,28 +1208,67 @@ export class GpuNoteField {
 
   private pushScorePanel(judge: Judge): void {
     const { ds, height } = this;
+    const sh = this.shapes;
     const pw = 280 * ds;
     const px = 16 * ds;
     const rowH = 23 * ds;
     const scoreH = 38 * ds;
     const py = height - rowH - scoreH - 12 * ds;
-    const m = 4 * ds;
+    const diff = this.cfg.meta.difficulty.toUpperCase();
+    const grade = judge.grade;
+    // Panel-local (X,Y) → screen (px+X, py+Y).
+    const P = (x: number, y: number): [number, number] => [px + x, py + y];
+
+    // Row 1: angled black plate + gold hairline.
+    const row1: Array<[number, number]> = [P(14 * ds, 0), P(pw, 0), P(pw, rowH), P(4 * ds, rowH)];
+    sh.poly(row1, PANEL_BG_COL);
+    sh.outline(row1, 1.2 * ds, GOLD_MID_COL);
+    // Gold slash divider.
+    sh.edge(px + pw * 0.68, py + 3 * ds, px + pw * 0.64, py + rowH - 3 * ds, 2 * ds, GOLD_MID_COL);
+
+    // Row 2: hexagonal money bar + vertical gold-gradient trim.
+    const sy = rowH + 2 * ds;
+    const cut = 12 * ds;
+    const hex: Array<[number, number]> = [
+      P(cut, sy),
+      P(pw - cut, sy),
+      P(pw, sy + scoreH / 2),
+      P(pw - cut, sy + scoreH),
+      P(cut, sy + scoreH),
+      P(0, sy + scoreH / 2),
+    ];
+    sh.poly(hex, PANEL_BG_COL);
+    const top = py + sy;
+    const trim: ColorFn = (_x, y) => {
+      const t = Math.max(0, Math.min(1, (y - top) / scoreH));
+      return [
+        GOLD_L[0] + (GOLD_D[0] - GOLD_L[0]) * t,
+        GOLD_L[1] + (GOLD_D[1] - GOLD_L[1]) * t,
+        GOLD_L[2] + (GOLD_D[2] - GOLD_L[2]) * t,
+        1,
+      ];
+    };
+    sh.outline(hex, 1.6 * ds, trim);
+
+    // Difficulty label (bake-once, constant per session) → HUD text batch.
+    const diffSpr = this.atlas.sprite(`diff:${diff}:${Math.round(pw)}`, pw, rowH, (c) =>
+      paintDifficulty(c, diff, ds, pw),
+    );
+    if (diffSpr) this.hudBatch.push(px + pw / 2, py + rowH / 2, pw, rowH, diffSpr);
+    // Grade (one sprite per grade value, right-aligned → no frame re-bake).
+    const gpad = 4 * ds;
+    const gw = measureWidth(roundFont(14 * ds), grade) ?? 20 * ds;
+    const gsw = gw + 2 * gpad;
+    const gradeSpr = this.atlas.sprite(`grade:${grade}:${Math.round(ds * 10)}`, gsw, rowH, (c) =>
+      paintGrade(c, grade, ds, gpad),
+    );
+    if (gradeSpr)
+      this.hudBatch.push(px + pw - 10 * ds - gw / 2, py + rowH / 2, gsw, rowH, gradeSpr);
+
+    // Money digits, centered in the hex bar, leading zeros dimmed (glyph quads).
     const digits = String(
       Math.max(0, Math.min(9999999, Math.round(judge.percentDancePoints * 1000000))),
     ).padStart(7, '0');
-    const diff = this.cfg.meta.difficulty.toUpperCase();
-    const grade = judge.grade;
-    const w = pw + 2 * m;
-    const h = rowH + scoreH + 2 * ds + 2 * m;
-    // Frame (panel bg + difficulty + grade + gold trim) — re-bakes only when the
-    // grade changes, not every hit; the money digits draw as glyph quads.
-    const frame = this.atlas.slot('scoreframe', `${grade}|${diff}|${Math.round(pw)}`, w, h, (c) =>
-      paintScorePanel(c, pw, rowH, scoreH, ds, m, null, diff, grade),
-    );
-    if (frame) this.batch.push(px - m + w / 2, py - m + h / 2, w, h, frame);
-
-    // Money digits, centered in the hex bar, leading zeros dimmed — glyph quads
-    // in panel-local coords offset to the panel's screen origin (px, py).
     const firstSig = digits.search(/[1-9]/);
     let text = '';
     const dim: boolean[] = [];
@@ -1211,10 +1283,9 @@ export class GpuNoteField {
     }
     const scoreOpts = { px: 25 * ds };
     const total = this.glyphs.measure('score', scoreOpts, text);
-    const sy = rowH + 2 * ds;
     const sx = px + (pw - total) / 2;
     const dy = py + sy + scoreH / 2 + 8 * ds;
-    this.glyphs.drawNumber(this.batch, 'score', text, sx, dy, scoreOpts, 'left', (i) =>
+    this.glyphs.drawNumber(this.hudBatch, 'score', text, sx, dy, scoreOpts, 'left', (i) =>
       dim[i] ? SCORE_DIM : SCORE_BRIGHT,
     );
   }
@@ -1223,6 +1294,8 @@ export class GpuNoteField {
     this.lost = true;
     try {
       this.batch.destroy();
+      this.hudBatch.destroy();
+      this.shapes.destroy();
       this.media.destroy();
       this.atlas.destroy();
       this.device.destroy();
