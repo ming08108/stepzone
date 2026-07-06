@@ -33,7 +33,7 @@ struct In {
   @location(2) a2: vec4f, // uv rect u0 v0 u1 v1
   @location(3) a3: vec4f, // premultiplied tint
   @location(4) a4: vec4f, // mask uv rect (all-zero = no mask)
-  @location(5) a5: vec4f, // phaseU, maskFlag, unused, unused
+  @location(5) a5: vec4f, // phaseU, maskFlag, phaseV, unused
 };
 struct Out {
   @builtin(position) pos: vec4f,
@@ -42,7 +42,7 @@ struct Out {
   @location(2) tint: vec4f,
   @location(3) rep: vec3f,  // repeatV, flipV, repeatU
   @location(4) maskUV: vec4f,
-  @location(5) extra: vec2f, // phaseU, maskFlag
+  @location(5) extra: vec3f, // phaseU, maskFlag, phaseV
 };
 
 @vertex
@@ -64,7 +64,7 @@ fn vs(@builtin(vertex_index) vid: u32, q: In) -> Out {
   out.tint = q.a3;
   out.rep = vec3f(q.a1.y, q.a1.z, q.a1.w);
   out.maskUV = q.a4;
-  out.extra = q.a5.xy;
+  out.extra = q.a5.xyz;
   return out;
 }
 
@@ -73,7 +73,7 @@ fn fs(v: Out) -> @location(0) vec4f {
   var ly = v.luv.y;
   if (v.rep.y > 0.5) { ly = 1.0 - ly; }
   var vv = ly;
-  if (v.rep.x > 1.0001) { vv = fract(ly * v.rep.x); }
+  if (v.rep.x > 1.0001 || v.extra.z != 0.0) { vv = fract(ly * max(v.rep.x, 1.0) + v.extra.z); }
   var uu = v.luv.x;
   if (v.rep.z > 1.0001 || v.extra.x != 0.0) { uu = fract(uu * max(v.rep.z, 1.0) + v.extra.x); }
   let uv = vec2f(
@@ -121,6 +121,9 @@ export interface QuadOpts {
   repeatU?: number;
   /** Horizontal scroll phase (fraction of a period; wraps via fract). */
   phaseU?: number;
+  /** Vertical scroll phase (fraction of a period; wraps via fract). Any
+   *  nonzero value also enables vertical wrapping, like phaseU. */
+  phaseV?: number;
   /** Clip by this atlas rect's alpha, stretched across the quad. */
   mask?: AtlasRect;
   /** Additive blend (explosions). Instances group into blend segments in push order. */
@@ -269,7 +272,7 @@ export class QuadBatch {
     d[o + 19] = mask?.v1 ?? 0;
     d[o + 20] = opts?.phaseU ?? 0;
     d[o + 21] = mask ? 1 : 0;
-    d[o + 22] = 0;
+    d[o + 22] = opts?.phaseV ?? 0;
     d[o + 23] = 0;
     this.count++;
   }

@@ -21,8 +21,75 @@ import type { AtlasRect } from './atlas';
 import type { GpuAtlas } from './atlas';
 import type { QuadBatch } from './quads';
 
-export type GlyphStyle = 'combo' | 'score';
+/** A3 = combo (white rim + outline + gradient) / score (outline + flat white).
+ *  SL = slcombo (Space Grotesk 800 + hard 45° drop shadow, for the combo). The
+ *  SL dance % is a whole-string slot, not per-glyph. All bake white-ish and
+ *  tint per quad. */
+export type GlyphStyle = 'combo' | 'score' | 'slcombo';
 export type Tint = readonly [number, number, number, number];
+
+const SL_FONT = (w: number, px: number): string =>
+  `${w} ${px}px "Space Grotesk", system-ui, sans-serif`;
+
+interface StyleSpec {
+  font: (px: number) => string;
+  /** Horizontal padding (room for rim/outline/shadow), css px. */
+  padX: (px: number) => number;
+  paint: (c: CanvasRenderingContext2D, s: string, px: number, padX: number, baseY: number) => void;
+}
+
+const STYLES: Record<GlyphStyle, StyleSpec> = {
+  combo: {
+    font: (px) => roundFont(px),
+    padX: (px) => Math.ceil(px * 0.16),
+    paint: (c, s, px, padX, baseY) => {
+      c.lineJoin = 'round';
+      c.textAlign = 'left';
+      c.font = roundFont(px);
+      c.strokeStyle = '#ffffff';
+      c.lineWidth = px * 0.13;
+      c.strokeText(s, padX, baseY);
+      c.strokeStyle = OUTLINE_INK;
+      c.lineWidth = px * 0.075;
+      c.strokeText(s, padX, baseY);
+      const g = c.createLinearGradient(0, baseY - px * 0.9, 0, baseY);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(1, '#dfe0e4');
+      c.fillStyle = g;
+      c.fillText(s, padX, baseY);
+    },
+  },
+  score: {
+    font: (px) => roundFont(px),
+    padX: (px) => Math.ceil(px * 0.11),
+    paint: (c, s, px, padX, baseY) => {
+      c.lineJoin = 'round';
+      c.textAlign = 'left';
+      c.font = roundFont(px);
+      c.strokeStyle = OUTLINE_INK;
+      c.lineWidth = px * 0.14;
+      c.strokeText(s, padX, baseY);
+      c.fillStyle = '#ffffff';
+      c.fillText(s, padX, baseY);
+    },
+  },
+  slcombo: {
+    font: (px) => SL_FONT(800, px),
+    padX: (px) => Math.ceil(px * 0.16),
+    paint: (c, s, px, padX, baseY) => {
+      c.textAlign = 'left';
+      c.font = SL_FONT(800, px);
+      c.shadowColor = 'rgba(0,0,0,0.85)';
+      c.shadowOffsetX = px * 0.042; // SL's 2px-of-480 hard drop shadow
+      c.shadowOffsetY = px * 0.042;
+      c.fillStyle = '#ffffff';
+      c.fillText(s, padX, baseY);
+      c.shadowColor = 'transparent';
+      c.shadowOffsetX = 0;
+      c.shadowOffsetY = 0;
+    },
+  },
+};
 
 /** Display size `px`, optionally baked at `bakePx` (then scaled) with an extra
  *  horizontal condense `scaleX`. Baking at a fixed `bakePx` across a range of
@@ -59,33 +126,13 @@ export class GlyphBank {
     const key = `${style}:${Math.round(px)}:${s}`;
     let g = this.cache.get(key);
     if (g) return g;
-    const font = roundFont(px);
-    const advance = measureWidth(font, s) ?? px * 0.6 * s.length;
-    const rim = style === 'combo';
-    const padX = Math.ceil(px * (rim ? 0.16 : 0.11));
+    const spec = STYLES[style];
+    const advance = measureWidth(spec.font(px), s) ?? px * 0.6 * s.length;
+    const padX = spec.padX(px);
     const w = Math.ceil(advance) + 2 * padX;
     const h = Math.ceil(px * 1.28);
     const baseY = Math.round(px * 0.92);
-    const rect = this.atlas.sprite(`glyph:${key}`, w, h, (c) => {
-      c.lineJoin = 'round';
-      c.textAlign = 'left';
-      c.font = font;
-      if (rim) {
-        c.strokeStyle = '#ffffff';
-        c.lineWidth = px * 0.13;
-        c.strokeText(s, padX, baseY);
-      }
-      c.strokeStyle = OUTLINE_INK;
-      c.lineWidth = px * (rim ? 0.075 : 0.14);
-      c.strokeText(s, padX, baseY);
-      // Combo keeps a subtle top-bright gradient; score bakes flat white so a
-      // per-quad tint reproduces its exact bright (#f6f6f8) / dim (#494a4f).
-      const grad = c.createLinearGradient(0, baseY - px * 0.9, 0, baseY);
-      grad.addColorStop(0, '#ffffff');
-      grad.addColorStop(1, rim ? '#dfe0e4' : '#ffffff');
-      c.fillStyle = grad;
-      c.fillText(s, padX, baseY);
-    });
+    const rect = this.atlas.sprite(`glyph:${key}`, w, h, (c) => spec.paint(c, s, px, padX, baseY));
     g = { rect, advance, w, h, baseY, padX };
     this.cache.set(key, g);
     return g;

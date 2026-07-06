@@ -97,7 +97,7 @@ export class GameSession {
     song: Song,
     chart: Steps,
     private canvas: HTMLCanvasElement,
-    private readonly config: SessionConfig = DEFAULT_SESSION_CONFIG,
+    config: SessionConfig = DEFAULT_SESSION_CONFIG,
   ) {
     this.timing = chart.getTimingData(song.timing);
     const nd = chart.getNoteData();
@@ -235,31 +235,27 @@ export class GameSession {
    * omit it (or pass null) to play a synthesized metronome instead.
    */
   async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
-    // Pick the field renderer first (once per session). The arcade skin is
-    // WebGPU-only (its canvas theme was removed); anything failing here lands
-    // on the canvas renderer, which draws the Simply Love look.
+    // Pick the field renderer first (once per session). Both skins now render
+    // on WebGPU (arcade = DDR A3, itg = Simply Love); the canvas renderer is
+    // the fallback when the GPU device is unavailable — it draws the SL look.
     if (!this.renderer && !this.gpuField) {
-      if (this.config.noteSkin === 'arcade') {
-        const gpu = await GpuNoteField.create(this.canvas, this.held.length, this.rendererConfig);
-        // stop() may have run during the await (StrictMode's doubled mount
-        // starts and immediately replaces a session) — don't touch the
-        // disposed clock, and don't leak the fresh device.
-        if (this.stopped) {
-          gpu?.destroy();
-          return;
-        }
-        if (gpu) {
-          this.gpuField = gpu;
-          gpu.onLost = () => this.fallbackToCanvas();
-          gpu.resize(this.logicalW, this.logicalH, this.dpr);
-          gpu.setBeatTimes(this.beatLineTimes);
-          if (this.bgMedia) gpu.setBackground(this.bgMedia);
-          // Bake the atlas + compile pipelines now, behind the READY splash, so
-          // the first real notes/explosion don't hitch.
-          gpu.prewarm();
-        } else {
-          this.fallbackToCanvas();
-        }
+      const gpu = await GpuNoteField.create(this.canvas, this.held.length, this.rendererConfig);
+      // stop() may have run during the await (StrictMode's doubled mount
+      // starts and immediately replaces a session) — don't touch the
+      // disposed clock, and don't leak the fresh device.
+      if (this.stopped) {
+        gpu?.destroy();
+        return;
+      }
+      if (gpu) {
+        this.gpuField = gpu;
+        gpu.onLost = () => this.fallbackToCanvas();
+        gpu.resize(this.logicalW, this.logicalH, this.dpr);
+        gpu.setBeatTimes(this.beatLineTimes);
+        if (this.bgMedia) gpu.setBackground(this.bgMedia);
+        // Bake the atlas + compile pipelines now, behind the READY splash, so
+        // the first real notes/explosion don't hitch.
+        gpu.prewarm();
       } else {
         this.setupCanvasRenderer(this.canvas);
       }

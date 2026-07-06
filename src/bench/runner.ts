@@ -93,6 +93,14 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
     scrollValue: 1,
     bgImage: true,
   },
+  {
+    id: 'gpu-itg-stress',
+    label: 'WEBGPU · ITG · STRESS',
+    backend: 'webgpu',
+    noteSkin: 'itg',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+  },
 ];
 
 export interface FrameStats {
@@ -384,13 +392,13 @@ async function buildScene(
   };
 
   if (scn.backend === 'webgpu') {
-    if (scn.noteSkin !== 'arcade') return { skipped: 'GPU field is arcade-skin only' };
     const { canvas, width, height, dpr } = makeCanvas(container);
     const field = await GpuNoteField.create(canvas, 4, {
       scrollMode: 'X',
       scrollValue: scn.scrollValue,
       songMaxBpm: scn.chart.bpm,
       meta: BENCH_META,
+      noteSkin: scn.noteSkin,
     });
     if (!field) {
       canvas.remove();
