@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
-import { ShaderBackground } from '../render/shaderBackground';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
 import { difficultyToString } from '../song/difficulty';
@@ -112,8 +111,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const ctaRef = useRef<HTMLButtonElement>(null);
   const bgUrlRef = useRef<string | null>(null);
   const bgMediaRef = useRef<HTMLVideoElement | ImageBitmap | null>(null);
-  const bgCanvasRef = useRef<HTMLCanvasElement>(null);
-  const fxRef = useRef<ShaderBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
@@ -144,8 +141,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       URL.revokeObjectURL(bgUrlRef.current);
       bgUrlRef.current = null;
     }
-    fxRef.current?.destroy();
-    fxRef.current = null;
   };
 
   useEffect(() => {
@@ -229,6 +224,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       bgMode: settings.bgMode,
       noteSkin: settings.noteSkin,
       practice: req.practice ?? null,
+      renderer: settings.renderer,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
     setLoopNum(1);
@@ -262,20 +258,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       setPhase('done');
     };
     sessionRef.current = session;
-
-    // WebGPU aurora layer (behind the transparent field). Non-blocking: the game
-    // starts immediately and the shader attaches whenever the device is ready
-    // (or never, on unsupported/headless GPUs) — it must not stall gameplay.
-    if (settings.webgpu && bgCanvasRef.current && !req.backgroundFile) {
-      void ShaderBackground.create(bgCanvasRef.current).then((sb) => {
-        if (sb && sessionRef.current === session) {
-          fxRef.current = sb;
-          session.enableFx(sb);
-        } else {
-          sb?.destroy();
-        }
-      });
-    }
 
     // Background image / video (unless the player turned it off).
     if (req.backgroundFile && settings.bgMode !== 'off') {
@@ -349,7 +331,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       ref={wrapRef}
       className="fixed inset-0 overflow-hidden bg-[#050506] font-grotesk [font-variant-numeric:tabular-nums]"
     >
-      <canvas ref={bgCanvasRef} className="absolute inset-0 block h-full w-full" />
       <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
       <div className="absolute bottom-4 left-4 z-[3] flex gap-2">

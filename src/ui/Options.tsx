@@ -96,7 +96,15 @@ const bindBtn =
 
 type Capture = { role: ControlRole; device: 'keyboard' | 'gamepad' };
 
-export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibrate: () => void }) {
+export function Options({
+  onBack,
+  onCalibrate,
+  onBenchmark,
+}: {
+  onBack: () => void;
+  onCalibrate: () => void;
+  onBenchmark: () => void;
+}) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
   const [pads, setPads] = useState<PadInfo[]>([]);
@@ -248,12 +256,30 @@ export function Options({ onBack, onCalibrate }: { onBack: () => void; onCalibra
           </Section>
 
           <Section title="DISPLAY">
-            <Row label="WEBGPU AURORA">
-              <Toggle active={settings.webgpu} onClick={() => update({ webgpu: !settings.webgpu })}>
-                {settings.webgpu ? 'On' : 'Off'}
-              </Toggle>
+            <Row label="RENDERER">
+              {(['webgpu', 'canvas'] as const).map((r) => (
+                <Toggle
+                  key={r}
+                  active={settings.renderer === r}
+                  onClick={() => update({ renderer: r })}
+                >
+                  {r === 'webgpu' ? 'WebGPU' : 'Canvas'}
+                </Toggle>
+              ))}
               <span className="text-[12px] text-[#ececec]/40">
-                beat-reactive GPU shader (no bg image)
+                note-field backend — WebGPU (arcade skin) falls back to Canvas automatically
+              </span>
+            </Row>
+            <Row label="BENCHMARK">
+              <button
+                onClick={onBenchmark}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+              >
+                Run render benchmark ▸
+              </button>
+              <span className="text-[12px] text-[#ececec]/40">
+                ~40s; measures note-field FPS on this device
               </span>
             </Row>
           </Section>

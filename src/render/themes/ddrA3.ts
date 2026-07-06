@@ -46,23 +46,23 @@ import type { Feedback, FieldView, JudgmentStyle, TapNoteStyle, Theme } from '..
 const ROUND_FONT = '"Arial Rounded MT Bold", "Segoe UI", "Chakra Petch", system-ui, sans-serif';
 const SQUARE_FONT = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
 
-function roundFont(px: number): string {
+export function roundFont(px: number): string {
   return `900 ${px}px ${ROUND_FONT}`;
 }
-function squareFont(w: number, px: number): string {
+export function squareFont(w: number, px: number): string {
   return `${w} ${px}px ${SQUARE_FONT}`;
 }
 
 // --- Palette -----------------------------------------------------------------
 
-const GOLD_LIGHT = '#f6dc5a'; // gold-cab trim highlight
-const GOLD_MID = '#c9a227';
-const GOLD_DARK = '#6e5310';
-const PANEL_BG = 'rgba(0,0,0,0.86)';
-const OUTLINE_INK = '#0b0c10'; // arrow border / interior black
+export const GOLD_LIGHT = '#f6dc5a'; // gold-cab trim highlight
+export const GOLD_MID = '#c9a227';
+export const GOLD_DARK = '#6e5310';
+export const PANEL_BG = 'rgba(0,0,0,0.86)';
+export const OUTLINE_INK = '#0b0c10'; // arrow border / interior black
 
 // A3 difficulty colors (Scripts/02 Colors.lua) — yes, Difficult=red, Expert=green.
-const DIFF_COLOR: ReadonlyArray<readonly [string, string]> = [
+export const DIFF_COLOR: ReadonlyArray<readonly [string, string]> = [
   ['BEGINNER', '#1ed6ff'],
   ['EASY', '#ffaa19'],
   ['BASIC', '#ffaa19'],
@@ -76,7 +76,7 @@ const DIFF_COLOR: ReadonlyArray<readonly [string, string]> = [
 
 // DDR A3 judgment tiers (Title Case, per the Judgment 1x5 sprite). W5 has no
 // A3 window — it gets the legacy DDR "Boo"; a stepped-on mine reads as N.G.
-const A3_JUDGMENT: Record<number, JudgmentStyle> = {
+export const A3_JUDGMENT: Record<number, JudgmentStyle> = {
   [TapNoteScore.W1]: { label: 'Marvelous!!!', color: '#f2f2f6' },
   [TapNoteScore.W2]: { label: 'Perfect!!', color: '#ffd500' },
   [TapNoteScore.W3]: { label: 'Great!', color: '#1fb92c' },
@@ -87,7 +87,7 @@ const A3_JUDGMENT: Record<number, JudgmentStyle> = {
 };
 
 // Judgment text: core gradient [top, bottom] and outer glow per tier.
-const JUDGMENT_INK: Record<number, readonly [string, string, string]> = {
+export const JUDGMENT_INK: Record<number, readonly [string, string, string]> = {
   [TapNoteScore.W1]: ['#ffffff', '#dcdce6', 'rgba(255,255,255,0.9)'],
   [TapNoteScore.W2]: ['#fff7ae', '#ffcf00', 'rgba(255,214,0,0.85)'],
   [TapNoteScore.W3]: ['#c2ffb4', '#0f9f1f', 'rgba(40,220,60,0.8)'],
@@ -97,19 +97,19 @@ const JUDGMENT_INK: Record<number, readonly [string, string, string]> = {
   [TapNoteScore.HitMine]: ['#ff9c9c', '#d80f0f', 'rgba(230,30,30,0.8)'],
 };
 
-const JUDGMENT_LIFE = 0.47; // squash-in 0.036s, hold ~0.43s, vanish (no fade)
-const A3_EXPLOSION = 0.26; // step-zone flare lifetime
+export const JUDGMENT_LIFE = 0.47; // squash-in 0.036s, hold ~0.43s, vanish (no fade)
+export const A3_EXPLOSION = 0.26; // step-zone flare lifetime
 
 // "NOTE" skin band gradients per quantization: [tail(pale), core, tip].
-type BandColors = readonly [string, string, string];
+export type BandColors = readonly [string, string, string];
 const NOTE_RED: BandColors = ['#ff9fb2', '#ff1233', '#cf0424'];
 const NOTE_BLUE: BandColors = ['#9fb4ff', '#2a41f0', '#1322cf'];
-const NOTE_GREEN: BandColors = ['#a8ffb0', '#15cf34', '#08a828'];
+export const NOTE_GREEN: BandColors = ['#a8ffb0', '#15cf34', '#08a828'];
 const NOTE_YELLOW: BandColors = ['#c9b833', '#ffe80a', '#ac9712'];
 // Dead freeze head (dropped/missed): desaturated to match the grey hold body.
-const NOTE_GREY: BandColors = ['#c6c8cc', '#8f9296', '#63666b'];
-const TUBE_GREY = '#dfe0e3';
-const QUANT_BAND: Record<NoteType, BandColors> = {
+export const NOTE_GREY: BandColors = ['#c6c8cc', '#8f9296', '#63666b'];
+export const TUBE_GREY = '#dfe0e3';
+export const QUANT_BAND: Record<NoteType, BandColors> = {
   [NoteType.N4TH]: NOTE_RED,
   [NoteType.N8TH]: NOTE_BLUE,
   [NoteType.N12TH]: NOTE_GREEN,
@@ -121,7 +121,7 @@ const QUANT_BAND: Record<NoteType, BandColors> = {
   [NoteType.N192ND]: NOTE_GREEN,
 };
 // Pale "tube" (capsule + pencil) tint per quantization.
-const QUANT_TUBE: Record<NoteType, string> = {
+export const QUANT_TUBE: Record<NoteType, string> = {
   [NoteType.N4TH]: '#ffccd4',
   [NoteType.N8TH]: '#c8d4ff',
   [NoteType.N12TH]: '#c6ffcc',
@@ -145,37 +145,37 @@ const A3_QUANT_COLOR: Record<NoteType, string> = {
 };
 
 // Combo numeral tint pairs [top, bottom] by the current judgment tier.
-const COMBO_TINT: Record<number, readonly [string, string]> = {
+export const COMBO_TINT: Record<number, readonly [string, string]> = {
   [TapNoteScore.W1]: ['#ffffff', '#f2ecc0'],
   [TapNoteScore.W2]: ['#fff29a', '#ffd400'],
   [TapNoteScore.W3]: ['#c9ffc0', '#26c92e'],
   [TapNoteScore.W4]: ['#cfe4ff', '#3d86ff'],
 };
-const COMBO_PLAIN: readonly [string, string] = ['#ffffff', '#dfe0e4'];
+export const COMBO_PLAIN: readonly [string, string] = ['#ffffff', '#dfe0e4'];
 
 // Freeze-body palettes: [stream light, stream core, rail, outline, chevron].
-interface HoldSkin {
+export interface HoldSkin {
   light: string;
   core: string;
   rail: string;
   outline: string;
   chevron: string;
 }
-const HOLD_GREEN: HoldSkin = {
+export const HOLD_GREEN: HoldSkin = {
   light: '#a8d83e',
   core: '#22cf52',
   rail: 'rgba(110,113,118,0.9)',
   outline: 'rgba(6,44,16,0.85)',
   chevron: 'rgba(250,250,250,0.92)',
 };
-const HOLD_PURPLE: HoldSkin = {
+export const HOLD_PURPLE: HoldSkin = {
   light: '#c78dff',
   core: '#9243ea',
   rail: 'rgba(110,113,118,0.9)',
   outline: 'rgba(40,8,70,0.85)',
   chevron: 'rgba(250,250,250,0.92)',
 };
-const HOLD_GREY: HoldSkin = {
+export const HOLD_GREY: HoldSkin = {
   light: '#a9abaf',
   core: '#8f9296',
   rail: 'rgba(96,99,104,0.9)',
@@ -189,10 +189,10 @@ const HOLD_GREY: HoldSkin = {
 // head over a shaft that tapers at the tail, with the swallow-tail notch cut
 // between the wings and the shaft.
 
-type Pts = ReadonlyArray<readonly [number, number]>;
+export type Pts = ReadonlyArray<readonly [number, number]>;
 
 /** Outer silhouette. */
-const ARROW_OUTER: Pts = [
+export const ARROW_OUTER: Pts = [
   [0.067, 1],
   [0.333, 0.733],
   [0.333, 0.133],
@@ -255,7 +255,7 @@ const ARROW_PENCIL: Pts = [
   [0, 0.083],
 ];
 
-function tracePoly(ctx: CanvasRenderingContext2D, pts: Pts, s: number): void {
+export function tracePoly(ctx: CanvasRenderingContext2D, pts: Pts, s: number): void {
   ctx.beginPath();
   ctx.moveTo(pts[0][0] * s, pts[0][1] * s);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] * s, pts[i][1] * s);
@@ -265,11 +265,11 @@ function tracePoly(ctx: CanvasRenderingContext2D, pts: Pts, s: number): void {
 // --- Sprite cache --------------------------------------------------------------
 
 /** Supersample factor for cached sprites (keeps them crisp on hidpi). */
-const SPRITE_SCALE = 2;
+export const SPRITE_SCALE = 2;
 
 /** Shared scratch context for text measurement (null when unavailable). */
 let measurer: CanvasRenderingContext2D | null | undefined;
-function measureWidth(font: string, text: string): number | null {
+export function measureWidth(font: string, text: string): number | null {
   if (measurer === undefined) {
     measurer =
       typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
@@ -378,6 +378,492 @@ function makeSprite(
   return el;
 }
 
+// --- Art painters (shared with the WebGPU renderer's sprite baker) -------------
+
+/** Step Zone receptor at origin. `f` is the beat brightness (0..1). */
+export function paintReceptor(
+  ctx: CanvasRenderingContext2D,
+  s: number,
+  ds: number,
+  f: number,
+  pressed: boolean,
+): void {
+  ctx.lineJoin = 'round';
+  if (pressed) {
+    // White bloom: the whole zone lights up, silhouette kept crisp.
+    tracePoly(ctx, ARROW_OUTER, s);
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(255,255,255,0.7)';
+    ctx.shadowBlur = 5 * ds;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(10,11,14,0.8)';
+    ctx.lineWidth = 2 * ds;
+    ctx.stroke();
+    ctx.fillStyle = '#d4d6dd';
+    tracePoly(ctx, ARROW_HOLLOW, s);
+    ctx.fill();
+    return;
+  }
+  const band = Math.round(50 + 46 * f);
+  const pipe = Math.round(200 + 55 * f);
+  // Charcoal band, lit slightly from the tip side.
+  const bg = ctx.createLinearGradient(0, -s, 0, s);
+  bg.addColorStop(0, `rgb(${band + 22},${band + 24},${band + 28})`);
+  bg.addColorStop(1, `rgb(${band - 8},${band - 6},${band - 2})`);
+  tracePoly(ctx, ARROW_OUTER, s);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  // Outer piping.
+  ctx.strokeStyle = `rgb(${pipe},${pipe},${pipe + 4})`;
+  ctx.lineWidth = 2.5 * ds;
+  ctx.stroke();
+  // Hollow interior + inner piping.
+  tracePoly(ctx, ARROW_HOLLOW, s);
+  ctx.fillStyle = 'rgba(8,9,12,0.85)';
+  ctx.fill();
+  ctx.lineWidth = 2 * ds;
+  ctx.stroke();
+  // Tube pieces, readable mid-grey against the hollow.
+  ctx.fillStyle = 'rgb(56,58,64)';
+  ctx.strokeStyle = `rgba(${pipe},${pipe},${pipe + 4},0.6)`;
+  ctx.lineWidth = 1.4 * ds;
+  tracePoly(ctx, ARROW_CAPSULE, s);
+  ctx.fill();
+  ctx.stroke();
+  tracePoly(ctx, ARROW_PENCIL, s);
+  ctx.fill();
+  ctx.stroke();
+}
+
+/** "NOTE" skin arrow at origin (pointing up). */
+export function paintNote(
+  ctx: CanvasRenderingContext2D,
+  s: number,
+  ds: number,
+  band: BandColors,
+  tube: string,
+): void {
+  ctx.lineJoin = 'round';
+  // Colored band over the whole silhouette (tail = pale, tip = deep),
+  // ringed by the black rim. Soft drop shadow seats it on the field.
+  const g = ctx.createLinearGradient(0, s, 0, -s);
+  g.addColorStop(0, band[0]);
+  g.addColorStop(0.34, band[1]);
+  g.addColorStop(1, band[2]);
+  tracePoly(ctx, ARROW_OUTER, s);
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 5 * ds;
+  ctx.shadowOffsetY = 2 * ds;
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = OUTLINE_INK;
+  ctx.lineWidth = 3 * ds;
+  ctx.stroke();
+  // Near-black hollow.
+  tracePoly(ctx, ARROW_HOLLOW, s);
+  ctx.fillStyle = OUTLINE_INK;
+  ctx.fill();
+  // Pale tube.
+  ctx.fillStyle = tube;
+  tracePoly(ctx, ARROW_CAPSULE, s);
+  ctx.fill();
+  tracePoly(ctx, ARROW_PENCIL, s);
+  ctx.fill();
+}
+
+/** Shock-arrow orb: radial-gradient body with the baked cyan rim glow. */
+export function paintMineOrb(c: CanvasRenderingContext2D, r: number, ds: number): void {
+  const body = c.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, r);
+  body.addColorStop(0, '#274051');
+  body.addColorStop(0.7, '#101c26');
+  body.addColorStop(1, '#060a0e');
+  c.fillStyle = body;
+  c.strokeStyle = 'rgba(0,192,240,0.85)';
+  c.lineWidth = 2.5 * ds;
+  c.shadowColor = 'rgba(0,192,240,0.7)';
+  c.shadowBlur = 9 * ds;
+  c.beginPath();
+  c.arc(0, 0, r, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+}
+
+/** Three lightning arcs orbiting the mine core (caller applies the spin). */
+export function paintMineArcs(c: CanvasRenderingContext2D, r: number, ds: number): void {
+  c.strokeStyle = '#9fe8ff';
+  c.lineWidth = 2 * ds;
+  for (let i = 0; i < 3; i++) {
+    c.rotate((Math.PI * 2) / 3);
+    c.beginPath();
+    c.moveTo(r * 0.15, 0);
+    c.lineTo(r * 0.45, -r * 0.18);
+    c.lineTo(r * 0.62, r * 0.1);
+    c.lineTo(r * 0.88, -r * 0.08);
+    c.stroke();
+  }
+}
+
+/** Explosion arrow ghost: white silhouette with a baked soft glow. */
+export function paintBoom(c: CanvasRenderingContext2D, s: number, ds: number): void {
+  c.lineJoin = 'round';
+  c.shadowColor = '#ffffff';
+  c.shadowBlur = 14 * ds;
+  tracePoly(c, ARROW_OUTER, s);
+  c.fillStyle = '#ffffff';
+  c.fill();
+}
+
+/** One repeating freeze-body tile: white chevron + grey rails. */
+export function paintHoldTile(
+  c: CanvasRenderingContext2D,
+  w: number,
+  period: number,
+  ds: number,
+  skin: HoldSkin,
+): void {
+  const chevW = w * 0.8;
+  const thick = 4.5 * ds;
+  const drop = 10 * ds;
+  c.fillStyle = skin.chevron;
+  c.beginPath();
+  c.moveTo(w / 2 - chevW / 2, 3 * ds);
+  c.lineTo(w / 2, 3 * ds + drop);
+  c.lineTo(w / 2 + chevW / 2, 3 * ds);
+  c.lineTo(w / 2 + chevW / 2, 3 * ds + thick);
+  c.lineTo(w / 2, 3 * ds + drop + thick);
+  c.lineTo(w / 2 - chevW / 2, 3 * ds + thick);
+  c.closePath();
+  c.fill();
+  c.fillStyle = skin.rail;
+  c.fillRect(0, 0, 2 * ds, period);
+  c.fillRect(w - 2 * ds, 0, 2 * ds, period);
+}
+
+/** Trace the gauge's chevron-pill segments into a path (local coords with
+ *  the origin at the frame's top-left track corner). */
+export function traceSegments(path: CanvasPath, tw: number, gh: number, ds: number): void {
+  const segs = 8;
+  const tip = 8 * ds;
+  const segGap = 4 * ds;
+  const segW = (tw - segGap * (segs - 1)) / segs;
+  const ym = gh / 2;
+  for (let i = 0; i < segs; i++) {
+    const x0 = i * (segW + segGap);
+    path.moveTo(x0 + tip, 2 * ds);
+    path.lineTo(x0 + segW, 2 * ds);
+    path.lineTo(x0 + segW + tip, ym);
+    path.lineTo(x0 + segW, gh - 2 * ds);
+    path.lineTo(x0 + tip, gh - 2 * ds);
+    path.lineTo(x0, ym);
+    path.closePath();
+  }
+}
+
+/** Gold frame + caps + empty backing (segment-shaped) in local coords,
+ *  origin at (gx-4ds, gy-4ds). */
+export function paintGaugeChrome(
+  c: CanvasRenderingContext2D,
+  gw: number,
+  gh: number,
+  ds: number,
+  capL: number,
+  capR: number,
+): void {
+  const o = 4 * ds; // frame margin inside the sprite
+  c.save();
+  c.translate(o, o);
+  // Outer hairline + gold frame plate.
+  c.strokeStyle = 'rgba(150,120,30,0.6)';
+  c.lineWidth = 1;
+  c.strokeRect(-3.5 * ds, -3.5 * ds, gw + 7 * ds, gh + 7 * ds);
+  const frame = c.createLinearGradient(0, -2 * ds, 0, gh + 2 * ds);
+  frame.addColorStop(0, GOLD_LIGHT);
+  frame.addColorStop(0.45, GOLD_MID);
+  frame.addColorStop(0.55, '#8a6d14');
+  frame.addColorStop(1, GOLD_DARK);
+  c.fillStyle = frame;
+  c.fillRect(-2 * ds, -2 * ds, gw + 4 * ds, gh + 4 * ds);
+  // Machined end caps: grooved plate left, chevron point right.
+  c.strokeStyle = 'rgba(40,30,4,0.8)';
+  c.lineWidth = 1.6 * ds;
+  c.beginPath();
+  c.moveTo(6 * ds, 0);
+  c.lineTo(12 * ds, gh);
+  c.moveTo(12 * ds, 0);
+  c.lineTo(18 * ds, gh);
+  c.stroke();
+  // Track.
+  const tw = gw - capL - capR;
+  c.fillStyle = '#0c0d10';
+  c.fillRect(capL - 2 * ds, 0, tw + 4 * ds, gh);
+  // Right cap chevron groove.
+  c.beginPath();
+  c.moveTo(gw - 10 * ds, 2 * ds);
+  c.lineTo(gw - 4 * ds, gh / 2);
+  c.lineTo(gw - 10 * ds, gh - 2 * ds);
+  c.stroke();
+  // Empty backing inside the segments.
+  c.translate(capL, 0);
+  c.beginPath();
+  traceSegments(c, tw, gh, ds);
+  c.clip();
+  c.fillStyle = '#232429';
+  c.fillRect(0, 0, tw + 8 * ds, gh);
+  c.restore();
+}
+
+/** Gold chevron dividers between segments (drawn over the fill). */
+export function paintGaugeDividers(
+  c: CanvasRenderingContext2D,
+  tw: number,
+  gh: number,
+  ds: number,
+): void {
+  const segs = 8;
+  const tip = 8 * ds;
+  const segGap = 4 * ds;
+  const segW = (tw - segGap * (segs - 1)) / segs;
+  const divGrad = c.createLinearGradient(0, 0, 0, gh);
+  divGrad.addColorStop(0, GOLD_LIGHT);
+  divGrad.addColorStop(1, GOLD_DARK);
+  c.strokeStyle = divGrad;
+  c.lineWidth = 2.6 * ds;
+  c.beginPath();
+  for (let i = 1; i < segs; i++) {
+    const x0 = i * (segW + segGap) - segGap / 2;
+    c.moveTo(x0 - tip / 2, 1 * ds);
+    c.lineTo(x0 + tip / 2, gh / 2);
+    c.lineTo(x0 - tip / 2, gh - 1 * ds);
+  }
+  c.stroke();
+}
+
+/** Song title/artist panel content (black band + lettering). */
+export function paintSongPanel(
+  c: CanvasRenderingContext2D,
+  pw: number,
+  ph: number,
+  ds: number,
+  title: string,
+  subtitle: string,
+): void {
+  c.fillStyle = PANEL_BG;
+  c.fillRect(0, 0, pw, ph);
+  c.textAlign = 'center';
+  c.fillStyle = '#f4f4f6';
+  c.font = squareFont(700, 19 * ds);
+  c.fillText(title || 'stepzone', pw / 2, 23 * ds, pw - 24 * ds);
+  if (subtitle) {
+    c.fillStyle = '#c9cacd';
+    c.font = squareFont(600, 13 * ds);
+    c.fillText(subtitle, pw / 2, 41 * ds, pw - 24 * ds);
+  }
+}
+
+/** Score panel content: difficulty/grade row + hexagonal money-score bar. */
+export function paintScorePanel(
+  c: CanvasRenderingContext2D,
+  pw: number,
+  rowH: number,
+  scoreH: number,
+  ds: number,
+  m: number,
+  digits: string,
+  diff: string,
+  grade: string,
+): void {
+  c.translate(m, m);
+  // Row 1: difficulty + grade, angled left edge.
+  c.beginPath();
+  c.moveTo(14 * ds, 0);
+  c.lineTo(pw, 0);
+  c.lineTo(pw, rowH);
+  c.lineTo(4 * ds, rowH);
+  c.closePath();
+  c.fillStyle = PANEL_BG;
+  c.fill();
+  c.strokeStyle = GOLD_MID;
+  c.lineWidth = 1.2 * ds;
+  c.stroke();
+
+  let dc = GOLD_LIGHT;
+  for (const [name, color] of DIFF_COLOR) {
+    if (diff.includes(name)) {
+      dc = color;
+      break;
+    }
+  }
+  // Trailing meter number renders white, like A3's "EXPERT 16".
+  const meter = /^(.*?)\s*(\d+)$/.exec(diff);
+  c.textAlign = 'left';
+  c.font = squareFont(700, 13 * ds);
+  if (meter) {
+    c.fillStyle = dc;
+    c.fillText(meter[1], 16 * ds, 16 * ds, pw * 0.5);
+    c.fillStyle = '#f2f2f4';
+    c.fillText(
+      meter[2],
+      16 * ds + Math.min(pw * 0.5, c.measureText(meter[1]).width) + 6 * ds,
+      16 * ds,
+    );
+  } else {
+    c.fillStyle = dc;
+    c.fillText(diff, 16 * ds, 16 * ds, pw * 0.62);
+  }
+  c.textAlign = 'right';
+  c.fillStyle = '#ffd83c';
+  c.font = roundFont(14 * ds);
+  c.fillText(grade, pw - 10 * ds, 16.5 * ds);
+  // Gold slash divider.
+  c.strokeStyle = GOLD_MID;
+  c.lineWidth = 2 * ds;
+  c.beginPath();
+  c.moveTo(pw * 0.68, 3 * ds);
+  c.lineTo(pw * 0.64, rowH - 3 * ds);
+  c.stroke();
+
+  // Row 2: hexagonal score bar.
+  const sy = rowH + 2 * ds;
+  const cut = 12 * ds;
+  c.beginPath();
+  c.moveTo(cut, sy);
+  c.lineTo(pw - cut, sy);
+  c.lineTo(pw, sy + scoreH / 2);
+  c.lineTo(pw - cut, sy + scoreH);
+  c.lineTo(cut, sy + scoreH);
+  c.lineTo(0, sy + scoreH / 2);
+  c.closePath();
+  c.fillStyle = PANEL_BG;
+  c.fill();
+  const trim = c.createLinearGradient(0, sy, 0, sy + scoreH);
+  trim.addColorStop(0, GOLD_LIGHT);
+  trim.addColorStop(1, GOLD_DARK);
+  c.strokeStyle = trim;
+  c.lineWidth = 1.6 * ds;
+  c.stroke();
+
+  // 7-digit money score with commas, leading zeros dimmed.
+  const firstSig = digits.search(/[1-9]/);
+  let text = '';
+  const dim: boolean[] = [];
+  for (let i = 0; i < 7; i++) {
+    const isDim = firstSig === -1 || i < firstSig;
+    if (i === 1 || i === 4) {
+      text += ',';
+      dim.push(firstSig === -1 || i - 1 < firstSig); // comma follows its digit
+    }
+    text += digits[i];
+    dim.push(isDim);
+  }
+  c.font = roundFont(25 * ds);
+  c.textAlign = 'left';
+  c.lineJoin = 'round';
+  const widths = Array.from(text, (ch) => c.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0);
+  let dx = (pw - total) / 2;
+  const dy = sy + scoreH / 2 + 8 * ds;
+  for (let i = 0; i < text.length; i++) {
+    c.strokeStyle = OUTLINE_INK;
+    c.lineWidth = 3.5 * ds;
+    c.strokeText(text[i], dx, dy);
+    c.fillStyle = dim[i] ? '#494a4f' : '#f6f6f8';
+    c.fillText(text[i], dx, dy);
+    dx += widths[i];
+  }
+}
+
+/** Paint the judgment lettering with baked glow/rims at a left baseline. */
+export function paintJudgment(
+  c: CanvasRenderingContext2D,
+  label: string,
+  ink: readonly [string, string, string],
+  px: number,
+  ds: number,
+  pad: number,
+  shine: boolean,
+): void {
+  c.translate(pad, pad + px * 0.78);
+  c.textAlign = 'left';
+  c.lineJoin = 'round';
+  c.font = roundFont(px);
+  if (shine) {
+    c.fillStyle = '#ffffff';
+    c.fillText(label, 0, 0);
+    return;
+  }
+  // Colored glow + fat white rim.
+  c.shadowColor = ink[2];
+  c.shadowBlur = 9 * ds;
+  c.strokeStyle = '#ffffff';
+  c.lineWidth = 7.5 * ds;
+  c.strokeText(label, 0, 0);
+  c.shadowColor = 'transparent';
+  c.shadowBlur = 0;
+  // Dark line between rim and core.
+  c.strokeStyle = 'rgba(14,14,20,0.95)';
+  c.lineWidth = 3.4 * ds;
+  c.strokeText(label, 0, 0);
+  // Core gradient.
+  const g = c.createLinearGradient(0, -px * 0.78, 0, px * 0.12);
+  g.addColorStop(0, ink[0]);
+  g.addColorStop(1, ink[1]);
+  c.fillStyle = g;
+  c.fillText(label, 0, 0);
+}
+
+/** Paint the combo block (number + lowercase word on a shared baseline)
+ *  with the join point at (joinOff, baseY). */
+export function paintCombo(
+  c: CanvasRenderingContext2D,
+  count: string,
+  tint: readonly [string, string],
+  px: number,
+  ds: number,
+  joinOff: number,
+  baseY: number,
+): void {
+  c.lineJoin = 'round';
+  // Number: right-aligned against the join, condensed tall digits like the
+  // A3 combo numerals.
+  c.save();
+  c.translate(joinOff, baseY);
+  c.scale(0.84, 1);
+  c.textAlign = 'right';
+  c.font = roundFont(px);
+  c.strokeStyle = '#ffffff';
+  c.lineWidth = px * 0.13;
+  c.strokeText(count, 0, 0);
+  c.strokeStyle = OUTLINE_INK;
+  c.lineWidth = px * 0.075;
+  c.strokeText(count, 0, 0);
+  const g = c.createLinearGradient(0, -px * 0.9, 0, 0);
+  g.addColorStop(0, tint[0]);
+  g.addColorStop(1, tint[1]);
+  c.fillStyle = g;
+  c.fillText(count, 0, 0);
+  c.restore();
+  // Lowercase "combo", fixed size, sharing the baseline.
+  const wpx = px * 0.42;
+  c.translate(joinOff + 6 * ds, baseY);
+  c.textAlign = 'left';
+  c.font = roundFont(wpx);
+  c.strokeStyle = '#ffffff';
+  c.lineWidth = wpx * 0.15;
+  c.strokeText('combo', 0, 0);
+  c.strokeStyle = OUTLINE_INK;
+  c.lineWidth = wpx * 0.085;
+  c.strokeText('combo', 0, 0);
+  const g2 = c.createLinearGradient(0, -wpx, 0, 0);
+  g2.addColorStop(0, tint[0]);
+  g2.addColorStop(1, tint[1]);
+  c.fillStyle = g2;
+  c.fillText('combo', 0, 0);
+}
+
 export class DdrA3Theme implements Theme {
   readonly quantColor = A3_QUANT_COLOR;
   readonly judgments = A3_JUDGMENT;
@@ -469,62 +955,6 @@ export class DdrA3Theme implements Theme {
 
   // --- Receptors / notes -------------------------------------------------------
 
-  /** Step Zone receptor at origin. `f` is the beat brightness (0..1). */
-  private paintReceptor(
-    ctx: CanvasRenderingContext2D,
-    s: number,
-    ds: number,
-    f: number,
-    pressed: boolean,
-  ): void {
-    ctx.lineJoin = 'round';
-    if (pressed) {
-      // White bloom: the whole zone lights up, silhouette kept crisp.
-      tracePoly(ctx, ARROW_OUTER, s);
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = 'rgba(255,255,255,0.7)';
-      ctx.shadowBlur = 5 * ds;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = 'rgba(10,11,14,0.8)';
-      ctx.lineWidth = 2 * ds;
-      ctx.stroke();
-      ctx.fillStyle = '#d4d6dd';
-      tracePoly(ctx, ARROW_HOLLOW, s);
-      ctx.fill();
-      return;
-    }
-    const band = Math.round(50 + 46 * f);
-    const pipe = Math.round(200 + 55 * f);
-    // Charcoal band, lit slightly from the tip side.
-    const bg = ctx.createLinearGradient(0, -s, 0, s);
-    bg.addColorStop(0, `rgb(${band + 22},${band + 24},${band + 28})`);
-    bg.addColorStop(1, `rgb(${band - 8},${band - 6},${band - 2})`);
-    tracePoly(ctx, ARROW_OUTER, s);
-    ctx.fillStyle = bg;
-    ctx.fill();
-    // Outer piping.
-    ctx.strokeStyle = `rgb(${pipe},${pipe},${pipe + 4})`;
-    ctx.lineWidth = 2.5 * ds;
-    ctx.stroke();
-    // Hollow interior + inner piping.
-    tracePoly(ctx, ARROW_HOLLOW, s);
-    ctx.fillStyle = 'rgba(8,9,12,0.85)';
-    ctx.fill();
-    ctx.lineWidth = 2 * ds;
-    ctx.stroke();
-    // Tube pieces, readable mid-grey against the hollow.
-    ctx.fillStyle = 'rgb(56,58,64)';
-    ctx.strokeStyle = `rgba(${pipe},${pipe},${pipe + 4},0.6)`;
-    ctx.lineWidth = 1.4 * ds;
-    tracePoly(ctx, ARROW_CAPSULE, s);
-    ctx.fill();
-    ctx.stroke();
-    tracePoly(ctx, ARROW_PENCIL, s);
-    ctx.fill();
-    ctx.stroke();
-  }
-
   /** Step Zone: hollow charcoal arrow with silver-white piping, brightening
    *  on each beat (cached dim/bright sprites cross-faded) and blooming solid
    *  white with a scale dip on a press. */
@@ -541,10 +971,10 @@ export class DdrA3Theme implements Theme {
     const key = pressed ? 'rec:press' : 'rec:dim';
     const spr = this.store.sprite(key, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      this.paintReceptor(c, s, ds, 0, pressed);
+      paintReceptor(c, s, ds, 0, pressed);
     });
     if (!spr) {
-      this.paintReceptor(ctx, s, ds, pressed ? 0 : f, pressed);
+      paintReceptor(ctx, s, ds, pressed ? 0 : f, pressed);
       ctx.restore();
       return;
     }
@@ -552,7 +982,7 @@ export class DdrA3Theme implements Theme {
     if (!pressed && f > 0.02) {
       const bright = this.store.sprite('rec:bright', 2 * m, 2 * m, (c) => {
         c.translate(m, m);
-        this.paintReceptor(c, s, ds, 1, false);
+        paintReceptor(c, s, ds, 1, false);
       });
       if (bright) {
         ctx.globalAlpha = f;
@@ -560,45 +990,6 @@ export class DdrA3Theme implements Theme {
       }
     }
     ctx.restore();
-  }
-
-  /** "NOTE" skin arrow at origin (pointing up). */
-  private paintNote(
-    ctx: CanvasRenderingContext2D,
-    s: number,
-    ds: number,
-    band: BandColors,
-    tube: string,
-  ): void {
-    ctx.lineJoin = 'round';
-    // Colored band over the whole silhouette (tail = pale, tip = deep),
-    // ringed by the black rim. Soft drop shadow seats it on the field.
-    const g = ctx.createLinearGradient(0, s, 0, -s);
-    g.addColorStop(0, band[0]);
-    g.addColorStop(0.34, band[1]);
-    g.addColorStop(1, band[2]);
-    tracePoly(ctx, ARROW_OUTER, s);
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 5 * ds;
-    ctx.shadowOffsetY = 2 * ds;
-    ctx.fillStyle = g;
-    ctx.fill();
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.strokeStyle = OUTLINE_INK;
-    ctx.lineWidth = 3 * ds;
-    ctx.stroke();
-    // Near-black hollow.
-    tracePoly(ctx, ARROW_HOLLOW, s);
-    ctx.fillStyle = OUTLINE_INK;
-    ctx.fill();
-    // Pale tube.
-    ctx.fillStyle = tube;
-    tracePoly(ctx, ARROW_CAPSULE, s);
-    ctx.fill();
-    tracePoly(ctx, ARROW_PENCIL, s);
-    ctx.fill();
   }
 
   /** "NOTE" skin arrow: black rim, quantization-colored band (pale at the
@@ -631,10 +1022,10 @@ export class DdrA3Theme implements Theme {
     ctx.rotate(v.angle(track));
     const spr = this.store.sprite(`note:${band[1]}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      this.paintNote(c, s, ds, band, tube);
+      paintNote(c, s, ds, band, tube);
     });
     if (spr) ctx.drawImage(spr, -m, -m, 2 * m, 2 * m);
-    else this.paintNote(ctx, s, ds, band, tube);
+    else paintNote(ctx, s, ds, band, tube);
     ctx.restore();
   }
 
@@ -651,19 +1042,7 @@ export class DdrA3Theme implements Theme {
     ctx.translate(x, y);
     const spr = this.store.sprite('mine', 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      const body = c.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, r);
-      body.addColorStop(0, '#274051');
-      body.addColorStop(0.7, '#101c26');
-      body.addColorStop(1, '#060a0e');
-      c.fillStyle = body;
-      c.strokeStyle = 'rgba(0,192,240,0.85)';
-      c.lineWidth = 2.5 * ds;
-      c.shadowColor = 'rgba(0,192,240,0.7)';
-      c.shadowBlur = 9 * ds;
-      c.beginPath();
-      c.arc(0, 0, r, 0, Math.PI * 2);
-      c.fill();
-      c.stroke();
+      paintMineOrb(c, r, ds);
     });
     if (spr) ctx.drawImage(spr, -m, -m, 2 * m, 2 * m);
     else {
@@ -677,17 +1056,7 @@ export class DdrA3Theme implements Theme {
     }
     // Three lightning arcs orbiting the core.
     ctx.rotate(v.nowSeconds * 3);
-    ctx.strokeStyle = '#9fe8ff';
-    ctx.lineWidth = 2 * ds;
-    for (let i = 0; i < 3; i++) {
-      ctx.rotate((Math.PI * 2) / 3);
-      ctx.beginPath();
-      ctx.moveTo(r * 0.15, 0);
-      ctx.lineTo(r * 0.45, -r * 0.18);
-      ctx.lineTo(r * 0.62, r * 0.1);
-      ctx.lineTo(r * 0.88, -r * 0.08);
-      ctx.stroke();
-    }
+    paintMineArcs(ctx, r, ds);
     // White-hot spark core flashing on the beat.
     ctx.fillStyle = `rgba(240,250,255,${(0.4 + 0.6 * pulse).toFixed(3)})`;
     ctx.beginPath();
@@ -738,24 +1107,9 @@ export class DdrA3Theme implements Theme {
     // Chevrons + rails from the cached tile, anchored at the head end so the
     // pattern rides with the hold.
     const period = 17 * ds;
-    const pat = this.store.pattern(`hold:${variant}`, w, period, (c) => {
-      const chevW = w * 0.8;
-      const thick = 4.5 * ds;
-      const drop = 10 * ds;
-      c.fillStyle = skin.chevron;
-      c.beginPath();
-      c.moveTo(w / 2 - chevW / 2, 3 * ds);
-      c.lineTo(w / 2, 3 * ds + drop);
-      c.lineTo(w / 2 + chevW / 2, 3 * ds);
-      c.lineTo(w / 2 + chevW / 2, 3 * ds + thick);
-      c.lineTo(w / 2, 3 * ds + drop + thick);
-      c.lineTo(w / 2 - chevW / 2, 3 * ds + thick);
-      c.closePath();
-      c.fill();
-      c.fillStyle = skin.rail;
-      c.fillRect(0, 0, 2 * ds, period);
-      c.fillRect(w - 2 * ds, 0, 2 * ds, period);
-    });
+    const pat = this.store.pattern(`hold:${variant}`, w, period, (c) =>
+      paintHoldTile(c, w, period, ds, skin),
+    );
     const yStart = v.reverse ? bottom : top;
     if (pat) {
       ctx.save();
@@ -833,12 +1187,7 @@ export class DdrA3Theme implements Theme {
     const m = s + 18 * ds;
     const spr = this.store.sprite('boom', 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      c.lineJoin = 'round';
-      c.shadowColor = '#ffffff';
-      c.shadowBlur = 14 * ds;
-      tracePoly(c, ARROW_OUTER, s);
-      c.fillStyle = '#ffffff';
-      c.fill();
+      paintBoom(c, s, ds);
     });
     ctx.globalAlpha = 0.42 * fade;
     if (spr) ctx.drawImage(spr, -m, -m, 2 * m, 2 * m);
@@ -898,105 +1247,6 @@ export class DdrA3Theme implements Theme {
 
   // --- HUD pieces ------------------------------------------------------------
 
-  /** Trace the gauge's chevron-pill segments into a path (local coords with
-   *  the origin at the frame's top-left track corner). */
-  private traceSegments(path: CanvasPath, tw: number, gh: number, ds: number): void {
-    const segs = 8;
-    const tip = 8 * ds;
-    const segGap = 4 * ds;
-    const segW = (tw - segGap * (segs - 1)) / segs;
-    const ym = gh / 2;
-    for (let i = 0; i < segs; i++) {
-      const x0 = i * (segW + segGap);
-      path.moveTo(x0 + tip, 2 * ds);
-      path.lineTo(x0 + segW, 2 * ds);
-      path.lineTo(x0 + segW + tip, ym);
-      path.lineTo(x0 + segW, gh - 2 * ds);
-      path.lineTo(x0 + tip, gh - 2 * ds);
-      path.lineTo(x0, ym);
-      path.closePath();
-    }
-  }
-
-  /** Gold frame + caps + empty backing (segment-shaped) in local coords,
-   *  origin at (gx-4ds, gy-4ds). */
-  private paintGaugeChrome(
-    c: CanvasRenderingContext2D,
-    gw: number,
-    gh: number,
-    ds: number,
-    capL: number,
-    capR: number,
-  ): void {
-    const o = 4 * ds; // frame margin inside the sprite
-    c.save();
-    c.translate(o, o);
-    // Outer hairline + gold frame plate.
-    c.strokeStyle = 'rgba(150,120,30,0.6)';
-    c.lineWidth = 1;
-    c.strokeRect(-3.5 * ds, -3.5 * ds, gw + 7 * ds, gh + 7 * ds);
-    const frame = c.createLinearGradient(0, -2 * ds, 0, gh + 2 * ds);
-    frame.addColorStop(0, GOLD_LIGHT);
-    frame.addColorStop(0.45, GOLD_MID);
-    frame.addColorStop(0.55, '#8a6d14');
-    frame.addColorStop(1, GOLD_DARK);
-    c.fillStyle = frame;
-    c.fillRect(-2 * ds, -2 * ds, gw + 4 * ds, gh + 4 * ds);
-    // Machined end caps: grooved plate left, chevron point right.
-    c.strokeStyle = 'rgba(40,30,4,0.8)';
-    c.lineWidth = 1.6 * ds;
-    c.beginPath();
-    c.moveTo(6 * ds, 0);
-    c.lineTo(12 * ds, gh);
-    c.moveTo(12 * ds, 0);
-    c.lineTo(18 * ds, gh);
-    c.stroke();
-    // Track.
-    const tw = gw - capL - capR;
-    c.fillStyle = '#0c0d10';
-    c.fillRect(capL - 2 * ds, 0, tw + 4 * ds, gh);
-    // Right cap chevron groove.
-    c.beginPath();
-    c.moveTo(gw - 10 * ds, 2 * ds);
-    c.lineTo(gw - 4 * ds, gh / 2);
-    c.lineTo(gw - 10 * ds, gh - 2 * ds);
-    c.stroke();
-    // Empty backing inside the segments.
-    c.translate(capL, 0);
-    c.beginPath();
-    this.traceSegments(c, tw, gh, ds);
-    c.clip();
-    c.fillStyle = '#232429';
-    c.fillRect(0, 0, tw + 8 * ds, gh);
-    c.restore();
-  }
-
-  /** Gold chevron dividers between segments (drawn over the fill). */
-  private paintGaugeDividers(
-    c: CanvasRenderingContext2D,
-    tw: number,
-    gh: number,
-    ds: number,
-  ): void {
-    const segs = 8;
-    const tip = 8 * ds;
-    const segGap = 4 * ds;
-    const segW = (tw - segGap * (segs - 1)) / segs;
-    const divGrad = c.createLinearGradient(0, 0, 0, gh);
-    divGrad.addColorStop(0, GOLD_LIGHT);
-    divGrad.addColorStop(1, GOLD_DARK);
-    c.strokeStyle = divGrad;
-    c.lineWidth = 2.6 * ds;
-    c.beginPath();
-    for (let i = 1; i < segs; i++) {
-      const x0 = i * (segW + segGap) - segGap / 2;
-      c.moveTo(x0 - tip / 2, 1 * ds);
-      c.lineTo(x0 + tip / 2, gh / 2);
-      c.lineTo(x0 - tip / 2, gh - 1 * ds);
-    }
-    c.stroke();
-  }
-
   /** Dance gauge: gold-cab industrial frame spanning the lane top, split into
    *  big chevron-pill segments — flowing green stream, scrolling rainbow when
    *  full, pulsing red in danger. Chrome and dividers are cached sprites; the
@@ -1022,13 +1272,13 @@ export class DdrA3Theme implements Theme {
 
     ctx.save();
     const chrome = this.store.sprite('gauge:chrome', sprW, sprH, (c) =>
-      this.paintGaugeChrome(c, gw, gh, ds, capL, capR),
+      paintGaugeChrome(c, gw, gh, ds, capL, capR),
     );
     if (chrome) ctx.drawImage(chrome, gx - o, gy - o, sprW, sprH);
     else {
       ctx.save();
       ctx.translate(gx - o, gy - o);
-      this.paintGaugeChrome(ctx, gw, gh, ds, capL, capR);
+      paintGaugeChrome(ctx, gw, gh, ds, capL, capR);
       ctx.restore();
     }
 
@@ -1040,13 +1290,13 @@ export class DdrA3Theme implements Theme {
       if (typeof Path2D !== 'undefined') {
         if (this.segPathKey !== pathKey || !this.segPath) {
           this.segPath = new Path2D();
-          this.traceSegments(this.segPath, tw, gh, ds);
+          traceSegments(this.segPath, tw, gh, ds);
           this.segPathKey = pathKey;
         }
         ctx.clip(this.segPath);
       } else {
         ctx.beginPath();
-        this.traceSegments(ctx, tw, gh, ds);
+        traceSegments(ctx, tw, gh, ds);
         ctx.clip();
       }
       const fw = Math.max(2 * ds, (tw + 8 * ds) * life);
@@ -1094,13 +1344,13 @@ export class DdrA3Theme implements Theme {
     }
 
     const div = this.store.sprite('gauge:div', tw + 8 * ds, gh, (c) =>
-      this.paintGaugeDividers(c, tw, gh, ds),
+      paintGaugeDividers(c, tw, gh, ds),
     );
     if (div) ctx.drawImage(div, tx, gy, tw + 8 * ds, gh);
     else {
       ctx.save();
       ctx.translate(tx, gy);
-      this.paintGaugeDividers(ctx, tw, gh, ds);
+      paintGaugeDividers(ctx, tw, gh, ds);
       ctx.restore();
     }
     ctx.restore();
@@ -1114,19 +1364,8 @@ export class DdrA3Theme implements Theme {
     const ph = 52 * ds;
     const px = (width - pw) / 2;
     const py = height - ph - 8 * ds;
-    const paint = (c: CanvasRenderingContext2D): void => {
-      c.fillStyle = PANEL_BG;
-      c.fillRect(0, 0, pw, ph);
-      c.textAlign = 'center';
-      c.fillStyle = '#f4f4f6';
-      c.font = squareFont(700, 19 * ds);
-      c.fillText(v.meta.title || 'stepzone', pw / 2, 23 * ds, pw - 24 * ds);
-      if (v.meta.subtitle) {
-        c.fillStyle = '#c9cacd';
-        c.font = squareFont(600, 13 * ds);
-        c.fillText(v.meta.subtitle, pw / 2, 41 * ds, pw - 24 * ds);
-      }
-    };
+    const paint = (c: CanvasRenderingContext2D): void =>
+      paintSongPanel(c, pw, ph, ds, v.meta.title, v.meta.subtitle);
     const spr = this.store.slot(
       'song',
       `${v.meta.title}|${v.meta.subtitle}|${Math.round(pw)}`,
@@ -1167,106 +1406,8 @@ export class DdrA3Theme implements Theme {
     const grade = judge.grade;
     const m = 4 * ds; // sprite margin for the trim strokes
 
-    const paint = (c: CanvasRenderingContext2D): void => {
-      c.translate(m, m);
-      // Row 1: difficulty + grade, angled left edge.
-      c.beginPath();
-      c.moveTo(14 * ds, 0);
-      c.lineTo(pw, 0);
-      c.lineTo(pw, rowH);
-      c.lineTo(4 * ds, rowH);
-      c.closePath();
-      c.fillStyle = PANEL_BG;
-      c.fill();
-      c.strokeStyle = GOLD_MID;
-      c.lineWidth = 1.2 * ds;
-      c.stroke();
-
-      let dc = GOLD_LIGHT;
-      for (const [name, color] of DIFF_COLOR) {
-        if (diff.includes(name)) {
-          dc = color;
-          break;
-        }
-      }
-      // Trailing meter number renders white, like A3's "EXPERT 16".
-      const meter = /^(.*?)\s*(\d+)$/.exec(diff);
-      c.textAlign = 'left';
-      c.font = squareFont(700, 13 * ds);
-      if (meter) {
-        c.fillStyle = dc;
-        c.fillText(meter[1], 16 * ds, 16 * ds, pw * 0.5);
-        c.fillStyle = '#f2f2f4';
-        c.fillText(
-          meter[2],
-          16 * ds + Math.min(pw * 0.5, c.measureText(meter[1]).width) + 6 * ds,
-          16 * ds,
-        );
-      } else {
-        c.fillStyle = dc;
-        c.fillText(diff, 16 * ds, 16 * ds, pw * 0.62);
-      }
-      c.textAlign = 'right';
-      c.fillStyle = '#ffd83c';
-      c.font = roundFont(14 * ds);
-      c.fillText(grade, pw - 10 * ds, 16.5 * ds);
-      // Gold slash divider.
-      c.strokeStyle = GOLD_MID;
-      c.lineWidth = 2 * ds;
-      c.beginPath();
-      c.moveTo(pw * 0.68, 3 * ds);
-      c.lineTo(pw * 0.64, rowH - 3 * ds);
-      c.stroke();
-
-      // Row 2: hexagonal score bar.
-      const sy = rowH + 2 * ds;
-      const cut = 12 * ds;
-      c.beginPath();
-      c.moveTo(cut, sy);
-      c.lineTo(pw - cut, sy);
-      c.lineTo(pw, sy + scoreH / 2);
-      c.lineTo(pw - cut, sy + scoreH);
-      c.lineTo(cut, sy + scoreH);
-      c.lineTo(0, sy + scoreH / 2);
-      c.closePath();
-      c.fillStyle = PANEL_BG;
-      c.fill();
-      const trim = c.createLinearGradient(0, sy, 0, sy + scoreH);
-      trim.addColorStop(0, GOLD_LIGHT);
-      trim.addColorStop(1, GOLD_DARK);
-      c.strokeStyle = trim;
-      c.lineWidth = 1.6 * ds;
-      c.stroke();
-
-      // 7-digit money score with commas, leading zeros dimmed.
-      const firstSig = digits.search(/[1-9]/);
-      let text = '';
-      const dim: boolean[] = [];
-      for (let i = 0; i < 7; i++) {
-        const isDim = firstSig === -1 || i < firstSig;
-        if (i === 1 || i === 4) {
-          text += ',';
-          dim.push(firstSig === -1 || i - 1 < firstSig); // comma follows its digit
-        }
-        text += digits[i];
-        dim.push(isDim);
-      }
-      c.font = roundFont(25 * ds);
-      c.textAlign = 'left';
-      c.lineJoin = 'round';
-      const widths = Array.from(text, (ch) => c.measureText(ch).width);
-      const total = widths.reduce((a, b) => a + b, 0);
-      let dx = (pw - total) / 2;
-      const dy = sy + scoreH / 2 + 8 * ds;
-      for (let i = 0; i < text.length; i++) {
-        c.strokeStyle = OUTLINE_INK;
-        c.lineWidth = 3.5 * ds;
-        c.strokeText(text[i], dx, dy);
-        c.fillStyle = dim[i] ? '#494a4f' : '#f6f6f8';
-        c.fillText(text[i], dx, dy);
-        dx += widths[i];
-      }
-    };
+    const paint = (c: CanvasRenderingContext2D): void =>
+      paintScorePanel(c, pw, rowH, scoreH, ds, m, digits, diff, grade);
 
     const spr = this.store.slot(
       'score',
@@ -1282,45 +1423,6 @@ export class DdrA3Theme implements Theme {
       paint(ctx);
     }
     ctx.restore();
-  }
-
-  /** Paint the judgment lettering with baked glow/rims at a left baseline. */
-  private paintJudgment(
-    c: CanvasRenderingContext2D,
-    label: string,
-    ink: readonly [string, string, string],
-    px: number,
-    ds: number,
-    pad: number,
-    shine: boolean,
-  ): void {
-    c.translate(pad, pad + px * 0.78);
-    c.textAlign = 'left';
-    c.lineJoin = 'round';
-    c.font = roundFont(px);
-    if (shine) {
-      c.fillStyle = '#ffffff';
-      c.fillText(label, 0, 0);
-      return;
-    }
-    // Colored glow + fat white rim.
-    c.shadowColor = ink[2];
-    c.shadowBlur = 9 * ds;
-    c.strokeStyle = '#ffffff';
-    c.lineWidth = 7.5 * ds;
-    c.strokeText(label, 0, 0);
-    c.shadowColor = 'transparent';
-    c.shadowBlur = 0;
-    // Dark line between rim and core.
-    c.strokeStyle = 'rgba(14,14,20,0.95)';
-    c.lineWidth = 3.4 * ds;
-    c.strokeText(label, 0, 0);
-    // Core gradient.
-    const g = c.createLinearGradient(0, -px * 0.78, 0, px * 0.12);
-    g.addColorStop(0, ink[0]);
-    g.addColorStop(1, ink[1]);
-    c.fillStyle = g;
-    c.fillText(label, 0, 0);
   }
 
   /** A3 judgment: Title Case rounded lettering — color-gradient core, white
@@ -1351,7 +1453,7 @@ export class DdrA3Theme implements Theme {
       textW === null
         ? null
         : this.store.sprite(`judg:${tns}`, textW + 2 * pad, px * 1.1 + 2 * pad, (c) =>
-            this.paintJudgment(c, j.label, ink, px, ds, pad, false),
+            paintJudgment(c, j.label, ink, px, ds, pad, false),
           );
     if (spr && textW !== null) {
       const w = textW + 2 * pad;
@@ -1359,7 +1461,7 @@ export class DdrA3Theme implements Theme {
       ctx.drawImage(spr, -w / 2, -(pad + px * 0.78), w, h);
       if (shimmer) {
         const shine = this.store.sprite(`judgshine:${tns}`, w, h, (c) =>
-          this.paintJudgment(c, j.label, ink, px, ds, pad, true),
+          paintJudgment(c, j.label, ink, px, ds, pad, true),
         );
         if (shine) {
           ctx.globalAlpha = 0.35;
@@ -1392,55 +1494,6 @@ export class DdrA3Theme implements Theme {
       }
     }
     ctx.restore();
-  }
-
-  /** Paint the combo block (number + lowercase word on a shared baseline)
-   *  with the join point at (joinOff, baseY). */
-  private paintCombo(
-    c: CanvasRenderingContext2D,
-    count: string,
-    tint: readonly [string, string],
-    px: number,
-    ds: number,
-    joinOff: number,
-    baseY: number,
-  ): void {
-    c.lineJoin = 'round';
-    // Number: right-aligned against the join, condensed tall digits like the
-    // A3 combo numerals.
-    c.save();
-    c.translate(joinOff, baseY);
-    c.scale(0.84, 1);
-    c.textAlign = 'right';
-    c.font = roundFont(px);
-    c.strokeStyle = '#ffffff';
-    c.lineWidth = px * 0.13;
-    c.strokeText(count, 0, 0);
-    c.strokeStyle = OUTLINE_INK;
-    c.lineWidth = px * 0.075;
-    c.strokeText(count, 0, 0);
-    const g = c.createLinearGradient(0, -px * 0.9, 0, 0);
-    g.addColorStop(0, tint[0]);
-    g.addColorStop(1, tint[1]);
-    c.fillStyle = g;
-    c.fillText(count, 0, 0);
-    c.restore();
-    // Lowercase "combo", fixed size, sharing the baseline.
-    const wpx = px * 0.42;
-    c.translate(joinOff + 6 * ds, baseY);
-    c.textAlign = 'left';
-    c.font = roundFont(wpx);
-    c.strokeStyle = '#ffffff';
-    c.lineWidth = wpx * 0.15;
-    c.strokeText('combo', 0, 0);
-    c.strokeStyle = OUTLINE_INK;
-    c.lineWidth = wpx * 0.085;
-    c.strokeText('combo', 0, 0);
-    const g2 = c.createLinearGradient(0, -wpx, 0, 0);
-    g2.addColorStop(0, tint[0]);
-    g2.addColorStop(1, tint[1]);
-    c.fillStyle = g2;
-    c.fillText('combo', 0, 0);
   }
 
   /** Combo: big tier-tinted numerals (black outline + white rim) with the
@@ -1486,7 +1539,7 @@ export class DdrA3Theme implements Theme {
         `${count}|${tint[1]}|${Math.round(px * 10)}`,
         w,
         h,
-        (cc) => this.paintCombo(cc, count, tint, px, ds, joinOff, baseY),
+        (cc) => paintCombo(cc, count, tint, px, ds, joinOff, baseY),
       );
       if (spr) {
         ctx.drawImage(spr, -joinOff, -baseY, w, h);
@@ -1495,7 +1548,7 @@ export class DdrA3Theme implements Theme {
       }
     }
     // Direct fallback.
-    this.paintCombo(ctx, count, tint, px, ds, 0, 0);
+    paintCombo(ctx, count, tint, px, ds, 0, 0);
     ctx.restore();
   }
 }

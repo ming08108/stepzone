@@ -44,13 +44,13 @@ export type { Feedback, RenderMeta } from './theme';
 // Design grid: the playfield is authored on a 720px-tall reference layout and
 // scaled by ds = min(height, width) / 720. Height sets the scale; the width
 // term only clamps it so the field never overruns a narrow canvas; the floor
-// keeps tiny canvases legible.
-const DESIGN_SIZE = 720;
-const MIN_DESIGN_SCALE = 0.5;
+// keeps tiny canvases legible. (Exported: the WebGPU renderer shares the grid.)
+export const DESIGN_SIZE = 720;
+export const MIN_DESIGN_SCALE = 0.5;
 /** Lane width in design px. */
-const LANE_W = 88;
+export const LANE_W = 88;
 /** Arrow half-extent in design px (an 80px arrow). */
-const ARROW_HALF = 40;
+export const ARROW_HALF = 40;
 
 /**
  * Renderer configuration: the render subset of the shared PlayOptions plus
@@ -72,6 +72,12 @@ export interface NoteFieldConfig extends Pick<
   /** Per-column arrow rotation (radians); see render/columns.ts. */
   columnAngles: readonly number[];
   meta: RenderMeta;
+  /**
+   * Wraps the Theme whenever one is created (constructor and noteSkin
+   * changes). Instrumentation hook for the render benchmark — per-pass
+   * timing — never set by gameplay.
+   */
+  wrapTheme?: (theme: Theme) => Theme;
 }
 
 export const DEFAULT_NOTE_FIELD_CONFIG: NoteFieldConfig = {
@@ -115,7 +121,7 @@ export class NoteFieldRenderer {
     this.cfg = { ...DEFAULT_NOTE_FIELD_CONFIG, ...config };
     if (this.cfg.songMaxBpm <= 0) this.cfg.songMaxBpm = FALLBACK_MAX_BPM;
     if (this.cfg.columnAngles.length === 0) this.cfg.columnAngles = columnAnglesFor('', numTracks);
-    this.theme = createTheme(this.cfg.noteSkin);
+    this.theme = this.makeTheme(this.cfg.noteSkin);
     this.view = {
       width: this.width,
       height: this.height,
@@ -173,7 +179,7 @@ export class NoteFieldRenderer {
     }
     if (patch.noteSkin !== undefined && patch.noteSkin !== c.noteSkin) {
       c.noteSkin = patch.noteSkin;
-      this.theme = createTheme(patch.noteSkin);
+      this.theme = this.makeTheme(patch.noteSkin);
       resetCursor = true;
     }
     if (patch.bare !== undefined) c.bare = patch.bare;
@@ -188,6 +194,11 @@ export class NoteFieldRenderer {
   /** Background video/image drawn behind the field, or null. */
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.background = media;
+  }
+
+  private makeTheme(skin: NoteSkin): Theme {
+    const theme = createTheme(skin);
+    return this.cfg.wrapTheme ? this.cfg.wrapTheme(theme) : theme;
   }
 
   resize(width: number, height: number, dpr = 1): void {
