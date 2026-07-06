@@ -209,14 +209,11 @@ export function SongSelect({
   const stats = useMemo(() => loadStats(), []);
   const bestsBySong = useMemo(() => {
     const m = new Map<string, Array<{ percent: number; grade: string } | null>>();
-    for (const [k, s] of Object.entries(loadScores())) {
-      // chartKey = songKey·stepsType·difficulty·meter — the song key may
-      // itself contain ·, so peel the last three fields off the end.
-      const parts = k.split('·');
-      if (parts.length < 4) continue;
-      const sk = parts.slice(0, -3).join('·');
-      // Stored difficulty is the numeric enum; bucket it like the chip stack.
-      const slot = difficultySlot(difficultyToString(Number(parts[parts.length - 2])));
+    // Records are keyed by chart content hash; the song/difficulty labels
+    // stored on each record say where it displays. Bucket like the chip stack.
+    for (const s of Object.values(loadScores())) {
+      const sk = songKey(s.title, s.artist);
+      const slot = difficultySlot(difficultyToString(s.difficulty));
       const slots = m.get(sk) ?? [null, null, null, null, null];
       const prev = slots[slot];
       if (!prev || s.percent > prev.percent) {

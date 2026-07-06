@@ -7,7 +7,7 @@ import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
-import { chartKey, recordPlay, type ChartScore } from '../app/scores';
+import { recordPlay, type ChartScore } from '../app/scores';
 import { addSongPlay, addSteps } from '../app/stats';
 import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
@@ -238,10 +238,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       playCountedRef.current = false; // a RETRY from here is a new play
       const counts = { ...judge.tapCounts };
       // Practice runs never reach here (they loop until exit), but make sure a
-      // section-only score can never land in the real records.
-      const { best, isNewRecord } = req.practice
+      // section-only score can never land in the real records. Rate-modded
+      // plays aren't comparable to full-speed ones, so they don't count either.
+      const unranked = req.practice != null || settings.musicRate !== 1;
+      const { best, isNewRecord } = unranked
         ? { best: null, isNewRecord: false }
-        : recordPlay(chartKey(req.song, req.chart), {
+        : recordPlay(req.song, req.chart, {
             percent: judge.percentDancePoints,
             grade: judge.grade,
             maxCombo: judge.maxCombo,
@@ -413,6 +415,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               {result.isNewRecord && (
                 <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
                   ★ NEW RECORD
+                </div>
+              )}
+              {settings.musicRate !== 1 && (
+                <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
+                  RATE ×{settings.musicRate.toFixed(2)} — SCORE NOT SAVED
                 </div>
               )}
               <div className="mt-2 w-[280px]">
