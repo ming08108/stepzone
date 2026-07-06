@@ -540,7 +540,7 @@ export function SongSelect({
     };
   }, [selClamped, filtered, ensureLoaded]);
 
-  // The selected song's pack art, as a dim backdrop behind the list (#8).
+  // The selected song's pack art, a dim backdrop behind the detail header (#8).
   // Full scans stashed it already; catalog rows resolve it with one directory
   // listing of the pack folder, remembered (even as "none") per pack.
   const [packArt, setPackArt] = useState<string | null>(null);
@@ -840,8 +840,21 @@ export function SongSelect({
         }}
       />
 
-      {/* Detail panel */}
-      <div className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]">
+      {/* Detail panel — the selected song's pack art shows here (todos3 #8),
+          a dim cinematic strip behind the header instead of washing out the
+          whole list. */}
+      <div
+        className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]"
+        style={
+          packArt
+            ? {
+                backgroundImage: `linear-gradient(to right, #0b0c0e 0%, rgba(11,12,14,.55) 30%, rgba(11,12,14,.55) 70%, #0b0c0e 100%), url(${packArt})`,
+                backgroundSize: 'auto, cover',
+                backgroundPosition: 'center, center',
+              }
+            : undefined
+        }
+      >
         <div className="relative h-[144px] w-[256px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]">
           {song?.entry.bannerUrl ? (
             <img
@@ -994,15 +1007,6 @@ export function SongSelect({
       <div
         ref={listRef}
         className="relative min-h-0 flex-1 overflow-hidden"
-        style={
-          packArt
-            ? {
-                backgroundImage: `linear-gradient(to right, #0b0c0e 0%, rgba(11,12,14,.62) 30%, rgba(11,12,14,.62) 70%, #0b0c0e 100%), url(${packArt})`,
-                backgroundSize: 'auto, cover',
-                backgroundPosition: 'center, center',
-              }
-            : undefined
-        }
         onWheel={(e) => {
           // Scroll wheel moves the selection (#6). Accumulate for trackpads.
           wheelAcc.current += e.deltaY;
