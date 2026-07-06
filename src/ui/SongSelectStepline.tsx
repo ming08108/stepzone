@@ -51,6 +51,8 @@ import { useGamepadKeys } from './useGamepadKeys';
 
 const AC = '#ff5d47';
 const FAV_CLR = '#ffcf3d';
+/** Classic 256×80 banner shape — the de-facto standard for pack art. */
+const BANNER_RATIO = 256 / 80;
 const NO_BESTS: ReadonlyArray<{ percent: number; grade: string } | null> = [
   null,
   null,
@@ -514,14 +516,17 @@ export function SongSelect({
   const songBest = song?.bests[diff] ?? null;
 
   // The header art box follows each image's own shape (jackets are square,
-  // classic banners ~3:1) instead of cropping everything to one fixed frame.
-  // Clamped so extreme shapes can't blow up the header — art wider/taller
-  // than the clamp letterboxes over a blurred fill instead of cropping.
-  // Unknown (still loading / no art) falls back to the old 16:9 frame.
+  // classic banners 3.2:1) instead of cropping everything to one fixed frame.
+  // The standard 256×80 banner ratio is the clamp ceiling AND the resting
+  // default, and the last loaded shape sticks until the next art loads — so
+  // scrolling a pack of standard banners never resizes the box. Art outside
+  // the clamp letterboxes over a blurred fill instead of cropping.
   const [artRatio, setArtRatio] = useState<number | null>(null);
   const bannerUrl = song?.entry.bannerUrl ?? null;
-  useEffect(() => setArtRatio(null), [bannerUrl]);
-  const artW = Math.round(144 * Math.min(2.8, Math.max(1, artRatio ?? 16 / 9)));
+  const artW = Math.round(
+    144 *
+      Math.min(BANNER_RATIO, Math.max(1, bannerUrl ? (artRatio ?? BANNER_RATIO) : BANNER_RATIO)),
+  );
 
   // Remember filters/selection so returning from a song restores the list (#2).
   useEffect(() => {
