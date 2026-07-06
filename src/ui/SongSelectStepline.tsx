@@ -515,8 +515,9 @@ export function SongSelect({
 
   // The header art box follows each image's own shape (jackets are square,
   // classic banners ~3:1) instead of cropping everything to one fixed frame.
-  // Clamped so extreme shapes can't blow up the header; unknown (still
-  // loading / no art) falls back to the old 16:9 frame.
+  // Clamped so extreme shapes can't blow up the header — art wider/taller
+  // than the clamp letterboxes over a blurred fill instead of cropping.
+  // Unknown (still loading / no art) falls back to the old 16:9 frame.
   const [artRatio, setArtRatio] = useState<number | null>(null);
   const bannerUrl = song?.entry.bannerUrl ?? null;
   useEffect(() => setArtRatio(null), [bannerUrl]);
@@ -890,19 +891,27 @@ export function SongSelect({
           style={{ width: artW, transition: 'width .16s ease-out' }}
         >
           {bannerUrl ? (
-            <img
-              key={bannerUrl}
-              src={bannerUrl}
-              alt=""
-              loading="lazy"
-              onLoad={(e) => {
-                const el = e.currentTarget;
-                if (el.naturalWidth > 0 && el.naturalHeight > 0) {
-                  setArtRatio(el.naturalWidth / el.naturalHeight);
-                }
-              }}
-              className="h-full w-full object-cover"
-            />
+            <>
+              <img
+                src={bannerUrl}
+                alt=""
+                aria-hidden
+                className="absolute inset-0 h-full w-full scale-110 object-cover blur-md brightness-[.4]"
+              />
+              <img
+                key={bannerUrl}
+                src={bannerUrl}
+                alt=""
+                loading="lazy"
+                onLoad={(e) => {
+                  const el = e.currentTarget;
+                  if (el.naturalWidth > 0 && el.naturalHeight > 0) {
+                    setArtRatio(el.naturalWidth / el.naturalHeight);
+                  }
+                }}
+                className="relative h-full w-full object-contain"
+              />
+            </>
           ) : (
             <div
               className="flex h-full w-full items-center justify-center text-[48px] font-bold tracking-[0.06em] text-white/90"
