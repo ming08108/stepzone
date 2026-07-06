@@ -141,6 +141,7 @@ export class GpuNoteField {
 
   // Layout (recomputed on resize/config).
   private ds = 1;
+  private dpr = 1;
   private colW = LANE_W;
   private arrowS = ARROW_HALF;
   private fieldLeft = 0;
@@ -152,24 +153,27 @@ export class GpuNoteField {
   private comboPopAt = -10;
   private readonly scroll: ScrollState;
 
-  private readonly atlas: GpuAtlas;
-  private readonly batch: QuadBatch;
+  // Rebuilt by ensureAtlas() when the display demands a different texture
+  // size or bake resolution (4K fullscreen, monitor dpr changes).
+  private atlas!: GpuAtlas;
+  private batch!: QuadBatch;
+  private atlasSize = 0;
+  private atlasScale = 0;
   private readonly media: MediaLayer;
 
   private constructor(
     private readonly device: GPUDevice,
     private readonly ctx: GPUCanvasContext,
     private readonly canvas: HTMLCanvasElement,
-    format: GPUTextureFormat,
+    private readonly format: GPUTextureFormat,
     readonly numTracks: number,
     config: Partial<GpuFieldConfig>,
   ) {
     this.cfg = { ...DEFAULT_GPU_CONFIG, ...config };
     if (this.cfg.songMaxBpm <= 0) this.cfg.songMaxBpm = FALLBACK_MAX_BPM;
     if (this.cfg.columnAngles.length === 0) this.cfg.columnAngles = columnAnglesFor('', numTracks);
-    this.atlas = new GpuAtlas(device);
-    this.batch = new QuadBatch(device, format, this.atlas.texture.createView());
     this.media = new MediaLayer(device, format);
+    this.ensureAtlas();
 
     this.scroll = {
       mode: this.cfg.scrollMode,
@@ -240,6 +244,25 @@ export class GpuNoteField {
     this.media.setSource(media);
   }
 
+  /**
+   * (Re)build the atlas + quad batch for the current display: sprites bake at
+   * the actual devicePixelRatio (1..2 — exactly backing-store sharp), and the
+   * texture grows to 4096² when the design scale × bake scale would overflow
+   * 2048² (a 4K fullscreen reaches ds 3; the widest HUD sprites are ~520·ds
+   * css). No-op when nothing changed.
+   */
+  private ensureAtlas(): void {
+    const scale = Math.min(2, Math.max(1, this.dpr));
+    const size = this.ds * scale > 2.5 ? 4096 : 2048;
+    if (this.atlasSize === size && this.atlasScale === scale) return;
+    this.atlasSize = size;
+    this.atlasScale = scale;
+    this.batch?.destroy();
+    this.atlas?.destroy();
+    this.atlas = new GpuAtlas(this.device, size, scale);
+    this.batch = new QuadBatch(this.device, this.format, this.atlas.texture.createView());
+  }
+
   applyConfig(patch: Partial<GpuFieldConfig>): void {
     const c = this.cfg;
     let resetCursor = false;
@@ -270,6 +293,7 @@ export class GpuNoteField {
   resize(width: number, height: number, dpr = 1): void {
     this.width = width;
     this.height = height;
+    this.dpr = dpr;
     this.canvas.width = Math.max(1, Math.round(width * dpr));
     this.canvas.height = Math.max(1, Math.round(height * dpr));
     this.layout();
@@ -351,6 +375,9 @@ export class GpuNoteField {
   draw(judge: Judge, now: number, beat: number, progress: number, fb: Feedback): void {
     if (this.lost) return;
     const { width, height, ds } = this;
+    // Display changes: dpr/size changes swap in a right-sized atlas; a design-
+    // scale change on the same atlas just rebakes (sprites are ds-dependent).
+    this.ensureAtlas();
     if (ds !== this.lastDs) {
       this.lastDs = ds;
       this.atlas.clear();

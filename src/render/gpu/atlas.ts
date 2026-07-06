@@ -10,12 +10,13 @@
  * already invalidates every sprite, exactly like the 2D SpriteStore).
  * Dynamic text ("slots": combo counter, score panel) repaints in place when
  * its content key changes and only reallocates if it outgrows its region.
+ *
+ * `size` and `bakeScale` are fixed per instance: the note field constructs a
+ * new atlas when the display demands different ones (a 4K fullscreen needs a
+ * 4096² texture; bake resolution follows devicePixelRatio so sprites are
+ * exactly backing-store sharp with no wasted memory).
  */
 
-/** Supersample factor for baked sprites, matching the 2D theme's SPRITE_SCALE. */
-export const ATLAS_SPRITE_SCALE = 2;
-
-const ATLAS_SIZE = 2048;
 /** Empty border around every sprite so bilinear sampling never bleeds. */
 const PAD = 2;
 
@@ -46,15 +47,22 @@ export class GpuAtlas {
   private readonly sctx: CanvasRenderingContext2D;
   private sprites = new Map<string, AtlasRect | null>();
   private slots = new Map<string, Slot>();
+  private warnedClamp = false;
   // Shelf allocator state.
   private shelfX = PAD;
   private shelfY = PAD;
   private shelfH = 0;
 
-  constructor(private readonly device: GPUDevice) {
+  constructor(
+    private readonly device: GPUDevice,
+    /** Texture edge in px (2048 normally, 4096 for 4K-class layouts). */
+    readonly size = 2048,
+    /** Bake resolution multiplier over css px (the display's dpr, 1..2). */
+    readonly bakeScale = 2,
+  ) {
     this.texture = device.createTexture({
       label: 'notefield-atlas',
-      size: [ATLAS_SIZE, ATLAS_SIZE],
+      size: [size, size],
       format: 'rgba8unorm',
       usage:
         GPUTextureUsage.TEXTURE_BINDING |
@@ -62,11 +70,26 @@ export class GpuAtlas {
         GPUTextureUsage.RENDER_ATTACHMENT,
     });
     this.scratch = document.createElement('canvas');
-    this.scratch.width = ATLAS_SIZE;
+    this.scratch.width = size;
     this.scratch.height = 1024;
     const c = this.scratch.getContext('2d');
     if (!c) throw new Error('2D scratch context unavailable for atlas baking');
     this.sctx = c;
+  }
+
+  /** Pixel size of `n` css px at this atlas's bake resolution, clamped to
+   *  what the texture can hold (with a one-time squawk — a clamped sprite
+   *  draws stretched, which should never happen if sizing upstream is right). */
+  private toPx(n: number, cap: number): number {
+    const px = Math.max(1, Math.ceil(n * this.bakeScale));
+    if (px > cap) {
+      if (!this.warnedClamp) {
+        this.warnedClamp = true;
+        console.warn(`[gpu-notefield] sprite exceeds ${this.size}px atlas (${px}px) — clamped`);
+      }
+      return cap;
+    }
+    return px;
   }
 
   /** Drop every sprite (design-scale change / font arrival); regions rebake lazily. */
@@ -80,12 +103,12 @@ export class GpuAtlas {
 
   /** Allocate a pixel region, or null when the atlas is full. */
   private alloc(pw: number, ph: number): { px: number; py: number } | null {
-    if (this.shelfX + pw + PAD > ATLAS_SIZE) {
+    if (this.shelfX + pw + PAD > this.size) {
       this.shelfX = PAD;
       this.shelfY += this.shelfH + PAD;
       this.shelfH = 0;
     }
-    if (this.shelfY + ph + PAD > ATLAS_SIZE || pw + 2 * PAD > ATLAS_SIZE) return null;
+    if (this.shelfY + ph + PAD > this.size || pw + 2 * PAD > this.size) return null;
     const at = { px: this.shelfX, py: this.shelfY };
     this.shelfX += pw + PAD;
     this.shelfH = Math.max(this.shelfH, ph);
@@ -108,7 +131,7 @@ export class GpuAtlas {
     c.beginPath();
     c.rect(0, 0, uw, uh);
     c.clip();
-    c.scale(ATLAS_SPRITE_SCALE, ATLAS_SPRITE_SCALE);
+    c.scale(this.bakeScale, this.bakeScale);
     paint(c);
     c.restore();
     this.device.queue.copyExternalImageToTexture(
@@ -131,8 +154,8 @@ export class GpuAtlas {
   ): AtlasRect | null {
     let rect = this.sprites.get(key);
     if (rect !== undefined) return rect;
-    const pw = Math.min(ATLAS_SIZE - 2 * PAD, Math.max(1, Math.ceil(w * ATLAS_SPRITE_SCALE)));
-    const ph = Math.min(1024, Math.max(1, Math.ceil(h * ATLAS_SPRITE_SCALE)));
+    const pw = this.toPx(w, this.size - 2 * PAD);
+    const ph = this.toPx(h, 1024);
     const at = this.alloc(pw, ph);
     if (!at) {
       // Full — remember the miss so we don't re-try every frame.
@@ -141,10 +164,10 @@ export class GpuAtlas {
     }
     this.bake(at.px, at.py, pw, ph, paint);
     rect = {
-      u0: at.px / ATLAS_SIZE,
-      v0: at.py / ATLAS_SIZE,
-      u1: (at.px + pw) / ATLAS_SIZE,
-      v1: (at.py + ph) / ATLAS_SIZE,
+      u0: at.px / this.size,
+      v0: at.py / this.size,
+      u1: (at.px + pw) / this.size,
+      v1: (at.py + ph) / this.size,
       w,
       h,
     };
@@ -165,13 +188,13 @@ export class GpuAtlas {
     h: number,
     paint: (c: CanvasRenderingContext2D) => void,
   ): AtlasRect | null {
-    const pw = Math.min(ATLAS_SIZE - 2 * PAD, Math.max(1, Math.ceil(w * ATLAS_SPRITE_SCALE)));
-    const ph = Math.min(1024, Math.max(1, Math.ceil(h * ATLAS_SPRITE_SCALE)));
+    const pw = this.toPx(w, this.size - 2 * PAD);
+    const ph = this.toPx(h, 1024);
     let s = this.slots.get(slot);
     if (s && (pw > s.pw || ph > s.ph)) s = undefined; // outgrown — reallocate
     if (!s) {
       // Over-allocate a little so combo growing a digit doesn't reallocate.
-      const aw = Math.min(ATLAS_SIZE - 2 * PAD, Math.ceil(pw * 1.25));
+      const aw = Math.min(this.size - 2 * PAD, Math.ceil(pw * 1.25));
       const at = this.alloc(aw, ph);
       if (!at) return null;
       s = {
@@ -188,10 +211,10 @@ export class GpuAtlas {
       s.key = key;
       this.bake(s.px, s.py, s.pw, s.ph, paint);
       s.rect = {
-        u0: s.px / ATLAS_SIZE,
-        v0: s.py / ATLAS_SIZE,
-        u1: (s.px + pw) / ATLAS_SIZE,
-        v1: (s.py + ph) / ATLAS_SIZE,
+        u0: s.px / this.size,
+        v0: s.py / this.size,
+        u1: (s.px + pw) / this.size,
+        v1: (s.py + ph) / this.size,
         w,
         h,
       };
