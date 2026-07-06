@@ -66,7 +66,6 @@ import {
   TUBE_GREY,
   measureWidth,
   paintBoom,
-  paintCombo,
   paintGaugeChrome,
   paintGaugeDividers,
   paintHoldTile,
@@ -82,6 +81,7 @@ import {
   type HoldSkin,
 } from '../themes/ddrA3';
 import { GpuAtlas } from './atlas';
+import { GlyphBank, type Tint } from './glyphs';
 import { MediaLayer } from './media';
 import { cropUV, QuadBatch } from './quads';
 import { NoteType } from '../../notes/noteTypes';
@@ -132,6 +132,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
 
+/** Money-score digit tints (glyphs bake white; these are the exact A3 colors). */
+const SCORE_BRIGHT: Tint = parseColor('#f6f6f8');
+const SCORE_DIM: Tint = parseColor('#494a4f');
+
 /**
  * Elapsed time (seconds) of every integer beat 0..ceil(throughBeat), for the
  * beat-line pass. Takes a beat→time function (kept free of a TimingData
@@ -174,6 +178,7 @@ export class GpuNoteField {
   // size or bake resolution (4K fullscreen, monitor dpr changes).
   private atlas!: GpuAtlas;
   private batch!: QuadBatch;
+  private glyphs!: GlyphBank;
   private atlasSize = 0;
   private atlasScale = 0;
   private readonly media: MediaLayer;
@@ -206,7 +211,12 @@ export class GpuNoteField {
 
     // Rebake text sprites once real web fonts arrive (same as SpriteStore).
     if (typeof document !== 'undefined' && document.fonts?.ready) {
-      document.fonts.ready.then(() => this.atlas.clear()).catch(() => undefined);
+      document.fonts.ready
+        .then(() => {
+          this.atlas.clear();
+          this.glyphs.clear();
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -291,6 +301,7 @@ export class GpuNoteField {
     this.atlas?.destroy();
     this.atlas = new GpuAtlas(this.device, size, scale);
     this.batch = new QuadBatch(this.device, this.format, this.atlas.texture.createView());
+    this.glyphs = new GlyphBank(this.atlas);
   }
 
   applyConfig(patch: Partial<GpuFieldConfig>): void {
@@ -411,6 +422,7 @@ export class GpuNoteField {
     if (ds !== this.lastDs) {
       this.lastDs = ds;
       this.atlas.clear();
+      this.glyphs.clear();
     }
     const beatPulse = 1 - (beat - Math.floor(beat));
     const s = this.scroll;
@@ -715,31 +727,30 @@ export class GpuNoteField {
     const c = judge.combo;
     const count = String(c);
     const zoom = c >= 1000 ? 0.78 : c >= 100 ? 0.9 : 0.6 + 0.03 * Math.min(9, Math.floor(c / 10));
-    const px = this.colW * zoom;
+    const basePx = this.colW * zoom;
     const k = Math.max(0, Math.min(1, (now - this.comboPopAt) / 0.05));
-    const pop = 1 + 0.3 * (1 - k);
-    const baseline = yMid + px * 0.36;
+    const pop = 1 + 0.3 * (1 - k); // ~x1.3 bounce settling in 0.05s on each step
+    const px = basePx * pop;
+    const baseline = yMid + basePx * 0.36;
     const joinX = cx + 0.34 * this.colW;
-    const numW = measureWidth(roundFont(px), count);
-    const wordW = measureWidth(roundFont(px * 0.42), 'combo');
-    if (numW === null || wordW === null) return;
-    const pad = px * 0.14;
-    const joinOff = pad + numW * 0.84;
-    const w = joinOff + 6 * ds + wordW + pad;
-    const baseY = px * 0.92;
-    const h = px * 1.12;
-    const spr = this.atlas.slot('combo', `${count}|${tint[1]}|${Math.round(px * 10)}`, w, h, (cc) =>
-      paintCombo(cc, count, tint, px, ds, joinOff, baseY),
+    // Tint the white-baked glyphs by the tier's bright color (plain/W1 = white,
+    // so the common case is unchanged). Digits reuse cached per-glyph sprites —
+    // no per-hit re-bake.
+    const col = parseColor(tint[0]);
+    const t: Tint = [col[0], col[1], col[2], 1];
+    // Number: condensed 0.84 like the A3 numerals, right-aligned at the join.
+    this.glyphs.drawNumber(this.batch, 'combo', count, joinX, baseline, px, 'right', () => t, 0.84);
+    // Lowercase "combo" word (constant → one cached sprite) sharing the baseline.
+    this.glyphs.drawText(
+      this.batch,
+      'combo',
+      'combo',
+      joinX + 6 * ds,
+      baseline,
+      px * 0.42,
+      'left',
+      t,
     );
-    // Anchor: drawImage(-joinOff, -baseY) from translate(joinX, baseline) scale(pop).
-    if (spr)
-      this.batch.push(
-        joinX + pop * (w / 2 - joinOff),
-        baseline + pop * (h / 2 - baseY),
-        w * pop,
-        h * pop,
-        spr,
-      );
   }
 
   private holdSkinOf(alive: boolean, roll: boolean): { skin: HoldSkin; variant: string } {
@@ -1088,14 +1099,35 @@ export class GpuNoteField {
     const grade = judge.grade;
     const w = pw + 2 * m;
     const h = rowH + scoreH + 2 * ds + 2 * m;
-    const spr = this.atlas.slot(
-      'score',
-      `${digits}|${grade}|${diff}|${Math.round(pw)}`,
-      w,
-      h,
-      (c) => paintScorePanel(c, pw, rowH, scoreH, ds, m, digits, diff, grade),
+    // Frame (panel bg + difficulty + grade + gold trim) — re-bakes only when the
+    // grade changes, not every hit; the money digits draw as glyph quads.
+    const frame = this.atlas.slot('scoreframe', `${grade}|${diff}|${Math.round(pw)}`, w, h, (c) =>
+      paintScorePanel(c, pw, rowH, scoreH, ds, m, null, diff, grade),
     );
-    if (spr) this.batch.push(px - m + w / 2, py - m + h / 2, w, h, spr);
+    if (frame) this.batch.push(px - m + w / 2, py - m + h / 2, w, h, frame);
+
+    // Money digits, centered in the hex bar, leading zeros dimmed — glyph quads
+    // in panel-local coords offset to the panel's screen origin (px, py).
+    const firstSig = digits.search(/[1-9]/);
+    let text = '';
+    const dim: boolean[] = [];
+    for (let i = 0; i < 7; i++) {
+      const isDim = firstSig === -1 || i < firstSig;
+      if (i === 1 || i === 4) {
+        text += ',';
+        dim.push(firstSig === -1 || i - 1 < firstSig);
+      }
+      text += digits[i];
+      dim.push(isDim);
+    }
+    const scorePx = 25 * ds;
+    const total = this.glyphs.measure('score', scorePx, text);
+    const sy = rowH + 2 * ds;
+    const sx = px + (pw - total) / 2;
+    const dy = py + sy + scoreH / 2 + 8 * ds;
+    this.glyphs.drawNumber(this.batch, 'score', text, sx, dy, scorePx, 'left', (i) =>
+      dim[i] ? SCORE_DIM : SCORE_BRIGHT,
+    );
   }
 
   destroy(): void {

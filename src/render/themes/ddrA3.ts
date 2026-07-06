@@ -559,7 +559,9 @@ export function paintScorePanel(
   scoreH: number,
   ds: number,
   m: number,
-  digits: string,
+  /** 7-char money digits, or null to bake just the frame (the GPU field draws
+   *  the changing digits as glyph quads so the frame doesn't re-bake per hit). */
+  digits: string | null,
   diff: string,
   grade: string,
 ): void {
@@ -633,7 +635,9 @@ export function paintScorePanel(
   c.lineWidth = 1.6 * ds;
   c.stroke();
 
-  // 7-digit money score with commas, leading zeros dimmed.
+  // 7-digit money score with commas, leading zeros dimmed. Skipped when the
+  // caller draws the digits itself (GPU glyph quads) — the frame is all that bakes.
+  if (digits === null) return;
   const firstSig = digits.search(/[1-9]/);
   let text = '';
   const dim: boolean[] = [];
