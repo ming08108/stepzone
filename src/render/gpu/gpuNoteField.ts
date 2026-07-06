@@ -93,6 +93,7 @@ import {
 } from '../themes/ddrA3';
 import { GpuAtlas } from './atlas';
 import { GlyphBank, type Tint } from './glyphs';
+import { GpuTimer } from './gpuTimer';
 import { MediaLayer } from './media';
 import { cropUV, QuadBatch } from './quads';
 import { ShapeBatch, type ColorFn } from './shapes';
@@ -202,6 +203,7 @@ export class GpuNoteField {
   private atlasSize = 0;
   private atlasScale = 0;
   private readonly media: MediaLayer;
+  private readonly timer: GpuTimer;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -215,6 +217,7 @@ export class GpuNoteField {
     if (this.cfg.songMaxBpm <= 0) this.cfg.songMaxBpm = FALLBACK_MAX_BPM;
     if (this.cfg.columnAngles.length === 0) this.cfg.columnAngles = columnAnglesFor('', numTracks);
     this.media = new MediaLayer(device, format);
+    this.timer = new GpuTimer(device);
     this.ensureAtlas();
 
     this.scroll = {
@@ -250,7 +253,12 @@ export class GpuNoteField {
       if (!gpu) return null;
       const adapter = await withTimeout(gpu.requestAdapter(), 3000);
       if (!adapter) return null;
-      const device = await withTimeout(adapter.requestDevice(), 3000);
+      // Opt into timestamp queries when the adapter has them, so the benchmark
+      // can measure real GPU time per presented frame (gpuTimer.ts).
+      const requiredFeatures: GPUFeatureName[] = adapter.features.has('timestamp-query')
+        ? ['timestamp-query']
+        : [];
+      const device = await withTimeout(adapter.requestDevice({ requiredFeatures }), 3000);
       if (!device) return null;
       const ctx = canvas.getContext('webgpu');
       if (!ctx) return null;
@@ -288,10 +296,26 @@ export class GpuNoteField {
   }
 
   /** Resolves once all GPU work submitted so far has actually completed — the
-   *  benchmark awaits this to measure true throughput past the vsync cap
-   *  (rAF alone only ever reports the display's refresh rate). */
+   *  benchmark awaits this to flush pending timestamp readbacks. */
   gpuIdle(): Promise<void> {
     return this.device.queue.onSubmittedWorkDone();
+  }
+
+  /** True when GPU timestamp queries are available (adapter had the feature). */
+  get gpuTimingAvailable(): boolean {
+    return this.timer.enabled;
+  }
+
+  /** Start a fresh GPU-time collection window (call at the measure-phase start
+   *  to drop prewarm/warmup frames). */
+  resetGpuTimes(): void {
+    this.timer.reset();
+  }
+
+  /** Real GPU ms of each presented frame timed since resetGpuTimes(). Readbacks
+   *  lag ~a frame, so drain after awaiting gpuIdle(). */
+  gpuFrameTimes(): number[] {
+    return this.timer.read();
   }
 
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
@@ -687,13 +711,16 @@ export class GpuNoteField {
             storeOp: 'store',
           },
         ],
+        timestampWrites: this.timer.timestampWrites(), // real GPU time of this frame
       });
       this.media.draw(pass, width, height);
       this.batch.flush(pass); // field + gauge (textured quads)
       this.shapes.flush(pass); // panel backgrounds (geometry) over the field
       this.hudBatch.flush(pass); // panel text/digits over their backgrounds
       pass.end();
+      this.timer.resolve(enc);
       this.device.queue.submit([enc.finish()]);
+      this.timer.afterSubmit();
     } catch {
       this.lost = true;
       this.onLost?.();
@@ -1344,6 +1371,7 @@ export class GpuNoteField {
       this.batch.destroy();
       this.hudBatch.destroy();
       this.shapes.destroy();
+      this.timer.destroy();
       this.media.destroy();
       this.atlas.destroy();
       this.device.destroy();
