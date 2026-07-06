@@ -18,7 +18,7 @@ export interface ChartScore {
 const STORAGE_KEY = 'notefield.scores.v1';
 
 export function chartKey(song: Song, chart: Steps): string {
-  return `${songKey(song.title, song.artist)}·${chart.stepsType}·${chart.difficulty}·${chart.meter}`;
+  return `${songKey(song.displayFullTitle, song.artist)}·${chart.stepsType}·${chart.difficulty}·${chart.meter}`;
 }
 
 const finiteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);

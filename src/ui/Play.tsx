@@ -215,7 +215,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     cleanupBg();
     if (!playCountedRef.current) {
       playCountedRef.current = true;
-      addSongPlay(songKey(req.song.title, req.song.artist));
+      addSongPlay(songKey(req.song.displayFullTitle, req.song.artist));
     }
 
     const session = new GameSession(req.song, req.chart, canvas, {
@@ -331,7 +331,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     else void el.requestFullscreen?.();
   };
 
-  const title = req.song.title || 'Untitled';
+  const title = req.song.displayFullTitle || 'Untitled';
   const diffName = difficultyToString(req.chart.difficulty);
   const dcolor = difficultyColor(diffName);
   const r = songBpmRange(req.song);

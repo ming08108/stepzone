@@ -48,6 +48,15 @@ export class Song {
     return this.timing.offsetSeconds;
   }
 
+  /**
+   * Title + subtitle (SM's "display full title"). Re-syncs/edits often share a
+   * `#TITLE` and differ only in `#SUBTITLE`, so display and identity keys must
+   * use both or those songs collide.
+   */
+  get displayFullTitle(): string {
+    return this.subtitle ? `${this.title} ${this.subtitle}` : this.title;
+  }
+
   findChart(stepsType: string, difficulty: number): Steps | undefined {
     return this.charts.find((c) => c.stepsType === stepsType && c.difficulty === difficulty);
   }

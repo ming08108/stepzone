@@ -35,16 +35,29 @@ import {
   type SongSource,
 } from '../io/localFolder';
 import { Song } from '../song/song';
+import { difficultyToString } from '../song/difficulty';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
 import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
 import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
-import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
+import {
+  bestChartsPerSlot,
+  DIFF_SLOT_COLORS,
+  DIFF_SLOT_NAMES,
+  difficultySlot,
+} from './difficultyUi';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 
 const AC = '#ff5d47';
 const FAV_CLR = '#ffcf3d';
+const NO_BESTS: ReadonlyArray<{ percent: number; grade: string } | null> = [
+  null,
+  null,
+  null,
+  null,
+  null,
+];
 const SORTS = ['title', 'artist', 'pack', 'bpm', 'level', 'best', 'plays'] as const;
 type Sort = (typeof SORTS)[number];
 
@@ -89,8 +102,8 @@ interface SongVM {
   bpm: string;
   bpmSort: number;
   levels: Array<number | null>;
-  /** Best recorded score across this song's charts, or null (app/scores). */
-  best: { percent: number; grade: string } | null;
+  /** Best recorded score per difficulty slot, aligned with levels (app/scores). */
+  bests: ReadonlyArray<{ percent: number; grade: string } | null>;
   /** Times a play of this song was started (app/stats). */
   plays: number;
 }
@@ -194,13 +207,22 @@ export function SongSelect({
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
   const stats = useMemo(() => loadStats(), []);
-  const bestBySong = useMemo(() => {
-    const m = new Map<string, { percent: number; grade: string }>();
+  const bestsBySong = useMemo(() => {
+    const m = new Map<string, Array<{ percent: number; grade: string } | null>>();
     for (const [k, s] of Object.entries(loadScores())) {
-      // chartKey = songKey·stepsType·difficulty·meter — strip the last three.
-      const sk = k.split('·').slice(0, -3).join('·');
-      const prev = m.get(sk);
-      if (!prev || s.percent > prev.percent) m.set(sk, { percent: s.percent, grade: s.grade });
+      // chartKey = songKey·stepsType·difficulty·meter — the song key may
+      // itself contain ·, so peel the last three fields off the end.
+      const parts = k.split('·');
+      if (parts.length < 4) continue;
+      const sk = parts.slice(0, -3).join('·');
+      // Stored difficulty is the numeric enum; bucket it like the chip stack.
+      const slot = difficultySlot(difficultyToString(Number(parts[parts.length - 2])));
+      const slots = m.get(sk) ?? [null, null, null, null, null];
+      const prev = slots[slot];
+      if (!prev || s.percent > prev.percent) {
+        slots[slot] = { percent: s.percent, grade: s.grade };
+      }
+      m.set(sk, slots);
     }
     return m;
   }, []);
@@ -260,7 +282,7 @@ export function SongSelect({
             const bpm = bpmText(e);
             return {
               dir: entryDir(e),
-              title: e.song.title || e.sourceName,
+              title: e.song.displayFullTitle || e.sourceName,
               artist: e.song.artist,
               pack: e.pack,
               bpm: bpm.sort > 0 ? bpm.text : undefined,
@@ -435,7 +457,7 @@ export function SongSelect({
     () =>
       entries.map((e) => {
         const b = bpmText(e);
-        const title = e.song.title || e.sourceName;
+        const title = e.song.displayFullTitle || e.sourceName;
         const key = songKey(title, e.song.artist);
         return {
           entry: e,
@@ -447,11 +469,11 @@ export function SongSelect({
           bpmSort: b.sort,
           // Catalog rows carry cached levels until their simfile is parsed.
           levels: e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
-          best: bestBySong.get(key) ?? null,
+          bests: bestsBySong.get(key) ?? NO_BESTS,
           plays: stats.songPlays[key] ?? 0,
         };
       }),
-    [entries, bestBySong, stats],
+    [entries, bestsBySong, stats],
   );
 
   const filtered = useMemo(() => {
@@ -477,8 +499,9 @@ export function SongSelect({
             : sort === 'level'
               ? (s) => s.levels[diff] ?? 99
               : sort === 'best'
-                ? // Highest score first; never-played songs sort last.
-                  (s) => -(s.best?.percent ?? -1)
+                ? // Highest score at the selected difficulty first;
+                  // never-played songs sort last.
+                  (s) => -(s.bests[diff]?.percent ?? -1)
                 : sort === 'plays'
                   ? (s) => -s.plays // most played first
                   : (s) => s.title.toLowerCase();
@@ -491,6 +514,7 @@ export function SongSelect({
 
   const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
   const song = filtered[selClamped];
+  const songBest = song?.bests[diff] ?? null;
 
   // Remember filters/selection so returning from a song restores the list (#2).
   useEffect(() => {
@@ -895,9 +919,9 @@ export function SongSelect({
             <span className="font-bold" style={{ color: AC }}>
               {DIFF_SLOT_NAMES[diff]} {song?.levels[diff] ?? '—'}
             </span>
-            {song?.best && (
+            {songBest && (
               <span style={{ color: '#59f07f' }}>
-                BEST {(song.best.percent * 100).toFixed(2)}% · {song.best.grade}
+                BEST {(songBest.percent * 100).toFixed(2)}% · {songBest.grade}
               </span>
             )}
             {song != null && song.plays > 0 && <span>{song.plays} PLAYS</span>}
@@ -1037,6 +1061,7 @@ export function SongSelect({
               const i = first + k;
               const on = i === selClamped;
               const lv = s.levels[diff];
+              const best = s.bests[diff];
               return (
                 <div
                   key={i}
@@ -1070,7 +1095,7 @@ export function SongSelect({
                   </span>
                   <span className="justify-self-end opacity-60">{s.bpm}</span>
                   <span className="justify-self-end text-[13px] opacity-70">
-                    {s.best ? `${(s.best.percent * 100).toFixed(1)} ${s.best.grade}` : ''}
+                    {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
                   </span>
                   <span className="justify-self-end text-[13px] opacity-45">
                     {s.plays > 0 ? s.plays : ''}
