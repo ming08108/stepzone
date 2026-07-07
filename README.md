@@ -9,10 +9,9 @@ WebGPU note field.
 
 ![Song select](docs/img/song-select.png)
 
-Built from the reimplementation spec in
-[`../itgmania/Docs/TrackPlayerSpec/`](../itgmania/Docs/TrackPlayerSpec/), which
-documents the StepMania/ITGmania formats and game logic in detail. Each module
-here cites the spec doc it implements.
+Built as a ground-up reimplementation of the
+[ITGmania](https://github.com/itgmania/itgmania) / StepMania simfile formats
+and game logic.
 
 ## Running
 
