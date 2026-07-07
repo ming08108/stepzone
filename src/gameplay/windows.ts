@@ -1,6 +1,12 @@
 /** Judgment timing windows (seconds). Defaults from spec doc 4 (§4.1). */
 
 export interface TimingWindows {
+  /**
+   * Simply Love's "FA+" white-Fantastic window: a hit inside it scores exactly
+   * the same W1 as a wider (blue) Fantastic, but is shown white — a display-only
+   * precision tier, never used for scoring or the miss ladder.
+   */
+  w0: number;
   w1: number;
   w2: number;
   w3: number;
@@ -16,6 +22,7 @@ export interface TimingWindows {
 }
 
 export const DEFAULT_WINDOWS: TimingWindows = {
+  w0: 0.0115,
   w1: 0.0225,
   w2: 0.045,
   w3: 0.09,
@@ -28,7 +35,7 @@ export const DEFAULT_WINDOWS: TimingWindows = {
   add: 0,
 };
 
-export type WindowKey = 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll';
+export type WindowKey = 'w0' | 'w1' | 'w2' | 'w3' | 'w4' | 'w5' | 'mine' | 'hold' | 'roll';
 
 /** Effective window in seconds: base * scale + add. */
 export function windowSeconds(w: TimingWindows, key: WindowKey): number {

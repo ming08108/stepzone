@@ -65,6 +65,8 @@ export interface JudgeEvent {
   tns: TapNoteScore;
   offset: number;
   combo: number;
+  /** W1 hit inside the tight FA+ window — shown white, scored the same. */
+  white: boolean;
 }
 
 const INITIAL_LIFE = 0.5;
@@ -83,6 +85,8 @@ export class Judge {
   /** Increments on every tap judgment (hit, miss, or mine) for UI feedback. */
   judgmentSeq = 0;
   lastTns: TapNoteScore = TapNoteScore.None;
+  /** Whether the last judgment was a white (FA+) W1 — display only. */
+  lastWhite = false;
 
   readonly tapCounts: Record<number, number> = {};
   readonly holdCounts: Record<number, number> = {};
@@ -97,6 +101,14 @@ export class Judge {
   // of them each frame, and track only the currently-active holds (todo #14).
   private missCursor = 0;
   private readonly activeHolds: ActiveNote[] = [];
+  // Per-row combo cohesion (jumps): ITG dance adds one combo per tap, but the
+  // continue/break decision is per ROW — settled by the row's WORST tap once
+  // every tap in the row has been judged (Player/ScoreKeeperNormal). A single
+  // note is just a 1-tap row, so this is identical for streams.
+  private readonly rowCombo = new Map<
+    number,
+    { total: number; judged: number; worst: TapNoteScore }
+  >();
 
   constructor(
     noteData: NoteData,
@@ -160,6 +172,9 @@ export class Judge {
           if (note.type !== TapNoteType.Mine) {
             this.possibleDance += tapDancePoints(TapNoteScore.W1);
             this.possibleGrade += tapGradePoints(TapNoteScore.W1);
+            const rc = this.rowCombo.get(row);
+            if (rc) rc.total++;
+            else this.rowCombo.set(row, { total: 1, judged: 0, worst: TapNoteScore.W1 });
           }
           if (isHoldHead) {
             this.possibleDance += holdDancePoints(HoldNoteScore.Held);
@@ -193,12 +208,17 @@ export class Judge {
     this.life = INITIAL_LIFE;
     this.failed = false;
     this.lastTns = TapNoteScore.None;
+    this.lastWhite = false;
     for (const k in this.tapCounts) delete this.tapCounts[k];
     for (const k in this.holdCounts) delete this.holdCounts[k];
     this.actualDance = 0;
     this.lastUpdate = 0;
     this.missCursor = 0;
     this.activeHolds.length = 0;
+    for (const rc of this.rowCombo.values()) {
+      rc.judged = 0;
+      rc.worst = TapNoteScore.W1;
+    }
   }
 
   /** Effective (rate-scaled) window in chart-seconds. */
@@ -235,21 +255,36 @@ export class Judge {
     // it keeps drawing and scrolls off the field like StepMania.
     note.hidden = tns !== TapNoteScore.Miss;
     this.lastTns = tns;
+    this.lastWhite = tns === TapNoteScore.W1 && Math.abs(offset) <= this.win('w0');
     this.judgmentSeq++;
     this.countTap(tns);
     if (!this.failed) this.actualDance += tapDancePoints(tns);
 
+    // Combo is decided per ROW (jump cohesion): tally this tap into its row and
+    // settle the combo once the whole row is judged, by the row's worst tap.
     if (tns !== TapNoteScore.HitMine && tns !== TapNoteScore.AvoidMine) {
-      if (tns >= TapNoteScore.W3) {
-        this.combo++;
-        this.missCombo = 0;
-        if (this.combo > this.maxCombo) this.maxCombo = this.combo;
-      } else {
-        this.combo = 0;
-        if (tns === TapNoteScore.Miss) this.missCombo++;
+      const rc = this.rowCombo.get(note.row);
+      if (rc) {
+        rc.judged++;
+        if (tns < rc.worst) rc.worst = tns;
+        if (rc.judged >= rc.total) this.settleRowCombo(rc);
       }
     }
     this.changeLife(tapLifeDelta(tns));
+  }
+
+  /** Apply a fully-judged row's combo: continue (adding one per tap) when its
+   *  worst tap is W3+, else break. Only an actual Miss extends the miss combo
+   *  (MaxScoreToIncrementMissCombo=Miss, MissComboIsPerRow=true). */
+  private settleRowCombo(rc: { total: number; worst: TapNoteScore }): void {
+    if (rc.worst >= TapNoteScore.W3) {
+      this.combo += rc.total;
+      this.missCombo = 0;
+      if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+    } else {
+      this.combo = 0;
+      if (rc.worst <= TapNoteScore.Miss) this.missCombo++;
+    }
   }
 
   /** Process a button press (or release) on a column at an audio time. */
@@ -311,7 +346,7 @@ export class Judge {
       cand.holdLife = 1;
       if (!this.activeHolds.includes(cand)) this.activeHolds.push(cand);
     }
-    return { track, tns, offset, combo: this.combo };
+    return { track, tns, offset, combo: this.combo, white: this.lastWhite };
   }
 
   /** Advance time: age misses and update hold/roll life. `held` = keys down per column. */

@@ -292,7 +292,7 @@ export class GameSession {
     this.feedback.laneFlash[track] = t;
     const ev = this.judge.step(track, t, false);
     if (ev && ev.tns !== TapNoteScore.None) {
-      this.feedback.laneHit[track] = { tns: ev.tns, atSeconds: t };
+      this.feedback.laneHit[track] = { tns: ev.tns, atSeconds: t, white: ev.white };
       if (ev.tns !== TapNoteScore.HitMine) {
         this.offsets.push(ev.offset);
         this.stepsTaken++;
@@ -327,7 +327,11 @@ export class GameSession {
     this.energy *= 0.9;
     if (this.judge.judgmentSeq !== this.lastSeq) {
       this.lastSeq = this.judge.judgmentSeq;
-      this.feedback.lastJudgment = { tns: this.judge.lastTns, atSeconds: now };
+      this.feedback.lastJudgment = {
+        tns: this.judge.lastTns,
+        atSeconds: now,
+        white: this.judge.lastWhite,
+      };
       this.energy = Math.min(1, this.energy + 0.55);
     }
 

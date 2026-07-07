@@ -118,12 +118,13 @@ async function main(): Promise<void> {
   Object.defineProperty(judge, 'grade', { value: 'AA' });
 
   const tns = TNS[judgmentKey];
+  const white = q.get('white') === '1'; // FA+ white Fantastic (ITG skin)
   const fb: Feedback = {
-    lastJudgment: tns === undefined ? null : { tns, atSeconds: now - 0.06 },
+    lastJudgment: tns === undefined ? null : { tns, atSeconds: now - 0.06, white },
     laneFlash: [-999, now - 0.02, -999, now - 0.2],
     laneHit: [
       null,
-      { tns: tns ?? TapNoteScore.W1, atSeconds: now - 0.05 },
+      { tns: tns ?? TapNoteScore.W1, atSeconds: now - 0.05, white },
       null,
       { tns: TapNoteScore.W2, atSeconds: now - 0.02 },
     ],
