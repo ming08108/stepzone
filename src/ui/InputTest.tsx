@@ -263,7 +263,12 @@ export function InputTest({ onBack }: { onBack: () => void }) {
           <div className="mb-6 grid grid-cols-3 gap-3">
             {[
               ['DISPLAY REFRESH', num(snap.displayHz, 0), 'Hz', `${num(snap.displayMs)} ms/frame`],
-              ['SAMPLE RATE', num(snap.sampleHz, 0), 'Hz', 'this page (getGamepads)'],
+              [
+                'GAME INPUT',
+                rawEvents > 0 ? 'EVENT' : num(snap.displayHz, 0),
+                rawEvents > 0 ? '' : 'Hz',
+                rawEvents > 0 ? 'event-driven · no poll' : 'rAF poll · once per frame',
+              ],
               [
                 'EVENT-DRIVEN API',
                 rawEvents > 0 ? 'ACTIVE' : RAW_GAMEPAD_SUPPORTED ? 'ON' : 'OFF',
@@ -288,8 +293,14 @@ export function InputTest({ onBack }: { onBack: () => void }) {
             ))}
           </div>
 
+          <p className="-mt-3 mb-2 text-[11px] text-[#ececec]/40">
+            This page probes <code className="text-[#ececec]/70">getGamepads()</code> at ~
+            {num(snap.sampleHz, 0)} Hz to resolve the device rate below — that&apos;s the
+            measurement tool, not how the game reads input (see GAME INPUT above).
+          </p>
+
           {rawEvents === 0 && (
-            <p className="mb-6 -mt-3 text-[11px] text-[#ececec]/40">
+            <p className="mb-6 text-[11px] text-[#ececec]/40">
               Event-driven input is behind a flag: enable{' '}
               <code className="text-[#ececec]/70">
                 chrome://flags/#gamepad-raw-input-change-event
