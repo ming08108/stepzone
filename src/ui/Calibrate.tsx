@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Stage, STEP_AC as AC } from './Stage';
+import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 
 const BPM = 120;
@@ -9,9 +10,10 @@ const BEAT = 60 / BPM; // 0.5s
 const DURATION = 40;
 
 /**
- * Offset calibration: play a steady metronome, tap any key on each beat, and
- * measure your mean timing error. The engine's AdjustSync analogue (spec doc 6
- * §6.4). Calibrates with a raw clock (audioOffset = 0), then writes the result.
+ * Offset calibration: play a steady metronome, tap a panel on each beat (via the
+ * unified input bus, so keyboard / gamepad / dance pad all work), and measure
+ * your mean timing error. The engine's AdjustSync analogue (spec doc 6 §6.4).
+ * Calibrates with a raw clock (audioOffset = 0), then writes the result.
  */
 export function Calibrate({ onBack }: { onBack: () => void }) {
   const { settings, update } = useSettings();
@@ -59,25 +61,6 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     rafRef.current = requestAnimationFrame(loop);
   };
 
-  // Tap handler.
-  useEffect(() => {
-    const onTap = (e: KeyboardEvent) => {
-      const clock = clockRef.current;
-      if (!clock || e.repeat) return;
-      clock.refresh();
-      const t = clock.songSecondsAtEvent(e.timeStamp);
-      if (t < 0.25) return; // skip lead-in
-      const nearest = Math.round(t / BEAT) * BEAT;
-      const err = t - nearest;
-      if (Math.abs(err) > BEAT / 2) return;
-      offsetsRef.current.push(err);
-      setCount(offsetsRef.current.length);
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onTap);
-    return () => window.removeEventListener('keydown', onTap);
-  }, []);
-
   const apply = () => {
     const arr = [...offsetsRef.current].sort((a, b) => a - b);
     if (arr.length < 6) return;
@@ -89,6 +72,35 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     update({ audioOffsetMs: ms });
     stop();
   };
+
+  // Taps come through the unified input bus, so you calibrate with whatever you
+  // play with — keyboard, gamepad, or dance pad — on the same timestamp path as
+  // gameplay (Gamepad.timestamp for pads). A panel/arrow press is a beat tap;
+  // confirm starts (then applies once there are enough taps); back exits.
+  useControls((e) => {
+    if (!e.pressed || e.repeat) return;
+    if (e.device === 'keyboard') e.nativeEvent?.preventDefault();
+    if (e.role === 'back') {
+      stop();
+      onBack();
+      return;
+    }
+    if (e.role === 'confirm') {
+      if (!clockRef.current) void start();
+      else if (offsetsRef.current.length >= 6) apply();
+      return;
+    }
+    const clock = clockRef.current;
+    if (!clock) return;
+    clock.refresh();
+    const t = clock.songSecondsAtEvent(e.timeStampMs);
+    if (t < 0.25) return; // skip lead-in
+    const nearest = Math.round(t / BEAT) * BEAT;
+    const err = t - nearest;
+    if (Math.abs(err) > BEAT / 2) return;
+    offsetsRef.current.push(err);
+    setCount(offsetsRef.current.length);
+  });
 
   // Visual metronome dot.
   const now = clockRef.current ? clockRef.current.sync.songSecondsAtPerf(performance.now()) : -1;
@@ -112,7 +124,8 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     >
       <div className="flex h-full flex-col items-center justify-center gap-6 px-6 text-center">
         <p className="max-w-[460px] text-[14px] tracking-[0.06em] text-[#ececec]/60">
-          Press any key exactly on each metronome beat. After ~16 taps, hit Apply.
+          Tap a panel (arrow / D F J K / dance pad) exactly on each metronome beat. After ~16 taps,
+          hit Apply.
         </p>
 
         <div

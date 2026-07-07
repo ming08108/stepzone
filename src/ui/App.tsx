@@ -8,6 +8,7 @@ import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
 import { InputTest } from './InputTest';
 import { BgConvertBadge } from './BgConvertBadge';
+import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
@@ -104,6 +105,7 @@ export function App() {
     <>
       {body}
       <BgConvertBadge />
+      {view !== 'play' && <RawGamepadHint />}
     </>
   );
 }

@@ -254,8 +254,9 @@ export function InputTest({ onBack }: { onBack: () => void }) {
             <code className="mx-1 text-[#ececec]/80">Gamepad.timestamp</code>. Move an analog stick
             (continuous reports) or mash a panel to generate updates — the smallest gap between
             timestamp updates is one device report period. This page samples far faster than the
-            game does (the input bus polls at ~250&nbsp;Hz) so the estimate reflects the device, not
-            our loop. Keyboard is event-timestamped — see the tap log.
+            game does (the input bus polls once per frame, or is fully event-driven when the flag is
+            on) so the estimate reflects the device, not our loop. Keyboard is event-timestamped —
+            see the tap log.
           </p>
 
           {/* Timing sources */}
