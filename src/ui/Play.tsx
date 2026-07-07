@@ -12,7 +12,7 @@ import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 
-type Phase = 'ready' | 'playing' | 'done';
+type Phase = 'ready' | 'playing' | 'done' | 'error';
 
 interface Result {
   percent: number;
@@ -228,6 +228,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     session.resize(canvas.clientWidth, canvas.clientHeight);
     setLoopNum(1);
     session.onLoop = setLoopNum;
+    session.onError = () => {
+      if (sessionRef.current === session) setPhase('error');
+    };
     session.onEnd = (judge) => {
       bankSteps(session);
       playCountedRef.current = false; // a RETRY from here is a new play
@@ -378,6 +381,22 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               >
                 LOADING…
               </div>
+            </>
+          )}
+          {phase === 'error' && (
+            <>
+              <div className="text-[19px] font-bold tracking-[0.22em]">WEBGPU REQUIRED</div>
+              <div className="mt-2 max-w-[440px] text-[15px] leading-relaxed text-[#ececec]/70">
+                stepzone renders the note field on WebGPU, which this browser or device doesn&apos;t
+                provide. Try a recent Chrome or Edge, or enable hardware acceleration.
+              </div>
+              <button
+                onClick={onExit}
+                className="mt-4 border px-4 py-1.5 text-[14px] tracking-[0.18em]"
+                style={{ borderColor: AC }}
+              >
+                ← SONGS
+              </button>
             </>
           )}
           {phase === 'done' && result && (

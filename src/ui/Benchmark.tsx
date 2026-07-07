@@ -90,43 +90,6 @@ function ResultsTable({ result }: { result: BenchResult }) {
   );
 }
 
-/** Per-pass CPU breakdown for the heaviest non-skipped scenario. */
-function PassBreakdown({ result }: { result: BenchResult }) {
-  const ranked = result.scenarios
-    .filter((s) => !s.skipped)
-    .sort((a, b) => b.drawCpuMs.avg - a.drawCpuMs.avg);
-  const worst = ranked[0];
-  if (!worst) return null;
-  const entries = Object.entries(worst.passes).sort((a, b) => b[1] - a[1]);
-  const total = Math.max(0.0001, worst.drawCpuMs.avg);
-  return (
-    <div className="mt-4">
-      <div className="mb-1 text-[10px] tracking-[0.14em] text-[#ececec]/40">
-        WHERE THE CPU TIME GOES — {worst.label} ({fmt(worst.avgTapsPerFrame, 0)} arrows,{' '}
-        {fmt(worst.avgHoldsPerFrame, 0)} holds, {fmt(worst.avgMinesPerFrame, 0)} mines on screen)
-      </div>
-      {entries.map(([key, ms]) => (
-        <div key={key} className="flex items-center gap-2 py-0.5 text-[11px]">
-          <span className="w-[90px] flex-none text-[#ececec]/60">{key}</span>
-          <div className="h-[8px] flex-1 bg-white/[0.06]">
-            <div
-              className="h-full"
-              style={{
-                width: `${Math.min(100, (100 * ms) / total)}%`,
-                background: AC,
-                opacity: 0.75,
-              }}
-            />
-          </div>
-          <span className="w-[72px] flex-none text-right [font-variant-numeric:tabular-nums]">
-            {fmt(ms, 3)} ms
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function Benchmark({ onBack }: { onBack: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -219,10 +182,10 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
 
             {phase === 'idle' && (
               <p className="mb-4 mt-3 max-w-[560px] text-[13px] leading-relaxed text-[#ececec]/60">
-                Measures note-field rendering on this machine: the WebGPU arcade field on a typical
-                hard chart, a beyond-worst-case stress chart, and the stress chart with a background
-                image composited behind it — plus the ITG skin&apos;s canvas renderer on the same
-                stress chart. Results can be copied as JSON to compare computers.
+                Measures the WebGPU note field on this machine: the arcade field on a typical hard
+                chart, a beyond-worst-case stress chart, the stress chart with a background image
+                composited behind it, and the ITG skin on the same stress chart. Results can be
+                copied as JSON to compare computers.
               </p>
             )}
 
@@ -242,12 +205,10 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
                     : 'WebGPU unavailable'}
                 </div>
                 <ResultsTable result={result} />
-                <PassBreakdown result={result} />
                 <p className="mt-3 text-[11px] leading-relaxed text-[#ececec]/40">
                   FPS + frame p95/missed = what the player sees, normally capped at this
                   display&apos;s refresh ({fmt(result.refreshHz, 0)} Hz). GPU/FRAME = the real GPU
-                  time of each presented frame (WebGPU timestamp query) — the honest per-frame cost;
-                  the ITG canvas row can&apos;t be timestamped, so it shows &ldquo;—&rdquo;.
+                  time of each presented frame (WebGPU timestamp query) — the honest per-frame cost.
                   CPU/FRAME = main-thread encode time per draw(). HEADROOM = how many of these
                   frames fit one refresh interval ({fmt(1000 / result.refreshHz, 1)} ms) at the
                   binding cost.

@@ -1,6 +1,6 @@
 /**
- * Render-benchmark runner. Drives the real chart-parse → Judge →
- * NoteFieldRenderer path against synthetic stress charts (benchChart.ts) on a
+ * Render-benchmark runner. Drives the real chart-parse → Judge → WebGPU
+ * note-field path against synthetic stress charts (benchChart.ts) on a
  * full-viewport canvas, with an autoplayer firing perfect hits so explosions,
  * judgments, combo pops and hold engagement all render like real gameplay.
  *
@@ -9,26 +9,23 @@
  *    tops out at the display refresh; run the driver with vsync disabled
  *    (--disable-gpu-vsync --disable-frame-rate-limit) for the true uncapped
  *    presented frame rate.
- *  - CPU draw time (main-thread encode/record) + a per-theme-pass breakdown
- *    (bench/instrument.ts, canvas backend).
+ *  - CPU draw time (main-thread encode/record) per frame.
  *  - GPU ms per PRESENTED frame, via WebGPU timestamp queries on the render
  *    pass (gpuTimer.ts) — the real GPU cost of what's on screen, which is what
- *    drives headroom. Canvas 2D can't be timestamped (its raster runs later in
- *    the browser's GPU process), so it has no GPU-ms number.
+ *    drives headroom.
  *
  * The runner owns its canvases (created inside a caller-provided container)
  * because a canvas element can hold only one context type ever — each
- * scenario gets fresh elements so 2D and WebGPU backends can't collide.
+ * scenario gets fresh elements.
  */
 
 import type { NoteSkin } from '../game/playOptions';
 import { Judge } from '../gameplay/judge';
 import { TapNoteScore, TapNoteType } from '../notes/noteTypes';
 import { parseSimfile } from '../parse/loader';
-import { NoteFieldRenderer, type Feedback } from '../render/noteField';
+import type { Feedback } from '../render/noteField';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { makeBenchSsc, type BenchChartOpts } from './benchChart';
-import { emptyPassTotals, instrumentTheme, type PassKey, type PassTotals } from './instrument';
 
 export interface BenchScenario {
   id: string;
@@ -59,14 +56,6 @@ const STRESS_CHART: BenchChartOpts = {
 };
 
 export const BENCH_SCENARIOS: BenchScenario[] = [
-  {
-    id: 'itg-stress',
-    label: 'ITG · STRESS',
-    noteSkin: 'itg',
-    chart: STRESS_CHART,
-    scrollValue: 1,
-  },
-  // The same suite on the WebGPU note field (arcade skin only in v1).
   {
     id: 'gpu-arcade-typical',
     label: 'WEBGPU · TYPICAL CHART',
@@ -126,14 +115,8 @@ export interface ScenarioResult {
   /** CPU time inside renderer.draw() per frame, ms (main-thread encode). */
   drawCpuMs: FrameStats;
   /** Real GPU time per presented frame, ms (WebGPU timestamp query). null when
-   *  timestamps are unavailable or for the canvas backend (can't be timed). */
+   *  timestamps are unavailable. */
   gpuMs: FrameStats | null;
-  /** Average CPU ms/frame per theme pass; 'other' = background + cull + loop. */
-  passes: Record<PassKey | 'other', number>;
-  /** Average sprites drawn per frame in the note passes (density check). */
-  avgTapsPerFrame: number;
-  avgHoldsPerFrame: number;
-  avgMinesPerFrame: number;
 }
 
 export interface DeviceInfo {
@@ -319,14 +302,12 @@ interface Scene {
   judge: Judge;
   fb: Feedback;
   auto: Autoplayer;
-  passTotals: PassTotals;
-  passCounts: PassTotals;
   beatOf: (t: number) => number;
   endSeconds: number;
   /** Render one frame (autoplay/judging already ticked by the caller). */
   render: (now: number, beat: number, progress: number) => void;
-  /** WebGPU backend only: real GPU-time-per-frame plumbing (gpuTimer.ts).
-   *  Absent for canvas 2D, which can't be timestamped. */
+  /** Real GPU-time-per-frame plumbing (gpuTimer.ts); absent when timestamps
+   *  are unavailable. */
   gpu?: {
     reset: () => void;
     /** Await pending timestamp readbacks, then return the collected GPU ms. */
@@ -376,8 +357,6 @@ async function buildScene(
   let end = 0;
   for (const n of judge.notes) end = Math.max(end, n.tailTime);
 
-  const passTotals = emptyPassTotals();
-  const passCounts = emptyPassTotals();
   const bg = scn.bgImage ? makeBgBitmap() : null;
   if (scn.bgImage && !bg) return { skipped: 'OffscreenCanvas unavailable' };
 
@@ -385,100 +364,46 @@ async function buildScene(
     judge,
     fb,
     auto: new Autoplayer(judge, 4, fb),
-    passTotals,
-    passCounts,
     beatOf: (t: number) => timing.getBeatFromElapsedTime(t),
     endSeconds: Math.max(1, end),
   };
 
-  if (scn.backend === 'webgpu') {
-    const { canvas, width, height, dpr } = makeCanvas(container);
-    const field = await GpuNoteField.create(canvas, 4, {
-      scrollMode: 'X',
-      scrollValue: scn.scrollValue,
-      songMaxBpm: scn.chart.bpm,
-      meta: BENCH_META,
-      noteSkin: scn.noteSkin,
-    });
-    if (!field) {
-      canvas.remove();
-      return { skipped: 'WebGPU unavailable' };
-    }
-    field.resize(width, height, dpr);
-    const lastBeat = judge.notes.length ? judge.notes[judge.notes.length - 1].beat : 0;
-    field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
-    if (bg) field.setBackground(bg);
-    field.prewarm(); // bake atlas + compile pipelines before the measured window
-    return {
-      ...common,
-      render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
-      gpu: field.gpuTimingAvailable
-        ? {
-            reset: () => field.resetGpuTimes(),
-            read: async () => {
-              await field.gpuIdle(); // flush pending timestamp readbacks
-              await new Promise((r) => setTimeout(r, 0)); // let mapAsync callbacks run
-              return field.gpuFrameTimes();
-            },
-          }
-        : undefined,
-      cleanup: () => {
-        field.destroy();
-        bg?.close();
-        canvas.remove();
-      },
-    };
-  }
-
-  // The arcade canvas theme was removed — a canvas+arcade scenario would
-  // silently measure the Simply Love fallback look instead.
-  if (scn.noteSkin === 'arcade') return { skipped: 'arcade is WebGPU-only' };
   const { canvas, width, height, dpr } = makeCanvas(container);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    canvas.remove();
-    return { skipped: '2D canvas context unavailable' };
-  }
-  const renderer = new NoteFieldRenderer(4, {
-    noteSkin: scn.noteSkin,
+  const field = await GpuNoteField.create(canvas, 4, {
     scrollMode: 'X',
     scrollValue: scn.scrollValue,
     songMaxBpm: scn.chart.bpm,
     meta: BENCH_META,
-    wrapTheme: (theme) => {
-      const counting = instrumentTheme(theme, passTotals);
-      // Also count note-pass calls so results record on-screen density.
-      const bump =
-        <A extends unknown[]>(key: PassKey, fn: (...args: A) => void) =>
-        (...args: A) => {
-          passCounts[key] += 1;
-          fn(...args);
-        };
-      return {
-        ...counting,
-        drawTapNote: bump('taps', counting.drawTapNote),
-        drawHoldBody: bump('holds', counting.drawHoldBody),
-        drawMine: bump('mines', counting.drawMine),
-      };
-    },
+    noteSkin: scn.noteSkin,
   });
-  renderer.resize(width, height, dpr);
-  if (bg) renderer.setBackground(bg);
-
+  if (!field) {
+    canvas.remove();
+    return { skipped: 'WebGPU unavailable' };
+  }
+  field.resize(width, height, dpr);
+  const lastBeat = judge.notes.length ? judge.notes[judge.notes.length - 1].beat : 0;
+  field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
+  if (bg) field.setBackground(bg);
+  field.prewarm(); // bake atlas + compile pipelines before the measured window
   return {
     ...common,
-    render: (now, beat, progress) => {
-      renderer.draw(ctx, judge, now, beat, progress, fb);
-    },
+    render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
+    gpu: field.gpuTimingAvailable
+      ? {
+          reset: () => field.resetGpuTimes(),
+          read: async () => {
+            await field.gpuIdle(); // flush pending timestamp readbacks
+            await new Promise((r) => setTimeout(r, 0)); // let mapAsync callbacks run
+            return field.gpuFrameTimes();
+          },
+        }
+      : undefined,
     cleanup: () => {
+      field.destroy();
       bg?.close();
       canvas.remove();
     },
   };
-}
-
-function zeroPasses(p: PassTotals): void {
-  for (const k of Object.keys(p) as PassKey[]) p[k] = 0;
 }
 
 async function runScenario(
@@ -491,13 +416,9 @@ async function runScenario(
   const base: Omit<
     ScenarioResult,
     'frames' | 'seconds' | 'fps' | 'frameMs' | 'missedPct' | 'drawCpuMs' | 'gpuMs'
-  > & { passes: Record<PassKey | 'other', number> } = {
+  > = {
     id: scn.id,
     label: scn.label,
-    passes: { ...emptyPassTotals(), other: 0 },
-    avgTapsPerFrame: 0,
-    avgHoldsPerFrame: 0,
-    avgMinesPerFrame: 0,
   };
   const skippedResult = (reason: string): ScenarioResult => ({
     ...base,
@@ -549,8 +470,6 @@ async function runScenario(
       if (!measuring && wall - wall0 >= WARMUP_SECONDS * 1000) {
         measuring = true;
         measureStartWall = wall;
-        zeroPasses(scene.passTotals);
-        zeroPasses(scene.passCounts);
         scene.gpu?.reset(); // start GPU-time collection at the measure window
       } else if (measuring) {
         frameDeltas.push(delta);
@@ -573,17 +492,7 @@ async function runScenario(
     }
 
     const frames = frameDeltas.length;
-    const passes: Record<PassKey | 'other', number> = { ...emptyPassTotals(), other: 0 };
-    let hookSum = 0;
-    for (const k of Object.keys(scene.passTotals) as PassKey[]) {
-      passes[k] = scene.passTotals[k] / frames;
-      hookSum += passes[k];
-    }
     const drawStats = stats(drawTimes);
-    passes.other = Math.max(0, drawStats.avg - hookSum);
-    const avgTaps = scene.passCounts.taps / frames;
-    const avgHolds = scene.passCounts.holds / frames;
-    const avgMines = scene.passCounts.mines / frames;
 
     // Real GPU time per presented frame (WebGPU timestamp query), drained after
     // the measured window so the last readbacks land. null → no GPU timing.
@@ -602,10 +511,6 @@ async function runScenario(
         Math.max(1, frameDeltas.length),
       drawCpuMs: drawStats,
       gpuMs,
-      passes,
-      avgTapsPerFrame: avgTaps,
-      avgHoldsPerFrame: avgHolds,
-      avgMinesPerFrame: avgMines,
     };
   } finally {
     scene.cleanup();
