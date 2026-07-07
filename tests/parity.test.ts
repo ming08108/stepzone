@@ -84,16 +84,19 @@ function buildTrace(judge: Judge, tracks: number, seed: number): { ops: Op[]; en
     }
     const r = rnd();
     if (r > 0.97) continue; // ~3% missed (no press)
+    // ~12% of presses land exactly on a window edge (and one just past W5), so
+    // the diff also exercises the inclusive <= boundary with real note times.
+    const EDGES = [0.0225, 0.045, 0.09, 0.135, 0.18, 0.18 + 1e-6];
     const mag =
-      r < 0.55
-        ? rnd() * 0.0225
-        : r < 0.75
-          ? 0.0225 + rnd() * 0.0225
-          : r < 0.88
-            ? 0.045 + rnd() * 0.045
-            : r < 0.94
-              ? 0.09 + rnd() * 0.045
-              : 0.135 + rnd() * 0.045;
+      r > 0.85
+        ? EDGES[Math.floor(rnd() * EDGES.length)]
+        : r < 0.5
+          ? rnd() * 0.0225
+          : r < 0.68
+            ? 0.0225 + rnd() * 0.0225
+            : r < 0.78
+              ? 0.045 + rnd() * 0.045
+              : 0.09 + rnd() * 0.09;
     const off = (rnd() < 0.5 ? -1 : 1) * mag;
     const press = n.time + off;
     events.push({ t: press, track: n.track, release: false });
