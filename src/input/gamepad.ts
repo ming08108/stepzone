@@ -18,7 +18,17 @@
 import type { ControlRole } from './controls';
 
 /** Per-role pressed state, plus whether any pad is connected. */
-export type GamepadRead = Record<ControlRole, boolean> & { connected: boolean };
+export type GamepadRead = Record<ControlRole, boolean> & {
+  connected: boolean;
+  /**
+   * Newest `Gamepad.timestamp` across the connected pads — when the browser
+   * last sampled the device, on the same clock as `performance.now()`. The
+   * input bus attributes a transition seen this poll to this sample time
+   * instead of the (coarser) poll-frame time, cutting frame-quantization
+   * jitter. 0/undefined when the platform doesn't provide it (older Firefox).
+   */
+  timestamp?: number;
+};
 
 const AXIS_THRESHOLD = 0.5;
 
@@ -98,6 +108,10 @@ export function readGamepad(overrides: Partial<Record<ControlRole, number>> = {}
   const pads = connectedPads();
   if (pads.length === 0) return out;
   out.connected = true;
+  // The freshest device-sample time across pads (see GamepadRead.timestamp).
+  let ts = 0;
+  for (const gp of pads) if (gp.timestamp > ts) ts = gp.timestamp;
+  out.timestamp = ts;
 
   // Buttons the user rebound to a panel — excluded from the default confirm/back
   // so a panel press on one of those buttons doesn't also fire a menu action.

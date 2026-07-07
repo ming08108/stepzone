@@ -81,9 +81,29 @@ to anchoring on `currentTime − (outputLatency || baseLatency)` paired with
   (the analogue of the engine polling `IsBeingPressed`).
 
 For dance pads that present as gamepads, the Gamepad API is **poll-only** — you
-read state each frame and synthesize press/release edges, so pad input is
-inherently frame-quantized and coarser than keyboard. Keyboard-emulating pad
-adapters give better timing; we'll document this tradeoff in the input module.
+read state and synthesize press/release edges (`src/input/gamepad.ts`,
+`inputBus.ts`), so pad input is coarser than keyboard. We narrow that gap three
+ways:
+
+- **Poll finer than the display.** The bus samples on a ~250 Hz `setTimeout`
+  loop, **not** `requestAnimationFrame`, so a press is caught between frames
+  instead of at the next refresh. Judging is already decoupled from rendering
+  (the judge runs on the audio clock), so a faster input poll helps directly.
+- **Timestamp from the device sample, not the poll.** A detected transition is
+  stamped with `Gamepad.timestamp` (when the browser sampled the pad, same clock
+  as `performance.now()`) rather than the poll-frame time — removing most of the
+  quantization jitter. Edge detection dedups, so faster polling never
+  double-fires; it only lowers latency. Falls back to poll time when the
+  platform omits the timestamp (older Firefox).
+- **Event-driven when available.** When Chrome's `rawgamepadinputchange` exists
+  (`'GamepadRawInputChangeEvent' in window`), an extra poll fires the instant new
+  pad data lands; the timer poll stays as the tested baseline/fallback.
+
+The ceiling is still the pad's USB HID report rate (125–1000 Hz). **OPTIONS →
+DISPLAY → Test input quantization** measures it live on the player's device:
+display refresh, our poll rate, each pad's update interval + histogram, and a tap
+log of the real pipeline. Keyboard-emulating pad adapters remain the lowest-jitter
+option (real `keydown` timestamps).
 
 ## 4. Calibration is not optional
 
