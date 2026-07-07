@@ -4,7 +4,34 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseSimfile } from '../src/parse/loader';
 import { Judge } from '../src/gameplay/judge';
-import { HoldNoteScore, TapNoteScore } from '../src/notes/noteTypes';
+import { NoteData } from '../src/notes/noteData';
+import { TimingData } from '../src/timing/timingData';
+import {
+  beatToNoteRow,
+  HoldNoteScore,
+  NO_KEYSOUND,
+  NO_PLAYER,
+  TapNoteScore,
+  TapNoteSubType,
+  TapNoteType,
+} from '../src/notes/noteTypes';
+
+/** A judge over a tiny 4-panel chart at 60 BPM, so beat N == N seconds. */
+function judgeOf(taps: Array<[beat: number, track: number]>): Judge {
+  const nd = new NoteData(4);
+  for (const [beat, track] of taps)
+    nd.setTapNote(track, beatToNoteRow(beat), {
+      type: TapNoteType.Tap,
+      subType: TapNoteSubType.Invalid,
+      durationRows: 0,
+      keysoundIndex: NO_KEYSOUND,
+      player: NO_PLAYER,
+    });
+  const timing = new TimingData();
+  timing.bpms.push({ row: 0, bps: 1 }); // 60 BPM
+  timing.tidy();
+  return new Judge(nd, timing);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ssc = readFileSync(join(here, '../src/dev/example.ssc'), 'utf8');
@@ -56,5 +83,56 @@ describe('Judge: doc-9 input trace (spec doc 9 §9.4)', () => {
   it('ends with life ~0.288 and not failed', () => {
     expect(judge.life).toBeCloseTo(0.288, 3);
     expect(judge.failed).toBe(false);
+  });
+});
+
+describe('Judge: jump combo cohesion (ITG row-worst break)', () => {
+  it('breaks combo by the row worst tap, regardless of hit order', () => {
+    // good foot (W1) first, then the bad foot (W4, 120ms).
+    const a = judgeOf([
+      [2, 0],
+      [2, 1],
+    ]);
+    a.step(0, 2.0, false);
+    a.step(1, 2.12, false);
+    expect(a.combo).toBe(0);
+
+    // bad foot first — must still end at 0 (per-note combo would leave 1).
+    const b = judgeOf([
+      [2, 0],
+      [2, 1],
+    ]);
+    b.step(1, 2.12, false);
+    b.step(0, 2.0, false);
+    expect(b.combo).toBe(0);
+  });
+
+  it('a clean jump adds one combo per tap in the row', () => {
+    const j = judgeOf([
+      [2, 0],
+      [2, 1],
+      [3, 2],
+    ]);
+    j.step(0, 2.0, false);
+    j.step(1, 2.0, false);
+    expect(j.combo).toBe(2); // jump of two W1s
+    j.step(2, 3.0, false);
+    expect(j.combo).toBe(3);
+  });
+});
+
+describe('Judge: FA+ white Fantastic (display-only)', () => {
+  it('flags a W1 white inside the tight window and blue outside it', () => {
+    const j = judgeOf([
+      [2, 0],
+      [3, 1],
+    ]);
+    const tight = j.step(0, 2.005, false); // +5ms, inside w0 (11.5ms)
+    expect(tight?.tns).toBe(TapNoteScore.W1);
+    expect(tight?.white).toBe(true);
+
+    const loose = j.step(1, 3.018, false); // +18ms, W1 but outside w0
+    expect(loose?.tns).toBe(TapNoteScore.W1);
+    expect(loose?.white).toBe(false);
   });
 });

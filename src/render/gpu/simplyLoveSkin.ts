@@ -657,7 +657,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
           pop = Math.max(0, 1 - k * k);
         }
         if (pop > 0.02) {
-          const spr = this.sprJudgment(ctx, fb.lastJudgment.tns);
+          const spr = this.sprJudgment(ctx, fb.lastJudgment.tns, fb.lastJudgment.white ?? false);
           if (spr) {
             const w = spr.w * pop;
             const h = spr.h * pop;
@@ -704,32 +704,39 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     }
   }
 
-  /** SL judgment label baked per tier (color + same-color glow + white rim). */
-  private sprJudgment(ctx: SkinCtx, tns: number): AtlasRect | null {
+  /** SL judgment label baked per tier (color + same-color glow + white rim).
+   *  A white FA+ W1 uses white ink/glow — same "Fantastic", tighter timing. */
+  private sprJudgment(ctx: SkinCtx, tns: number, white = false): AtlasRect | null {
     const ds = ctx.ds;
     const j = ITG_JUDGMENT[tns];
     if (!j) return null;
+    const color = white && tns === TapNoteScore.W1 ? '#ffffff' : j.color;
     const f = font(ds, 800, 34);
     const tw = measureWidth(f, j.label);
     if (tw === null) return null;
     const pad = 24 * ds;
     const w = tw + 2 * pad;
     const h = 34 * ds * 1.5 + 2 * pad;
-    return ctx.atlas.sprite(`sljudg:${tns}:${Math.round(ds * 10)}`, w, h, (c) => {
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      c.font = f;
-      if ('letterSpacing' in c) c.letterSpacing = `${(1.5 * ds).toFixed(2)}px`;
-      c.shadowColor = j.color;
-      c.shadowBlur = 18 * ds;
-      c.fillStyle = j.color;
-      c.fillText(j.label, w / 2, h / 2);
-      c.shadowBlur = 0;
-      c.lineWidth = 1.2 * ds;
-      c.strokeStyle = 'rgba(255,255,255,0.8)';
-      c.strokeText(j.label, w / 2, h / 2);
-      if ('letterSpacing' in c) c.letterSpacing = '0px';
-    });
+    return ctx.atlas.sprite(
+      `sljudg:${tns}:${white ? 'w' : ''}:${Math.round(ds * 10)}`,
+      w,
+      h,
+      (c) => {
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.font = f;
+        if ('letterSpacing' in c) c.letterSpacing = `${(1.5 * ds).toFixed(2)}px`;
+        c.shadowColor = color;
+        c.shadowBlur = 18 * ds;
+        c.fillStyle = color;
+        c.fillText(j.label, w / 2, h / 2);
+        c.shadowBlur = 0;
+        c.lineWidth = 1.2 * ds;
+        c.strokeStyle = 'rgba(255,255,255,0.8)';
+        c.strokeText(j.label, w / 2, h / 2);
+        if ('letterSpacing' in c) c.letterSpacing = '0px';
+      },
+    );
   }
 
   prewarm(ctx: SkinCtx): void {
@@ -751,6 +758,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
         this.sprBoom(ctx, n);
         this.sprJudgment(ctx, n);
       }
+      this.sprJudgment(ctx, TapNoteScore.W1, true); // FA+ white Fantastic
       // Combo digits (the dance % is a repaint-in-place slot, not per-glyph).
       ctx.glyphs.measure(
         'slcombo',

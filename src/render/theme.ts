@@ -17,11 +17,12 @@ export interface RenderMeta {
 }
 
 export interface Feedback {
-  lastJudgment: { tns: TapNoteScore; atSeconds: number } | null;
+  /** `white`: a W1 inside the FA+ window — rendered white by the ITG skin. */
+  lastJudgment: { tns: TapNoteScore; atSeconds: number; white?: boolean } | null;
   /** Per-column time (s) of the last press, for the receptor glow. */
   laneFlash: number[];
   /** Per-column last successful hit, for the explosion. */
-  laneHit: Array<{ tns: TapNoteScore; atSeconds: number } | null>;
+  laneHit: Array<{ tns: TapNoteScore; atSeconds: number; white?: boolean } | null>;
 }
 
 export interface JudgmentStyle {

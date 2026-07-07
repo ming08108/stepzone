@@ -1,8 +1,10 @@
 /**
  * Scoring weights, life deltas, and grades. Values are the verified ITGmania
- * fallback-theme defaults (spec doc 4 §4.6, §4.8). Simplifications for the first
- * playable milestone: life uses the raw per-judgment deltas (no merciful/
- * progressive modifiers yet), and combo is per-note (chord cohesion comes later).
+ * fallback-theme defaults (spec doc 4 §4.6, §4.8), diffed against the ITGmania
+ * source (Player.cpp / ScoreKeeperNormal.cpp / _fallback metrics). Combo matches
+ * ITG dance: one per tap, but a jump's continue/break is decided by its worst
+ * tap (judge.ts). Not yet modeled: the merciful/progressive LifeDifficulty
+ * scaling (we use the raw per-judgment life deltas).
  */
 
 import { HoldNoteScore, TapNoteScore } from '../notes/noteTypes';
