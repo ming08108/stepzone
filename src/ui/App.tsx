@@ -6,11 +6,13 @@ import { SongSelect } from './SongSelectStepline';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
+import { InputTest } from './InputTest';
 import { BgConvertBadge } from './BgConvertBadge';
 import type { PlayRequest } from './playRequest';
 import { useMenuNav } from './useMenuNav';
 
-type View = 'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark';
+type View =
+  'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
 
 function Chrome({
   title,
@@ -68,10 +70,13 @@ export function App() {
         onBack={() => setView('menu')}
         onCalibrate={() => setView('calibrate')}
         onBenchmark={() => setView('benchmark')}
+        onInputTest={() => setView('inputtest')}
       />
     );
   } else if (view === 'benchmark') {
     body = <Benchmark onBack={() => setView('options')} />;
+  } else if (view === 'inputtest') {
+    body = <InputTest onBack={() => setView('options')} />;
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else if (view === 'inspect') {

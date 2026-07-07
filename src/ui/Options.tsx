@@ -76,10 +76,12 @@ export function Options({
   onBack,
   onCalibrate,
   onBenchmark,
+  onInputTest,
 }: {
   onBack: () => void;
   onCalibrate: () => void;
   onBenchmark: () => void;
+  onInputTest: () => void;
 }) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -242,6 +244,18 @@ export function Options({
               </button>
               <span className="text-[12px] text-[#ececec]/40">
                 ~40s; measures note-field FPS on this device
+              </span>
+            </Row>
+            <Row label="INPUT TEST">
+              <button
+                onClick={onInputTest}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+              >
+                Test input quantization ▸
+              </button>
+              <span className="text-[12px] text-[#ececec]/40">
+                controller update rate + timing granularity
               </span>
             </Row>
           </Section>

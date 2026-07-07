@@ -29,6 +29,23 @@ import { createTransitionDetector } from './gamepadEdges';
 
 export type InputDevice = 'keyboard' | 'gamepad';
 
+/**
+ * Gamepad poll cadence when we drive the loop ourselves — ~250Hz, finer than
+ * any display refresh, so a pad press is caught between frames instead of at
+ * the next rAF. (The browser clamps nested timers to ~4ms and throttles this in
+ * background tabs, so it self-limits.) Presses are still deduped by edge
+ * detection, and timestamped from Gamepad.timestamp, so a faster poll only
+ * lowers latency — it never double-fires. When the event-driven Gamepad API is
+ * present, an extra poll also fires on each `rawgamepadinputchange`.
+ */
+const GAMEPAD_POLL_MS = 4;
+
+/** Structural window subset for the (experimental) event-driven Gamepad API. */
+interface RawGamepadTarget {
+  addEventListener(type: 'rawgamepadinputchange', listener: () => void): void;
+  removeEventListener(type: 'rawgamepadinputchange', listener: () => void): void;
+}
+
 /** The subset of KeyboardEvent the bus reads (tests can pass plain objects). */
 export interface KeyEventLike {
   code: string;
@@ -88,21 +105,29 @@ export class InputBus {
   private readonly schedule: ((cb: () => void) => number) | null;
   private readonly cancelFn: (handle: number) => void;
   private readonly now: () => number;
+  /** window when the event-driven Gamepad API is available; else null. */
+  private readonly rawGamepadTarget: RawGamepadTarget | null;
 
   constructor(opts: InputBusOptions = {}) {
     this.target =
       opts.target !== undefined ? opts.target : typeof window !== 'undefined' ? window : null;
     this.readPad = opts.readPad ?? readGamepad;
+    // Poll on a ~250Hz timer, not requestAnimationFrame, so gamepad sampling
+    // is decoupled from (and finer than) the display refresh (see
+    // GAMEPAD_POLL_MS). Tests inject their own scheduler.
     this.schedule =
       opts.schedule !== undefined
         ? opts.schedule
-        : typeof requestAnimationFrame !== 'undefined'
-          ? (cb) => requestAnimationFrame(() => cb())
+        : typeof window !== 'undefined'
+          ? (cb) => window.setTimeout(cb, GAMEPAD_POLL_MS)
           : null;
     this.cancelFn =
-      opts.cancel ??
-      (typeof cancelAnimationFrame !== 'undefined' ? (h) => cancelAnimationFrame(h) : () => {});
+      opts.cancel ?? (typeof window !== 'undefined' ? (h) => window.clearTimeout(h) : () => {});
     this.now = opts.now ?? (() => performance.now());
+    this.rawGamepadTarget =
+      typeof window !== 'undefined' && 'GamepadRawInputChangeEvent' in window
+        ? (window as unknown as RawGamepadTarget)
+        : null;
   }
 
   /** Swap in the current bindings (SettingsContext calls this on load/update). */
@@ -165,17 +190,22 @@ export class InputBus {
   /** One gamepad sample -> role transitions (public so tests can drive it). */
   pollGamepad(nowMs = this.now()): void {
     const g = this.readPad(this.bindings.gamepad);
+    // Attribute the transition to the pad's device-sample time when it's sane
+    // (>0 and not after the poll) — finer than the poll-frame time; otherwise
+    // fall back to the poll time. See GamepadRead.timestamp.
+    const ts = g.timestamp;
+    const at = ts != null && ts > 0 && ts <= nowMs ? ts : nowMs;
     const { pressed, released } = this.detect(g.connected, g);
     for (const role of released) {
       const was = this.isRoleDown(role);
       this.padDown.delete(role);
       // Seeded-held buttons were never tracked down — releasing them is a no-op.
-      if (was && !this.isRoleDown(role)) this.emit(role, false, nowMs, 'gamepad', false);
+      if (was && !this.isRoleDown(role)) this.emit(role, false, at, 'gamepad', false);
     }
     for (const role of pressed) {
       const was = this.isRoleDown(role);
       this.padDown.add(role);
-      if (!was) this.emit(role, true, nowMs, 'gamepad', false);
+      if (!was) this.emit(role, true, at, 'gamepad', false);
     }
   }
 
@@ -183,11 +213,15 @@ export class InputBus {
     this.target?.addEventListener('keydown', this.keyDown);
     this.target?.addEventListener('keyup', this.keyUp);
     if (this.schedule) this.rafHandle = this.schedule(this.loop);
+    // Event-driven gamepad input (Chrome origin trial): poll the instant new
+    // pad data lands. The timer poll stays as the baseline; pollGamepad dedups.
+    this.rawGamepadTarget?.addEventListener('rawgamepadinputchange', this.onRawGamepad);
   }
 
   private stop(): void {
     this.target?.removeEventListener('keydown', this.keyDown);
     this.target?.removeEventListener('keyup', this.keyUp);
+    this.rawGamepadTarget?.removeEventListener('rawgamepadinputchange', this.onRawGamepad);
     if (this.rafHandle != null) {
       this.cancelFn(this.rafHandle);
       this.rafHandle = null;
@@ -203,6 +237,11 @@ export class InputBus {
   private readonly loop = (): void => {
     this.pollGamepad();
     if (this.schedule && this.handlers.size > 0) this.rafHandle = this.schedule(this.loop);
+  };
+
+  /** Extra poll driven by the event-driven Gamepad API (when supported). */
+  private readonly onRawGamepad = (): void => {
+    if (this.handlers.size > 0) this.pollGamepad();
   };
 
   private emit(

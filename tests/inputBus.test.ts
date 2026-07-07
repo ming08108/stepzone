@@ -3,11 +3,13 @@ import { defaultBindings, type ControlRole } from '../src/input/controls';
 import type { GamepadRead } from '../src/input/gamepad';
 import { InputBus, type ControlEvent, type KeyEventLike } from '../src/input/inputBus';
 
-/** A fake pad the tests mutate between polls. */
+/** A fake pad the tests mutate between polls. `timestamp` mimics
+ *  Gamepad.timestamp (the device-sample time); 0 = platform didn't provide it. */
 function makePad() {
-  const state = { connected: false, down: new Set<ControlRole>() };
+  const state = { connected: false, timestamp: 0, down: new Set<ControlRole>() };
   const read = (): GamepadRead => ({
     connected: state.connected,
+    timestamp: state.timestamp,
     left: state.down.has('left'),
     down: state.down.has('down'),
     up: state.down.has('up'),
@@ -110,6 +112,28 @@ describe('InputBus gamepad path (single shared poll)', () => {
     expect(events[0].timeStampMs).toBe(1016);
     expect(events[1].timeStampMs).toBe(1033);
     expect(events[0].nativeEvent).toBeUndefined();
+  });
+
+  it('stamps a press with the pad sample time (Gamepad.timestamp) when available', () => {
+    pad.state.connected = true;
+    bus.pollGamepad(1000); // seed
+    pad.state.timestamp = 1012; // the browser sampled the press at 1012...
+    pad.state.down.add('left');
+    bus.pollGamepad(1016); // ...but our poll frame is 1016
+    expect(events.map(brief)).toEqual(['gamepad:left:dn']);
+    expect(events[0].timeStampMs).toBe(1012); // sample time, not the poll time
+  });
+
+  it('falls back to the poll time when the sample time is missing or bogus', () => {
+    pad.state.connected = true;
+    bus.pollGamepad(1000); // seed
+    pad.state.timestamp = 9999; // future / different epoch -> not trusted
+    pad.state.down.add('right');
+    bus.pollGamepad(1016);
+    pad.state.timestamp = 0; // platform doesn't provide it
+    pad.state.down.delete('right');
+    bus.pollGamepad(1033);
+    expect(events.map((e) => e.timeStampMs)).toEqual([1016, 1033]);
   });
 
   it('a seeded-held button releasing does not emit a stray release', () => {
