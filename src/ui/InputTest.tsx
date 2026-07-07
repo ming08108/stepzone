@@ -1,31 +1,41 @@
 /**
- * INPUT TEST — a diagnostic that measures input timing quantization on this
- * device, so you can see how coarse your controller's timing really is (and
- * that the ~250Hz poll + Gamepad.timestamp path actually helps).
+ * INPUT TEST — infers a controller's TRUE polling rate from Gamepad.timestamp.
  *
- * It measures four things live:
- *  - display refresh (rAF interval) — the ceiling an rAF-based poll would hit;
- *  - our sample-loop rate — confirms we poll finer than the refresh;
- *  - each pad's update interval (from Gamepad.timestamp changes) — the device's
- *    real quantization, with a histogram;
- *  - a tap log fed by the actual input bus — every press with its device, the
- *    time it was stamped at, and the gap to the previous tap.
+ * Gamepad.timestamp advances each time the browser gets a fresh device report,
+ * so the gaps between distinct timestamps are integer multiples of the device's
+ * report period. The smallest gap we ever observe ≈ one period, so the true
+ * poll rate ≈ 1000 / (that smallest gap). The median gap doesn't work — it just
+ * reflects how often you happened to move, not the hardware rate.
  *
- * The measurement loop reads navigator.getGamepads() directly (a diagnostic
- * should observe the platform, not our abstraction); the tap log subscribes to
- * the real bus so it reflects the shipping pipeline.
+ * Two things matter for a good estimate:
+ *  - Sample faster than the device reports (else the smallest gap we can see is
+ *    our own sampling interval, not the device's). rAF (≤ refresh) and even a
+ *    4ms setTimeout are too slow for 500/1000Hz pads, so this page runs a
+ *    MessageChannel micro-loop (~thousands/sec; diagnostic-only, stops on
+ *    leave) reading navigator.getGamepads() directly.
+ *  - Generate updates: move an analog stick (continuous reports → the period
+ *    shows directly) or mash a panel (a couple of back-to-back reports reveal
+ *    it). A still controller emits nothing to measure.
+ *
+ * The ceiling is whatever the browser exposes to JS via getGamepads(); the tap
+ * log below shows the same timestamps flowing through the real input bus.
  */
 import { useEffect, useState } from 'react';
-import { subscribeControls, type ControlEvent } from '../input/inputBus';
+import { RAW_GAMEPAD_EVENTS, subscribeControls, type ControlEvent } from '../input/inputBus';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useMenuNav } from './useMenuNav';
 
+// The event-driven Gamepad API is behind chrome://flags/#gamepad-raw-input-change-event
+// (a global flag, not an origin trial). The on-event-handler attribute is the
+// most reliable static signal; the live event count below is the real proof.
 const RAW_GAMEPAD_SUPPORTED =
-  typeof window !== 'undefined' && 'GamepadRawInputChangeEvent' in window;
+  typeof window !== 'undefined' && RAW_GAMEPAD_EVENTS.some((n) => `on${n}` in window);
 
-/** Interval buckets (ms upper bounds) for the update-rate histogram. */
-const BUCKETS = [1, 2, 4, 6, 9, 13, 17, 25, 40, Infinity];
-const BUCKET_LABELS = ['<1', '1–2', '2–4', '4–6', '6–9', '9–13', '13–17', '17–25', '25–40', '40+'];
+/** Gap buckets (ms upper bounds) for the timestamp-interval histogram. */
+const BUCKETS = [0.5, 1, 2, 4, 6, 9, 13, 17, 25, Infinity];
+const BUCKET_LABELS = ['<.5', '.5–1', '1–2', '2–4', '4–6', '6–9', '9–13', '13–17', '17–25', '25+'];
+
+const RING = 400; // gaps kept per pad
 
 function median(xs: number[]): number {
   if (xs.length === 0) return 0;
@@ -34,31 +44,44 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-const RING = 240; // samples kept per stat
+/**
+ * Infer the device report period from the observed timestamp gaps: the gaps are
+ * multiples of the period, so its floor is the period. Use a low percentile
+ * (not the raw min) to shrug off a single coarsened/jittery outlier. 0 until we
+ * have enough samples.
+ */
+function inferPeriodMs(gaps: number[]): number {
+  if (gaps.length < 6) return 0;
+  const s = [...gaps].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(1, Math.floor(s.length * 0.02)))];
+}
 
 interface PadStat {
   index: number;
   id: string;
   hasTimestamp: boolean;
-  intervals: number[]; // between distinct Gamepad.timestamp values
-  hist: number[]; // counts per BUCKET
+  gaps: number[];
+  hist: number[];
+}
+
+interface PadView {
+  index: number;
+  id: string;
+  hasTimestamp: boolean;
+  samples: number;
+  periodMs: number;
+  hz: number;
+  minMs: number;
+  medMs: number;
+  maxMs: number;
+  hist: number[];
 }
 
 interface Snapshot {
   displayHz: number;
   displayMs: number;
-  pollHz: number;
-  pads: Array<{
-    index: number;
-    id: string;
-    hasTimestamp: boolean;
-    samples: number;
-    medMs: number;
-    minMs: number;
-    maxMs: number;
-    hz: number;
-    hist: number[];
-  }>;
+  sampleHz: number;
+  pads: PadView[];
 }
 
 interface Tap {
@@ -69,33 +92,45 @@ interface Tap {
   dt: number | null;
 }
 
-const EMPTY: Snapshot = { displayHz: 0, displayMs: 0, pollHz: 0, pads: [] };
+const EMPTY: Snapshot = { displayHz: 0, displayMs: 0, sampleHz: 0, pads: [] };
 
 export function InputTest({ onBack }: { onBack: () => void }) {
   useMenuNav(onBack);
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
   const [taps, setTaps] = useState<Tap[]>([]);
+  const [rawEvents, setRawEvents] = useState(0);
+
+  // Count real event-driven-Gamepad-API events — the honest "is it on" signal.
+  useEffect(() => {
+    const bump = () => setRawEvents((n) => n + 1);
+    for (const name of RAW_GAMEPAD_EVENTS) window.addEventListener(name, bump);
+    return () => {
+      for (const name of RAW_GAMEPAD_EVENTS) window.removeEventListener(name, bump);
+    };
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    let running = true;
     const padStats = new Map<number, PadStat>();
     const lastTs = new Map<number, number>();
     const rafIntervals: number[] = [];
     let lastRaf = 0;
-    let pollCount = 0;
-    let pollWindowStart = performance.now();
-    let pollHz = 0;
+    let sampleCount = 0;
+    let sampleWinStart = performance.now();
+    let sampleHz = 0;
+    let lastSampleT = 0;
 
     const push = (arr: number[], v: number) => {
       arr.push(v);
       if (arr.length > RING) arr.shift();
     };
 
-    // High-rate sampler: read every pad, record the gap between distinct
-    // Gamepad.timestamp values (the device's actual update quantization).
+    // Read every pad; record the gap whenever a pad's Gamepad.timestamp advances.
     const sample = () => {
-      if (cancelled) return;
-      pollCount++;
+      const t = performance.now();
+      if (t - lastSampleT < 0.3) return; // gate getGamepads() to ~3kHz
+      lastSampleT = t;
+      sampleCount++;
       const pads = navigator.getGamepads ? navigator.getGamepads() : [];
       for (const gp of pads) {
         if (!gp) continue;
@@ -105,7 +140,7 @@ export function InputTest({ onBack }: { onBack: () => void }) {
             index: gp.index,
             id: gp.id || 'Gamepad',
             hasTimestamp: gp.timestamp > 0,
-            intervals: [],
+            gaps: [],
             hist: new Array(BUCKETS.length).fill(0),
           };
           padStats.set(gp.index, st);
@@ -113,51 +148,60 @@ export function InputTest({ onBack }: { onBack: () => void }) {
         st.hasTimestamp = st.hasTimestamp || gp.timestamp > 0;
         const prev = lastTs.get(gp.index);
         if (prev !== undefined && gp.timestamp > prev) {
-          const dt = gp.timestamp - prev;
-          push(st.intervals, dt);
-          st.hist[BUCKETS.findIndex((b) => dt < b)]++;
+          const gap = gp.timestamp - prev;
+          push(st.gaps, gap);
+          st.hist[BUCKETS.findIndex((b) => gap < b)]++;
         }
         lastTs.set(gp.index, gp.timestamp);
       }
-      timer = window.setTimeout(sample, 1); // as fast as the clamp allows
     };
-    let timer = window.setTimeout(sample, 1);
 
-    // Display refresh, for contrast (the rAF-poll ceiling).
+    // MessageChannel micro-loop: fires far faster than any timer/rAF, so the
+    // smallest gap we resolve is the device's, not our sampler's. Cooperative
+    // (each tick is its own task), so rAF/timers/React still run.
+    const mc = new MessageChannel();
+    mc.port1.onmessage = () => {
+      if (!running) return;
+      sample();
+      mc.port2.postMessage(0);
+    };
+    mc.port2.postMessage(0);
+
+    // Display refresh, for contrast (the ceiling an rAF-based poll would hit).
     const raf = (t: number) => {
-      if (cancelled) return;
+      if (!running) return;
       if (lastRaf) push(rafIntervals, t - lastRaf);
       lastRaf = t;
       rafHandle = requestAnimationFrame(raf);
     };
     let rafHandle = requestAnimationFrame(raf);
 
-    // Flush accumulated stats to React a few times a second (not per sample).
+    // Flush derived stats to React a few times a second (not per sample).
     const flush = window.setInterval(() => {
-      if (cancelled) return;
       const now = performance.now();
-      const elapsed = now - pollWindowStart;
+      const elapsed = now - sampleWinStart;
       if (elapsed > 250) {
-        pollHz = (pollCount * 1000) / elapsed;
-        pollCount = 0;
-        pollWindowStart = now;
+        sampleHz = (sampleCount * 1000) / elapsed;
+        sampleCount = 0;
+        sampleWinStart = now;
       }
       const dMs = median(rafIntervals);
       setSnap({
         displayMs: dMs,
         displayHz: dMs > 0 ? 1000 / dMs : 0,
-        pollHz,
+        sampleHz,
         pads: [...padStats.values()].map((st) => {
-          const med = median(st.intervals);
+          const periodMs = inferPeriodMs(st.gaps);
           return {
             index: st.index,
             id: st.id,
             hasTimestamp: st.hasTimestamp,
-            samples: st.intervals.length,
-            medMs: med,
-            minMs: st.intervals.length ? Math.min(...st.intervals) : 0,
-            maxMs: st.intervals.length ? Math.max(...st.intervals) : 0,
-            hz: med > 0 ? 1000 / med : 0,
+            samples: st.gaps.length,
+            periodMs,
+            hz: periodMs > 0 ? 1000 / periodMs : 0,
+            minMs: st.gaps.length ? Math.min(...st.gaps) : 0,
+            medMs: median(st.gaps),
+            maxMs: st.gaps.length ? Math.max(...st.gaps) : 0,
             hist: st.hist,
           };
         }),
@@ -165,15 +209,17 @@ export function InputTest({ onBack }: { onBack: () => void }) {
     }, 200);
 
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+      running = false;
+      mc.port1.onmessage = null;
+      mc.port1.close();
+      mc.port2.close();
       cancelAnimationFrame(rafHandle);
       window.clearInterval(flush);
     };
   }, []);
 
-  // Tap log from the real input bus — reflects the shipping pipeline (including
-  // the Gamepad.timestamp stamping). Only presses; keep the last dozen.
+  // Tap log from the real input bus — the shipping pipeline (incl. the
+  // Gamepad.timestamp stamping). Presses only; keep the last dozen.
   useEffect(() => {
     let seq = 0;
     let prevT = 0;
@@ -181,8 +227,12 @@ export function InputTest({ onBack }: { onBack: () => void }) {
       if (!e.pressed || e.repeat) return;
       const dt = prevT ? e.timeStampMs - prevT : null;
       prevT = e.timeStampMs;
-      const tap: Tap = { seq: seq++, device: e.device, role: e.role, t: e.timeStampMs, dt };
-      setTaps((prev) => [tap, ...prev].slice(0, 12));
+      setTaps((prev) =>
+        [{ seq: seq++, device: e.device, role: e.role, t: e.timeStampMs, dt }, ...prev].slice(
+          0,
+          12,
+        ),
+      );
     });
   }, []);
 
@@ -200,22 +250,28 @@ export function InputTest({ onBack }: { onBack: () => void }) {
       <div className="h-full overflow-y-auto px-[28px] py-8">
         <div className="mx-auto max-w-[860px]">
           <p className="mb-6 border border-l-[3px] border-white/10 border-l-[#ff5d47]/60 px-4 py-2.5 text-[12px] leading-relaxed tracking-[0.03em] text-[#ececec]/55">
-            Measures input timing granularity on this device. Move an analog stick or mash a panel
-            to generate updates — the update interval is your controller&apos;s real quantization.
-            Keyboard is event-timestamped (effectively unquantized); a dance pad is limited by its
-            USB report rate.
+            Infers your controller&apos;s true polling rate from the granularity of
+            <code className="mx-1 text-[#ececec]/80">Gamepad.timestamp</code>. Move an analog stick
+            (continuous reports) or mash a panel to generate updates — the smallest gap between
+            timestamp updates is one device report period. This page samples far faster than the
+            game does (the input bus polls at ~250&nbsp;Hz) so the estimate reflects the device, not
+            our loop. Keyboard is event-timestamped — see the tap log.
           </p>
 
           {/* Timing sources */}
           <div className="mb-6 grid grid-cols-3 gap-3">
             {[
               ['DISPLAY REFRESH', num(snap.displayHz, 0), 'Hz', `${num(snap.displayMs)} ms/frame`],
-              ['INPUT POLL', num(snap.pollHz, 0), 'Hz', 'our sampler'],
+              ['SAMPLE RATE', num(snap.sampleHz, 0), 'Hz', 'this page (getGamepads)'],
               [
                 'EVENT-DRIVEN API',
-                RAW_GAMEPAD_SUPPORTED ? 'YES' : 'NO',
+                rawEvents > 0 ? 'ACTIVE' : RAW_GAMEPAD_SUPPORTED ? 'ON' : 'OFF',
                 '',
-                RAW_GAMEPAD_SUPPORTED ? 'rawgamepadinputchange' : 'poll fallback',
+                rawEvents > 0
+                  ? `${rawEvents} events received`
+                  : RAW_GAMEPAD_SUPPORTED
+                    ? 'enabled — press a pad'
+                    : 'flag off — polling',
               ],
             ].map(([label, big, unit, sub]) => (
               <div key={label} className="border border-white/10 px-4 py-3">
@@ -231,10 +287,21 @@ export function InputTest({ onBack }: { onBack: () => void }) {
             ))}
           </div>
 
-          {/* Per-pad report rate + histogram */}
+          {rawEvents === 0 && (
+            <p className="mb-6 -mt-3 text-[11px] text-[#ececec]/40">
+              Event-driven input is behind a flag: enable{' '}
+              <code className="text-[#ececec]/70">
+                chrome://flags/#gamepad-raw-input-change-event
+              </code>{' '}
+              (or the <code className="text-[#ececec]/70">edge://</code> equivalent) and relaunch —
+              the app attaches the listeners either way, so it lights up automatically.
+            </p>
+          )}
+
+          {/* Inferred device poll rate */}
           <div className="mb-3 flex items-center gap-4">
             <span className="text-[11px] tracking-[0.2em] text-[#ececec]/40">
-              CONTROLLER UPDATE RATE
+              INFERRED DEVICE POLL RATE
             </span>
             <span className="h-px flex-1 bg-white/[0.09]" />
           </div>
@@ -247,6 +314,7 @@ export function InputTest({ onBack }: { onBack: () => void }) {
           ) : (
             snap.pads.map((p) => {
               const peak = Math.max(1, ...p.hist);
+              const ready = p.samples >= 6 && p.periodMs > 0;
               return (
                 <div key={p.index} className="mb-4 border border-white/10 px-4 py-3">
                   <div className="flex items-baseline gap-3">
@@ -256,25 +324,29 @@ export function InputTest({ onBack }: { onBack: () => void }) {
                     </span>
                     {!p.hasTimestamp && (
                       <span className="text-[10px] tracking-[0.1em] text-[#ffcf3d]/70">
-                        NO TIMESTAMP — POLL-TIME FALLBACK
+                        NO TIMESTAMP — CAN&apos;T INFER
                       </span>
                     )}
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-[13px] [font-variant-numeric:tabular-nums]">
-                    <span>
-                      <span className="text-[#ececec]/40">rate </span>
-                      <b style={{ color: AC }}>{num(p.hz, 0)}</b>
-                      <span className="text-[#ececec]/40"> Hz</span>
+                  <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+                    <span className="text-[32px] font-bold leading-none [font-variant-numeric:tabular-nums]">
+                      {ready ? (
+                        <>
+                          <span style={{ color: AC }}>≈ {Math.round(p.hz)}</span>
+                          <span className="ml-1 text-[14px] font-normal text-[#ececec]/50">Hz</span>
+                        </>
+                      ) : (
+                        <span className="text-[16px] font-normal text-[#ececec]/45">
+                          move a stick / mash a panel…
+                        </span>
+                      )}
                     </span>
-                    <span>
-                      <span className="text-[#ececec]/40">interval </span>
-                      {num(p.medMs)} ms
-                      <span className="text-[#ececec]/40">
-                        {' '}
-                        ({num(p.minMs)}–{num(p.maxMs)})
+                    {ready && (
+                      <span className="text-[13px] [font-variant-numeric:tabular-nums] text-[#ececec]/55">
+                        period {num(p.periodMs, 2)} ms · gaps {num(p.minMs, 1)}–{num(p.maxMs, 1)} ms
+                        (med {num(p.medMs, 1)}) · {p.samples} samples
                       </span>
-                    </span>
-                    <span className="text-[#ececec]/40">{p.samples} samples</span>
+                    )}
                   </div>
                   <div className="mt-3 flex h-16 items-end gap-1">
                     {p.hist.map((c, i) => (
@@ -292,8 +364,8 @@ export function InputTest({ onBack }: { onBack: () => void }) {
                     ))}
                   </div>
                   <div className="mt-1 text-[10px] text-[#ececec]/35">
-                    update interval, ms (analog stick = true report rate; digital pad = gaps between
-                    presses)
+                    gap between timestamp updates, ms — the leftmost populated bucket is one report
+                    period; higher buckets are its multiples
                   </div>
                 </div>
               );
@@ -317,8 +389,7 @@ export function InputTest({ onBack }: { onBack: () => void }) {
             {taps.length === 0 ? (
               <div className="px-4 py-4 text-[12px] text-[#ececec]/45">
                 Press panels / keys — each shows the time the bus stamped it (from Gamepad.timestamp
-                for pads) and the gap to the previous tap. Rapid pad taps cluster at multiples of
-                the report interval; keyboard gaps are continuous.
+                for pads) and the gap to the previous tap.
               </div>
             ) : (
               taps.map((tap) => (
