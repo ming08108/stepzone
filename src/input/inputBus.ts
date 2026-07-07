@@ -24,8 +24,10 @@
  */
 
 import { CONTROL_ROLES, defaultBindings, type Bindings, type ControlRole } from './controls';
-import { readGamepad, type GamepadRead } from './gamepad';
+import { readGamepad, type GamepadRead, type PadSample } from './gamepad';
 import { createTransitionDetector } from './gamepadEdges';
+
+export type { PadSample } from './gamepad';
 
 export type InputDevice = 'keyboard' | 'gamepad';
 
@@ -85,6 +87,8 @@ export interface InputBusOptions {
 export class InputBus {
   private bindings: Bindings = defaultBindings();
   private readonly handlers = new Set<(e: ControlEvent) => void>();
+  /** Raw per-pad sample observers (diagnostics) — fed each gamepad poll. */
+  private readonly sampleHandlers = new Set<(pads: PadSample[]) => void>();
   /** Codes physically held -> the role they resolved to at press time (so a
    *  rebind mid-hold still releases the original role). */
   private readonly heldCodes = new Map<string, ControlRole>();
@@ -144,16 +148,38 @@ export class InputBus {
     return (this.kbCount.get(role) ?? 0) > 0 || this.padDown.has(role);
   }
 
+  /** Total live subscribers (control + sample) — the poll/listeners run while > 0. */
+  private get subscriberCount(): number {
+    return this.handlers.size + this.sampleHandlers.size;
+  }
+
   /** Subscribe to control events; returns the unsubscribe function. */
   subscribe(handler: (e: ControlEvent) => void): () => void {
+    const wasIdle = this.subscriberCount === 0;
     this.handlers.add(handler);
-    if (this.handlers.size === 1) this.start();
+    if (wasIdle) this.start();
     let active = true;
     return () => {
       if (!active) return;
       active = false;
       this.handlers.delete(handler);
-      if (this.handlers.size === 0) this.stop();
+      if (this.subscriberCount === 0) this.stop();
+    };
+  }
+
+  /** Observe the raw per-pad samples the gamepad poll reads (index, id,
+   *  Gamepad.timestamp), for diagnostics — the same reads gameplay consumes, so
+   *  nothing runs a second poll. Returns the unsubscribe function. */
+  subscribeGamepadSamples(handler: (pads: PadSample[]) => void): () => void {
+    const wasIdle = this.subscriberCount === 0;
+    this.sampleHandlers.add(handler);
+    if (wasIdle) this.start();
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.sampleHandlers.delete(handler);
+      if (this.subscriberCount === 0) this.stop();
     };
   }
 
@@ -189,6 +215,10 @@ export class InputBus {
   /** One gamepad sample -> role transitions (public so tests can drive it). */
   pollGamepad(nowMs = this.now()): void {
     const g = this.readPad(this.bindings.gamepad);
+    // Surface the raw per-pad samples this poll read (diagnostics observe the
+    // exact reads gameplay judges on — no second input path).
+    if (this.sampleHandlers.size > 0 && g.pads)
+      for (const cb of [...this.sampleHandlers]) cb(g.pads);
     // Attribute the transition to the pad's device-sample time when it's sane
     // (>0 and not after the poll) — finer than the poll-frame time; otherwise
     // fall back to the poll time. See GamepadRead.timestamp.
@@ -284,6 +314,11 @@ export const inputBus = new InputBus();
 /** Subscribe to unified control events; returns the unsubscribe function. */
 export function subscribeControls(handler: (e: ControlEvent) => void): () => void {
   return inputBus.subscribe(handler);
+}
+
+/** Observe the raw per-pad gamepad samples the bus's poll reads (diagnostics). */
+export function subscribeGamepadSamples(handler: (pads: PadSample[]) => void): () => void {
+  return inputBus.subscribeGamepadSamples(handler);
 }
 
 /** Point the bus at the current bindings (called by the settings layer). */
