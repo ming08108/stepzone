@@ -17,6 +17,14 @@
 
 import type { ControlRole } from './controls';
 
+/** One connected pad's identity + sample time, from a single read. */
+export interface PadSample {
+  index: number;
+  id: string;
+  /** `Gamepad.timestamp` — when the browser last sampled this pad. */
+  timestamp: number;
+}
+
 /** Per-role pressed state, plus whether any pad is connected. */
 export type GamepadRead = Record<ControlRole, boolean> & {
   connected: boolean;
@@ -28,6 +36,11 @@ export type GamepadRead = Record<ControlRole, boolean> & {
    * jitter. 0/undefined when the platform doesn't provide it (older Firefox).
    */
   timestamp?: number;
+  /**
+   * Per-connected-pad snapshot from this same read — lets the bus surface raw
+   * per-pad samples (diagnostics) without anyone running a second poll.
+   */
+  pads?: PadSample[];
 };
 
 const AXIS_THRESHOLD = 0.5;
@@ -108,10 +121,16 @@ export function readGamepad(overrides: Partial<Record<ControlRole, number>> = {}
   const pads = connectedPads();
   if (pads.length === 0) return out;
   out.connected = true;
-  // The freshest device-sample time across pads (see GamepadRead.timestamp).
+  // The freshest device-sample time across pads (see GamepadRead.timestamp),
+  // plus each pad's identity + sample time for diagnostics.
   let ts = 0;
   for (const gp of pads) if (gp.timestamp > ts) ts = gp.timestamp;
   out.timestamp = ts;
+  out.pads = pads.map((gp) => ({
+    index: gp.index,
+    id: gp.id || 'Gamepad',
+    timestamp: gp.timestamp,
+  }));
 
   // Buttons the user rebound to a panel — excluded from the default confirm/back
   // so a panel press on one of those buttons doesn't also fire a menu action.
