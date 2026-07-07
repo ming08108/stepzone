@@ -82,28 +82,40 @@ to anchoring on `currentTime − (outputLatency || baseLatency)` paired with
 
 For dance pads that present as gamepads, the Gamepad API is **poll-only** — you
 read state and synthesize press/release edges (`src/input/gamepad.ts`,
-`inputBus.ts`), so pad input is coarser than keyboard. We narrow that gap three
-ways:
+`inputBus.ts`), so pad input is coarser than keyboard. Two mechanisms carry the
+weight, and they compose:
 
-- **Poll finer than the display.** The bus samples on a ~250 Hz `setTimeout`
-  loop, **not** `requestAnimationFrame`, so a press is caught between frames
-  instead of at the next refresh. Judging is already decoupled from rendering
-  (the judge runs on the audio clock), so a faster input poll helps directly.
 - **Timestamp from the device sample, not the poll.** A detected transition is
   stamped with `Gamepad.timestamp` (when the browser sampled the pad, same clock
-  as `performance.now()`) rather than the poll-frame time — removing most of the
-  quantization jitter. Edge detection dedups, so faster polling never
-  double-fires; it only lowers latency. Falls back to poll time when the
-  platform omits the timestamp (older Firefox).
-- **Event-driven when available.** When Chrome's `rawgamepadinputchange` exists
-  (`'GamepadRawInputChangeEvent' in window`), an extra poll fires the instant new
-  pad data lands; the timer poll stays as the tested baseline/fallback.
+  as `performance.now()`) rather than the frame we noticed it — removing most of
+  the quantization jitter. This is what keeps **judging** accurate even when we
+  only poll once per frame: judging rides the sample time, not the render frame.
+  Falls back to poll time when the platform omits the timestamp (older Firefox).
+- **Poll on `requestAnimationFrame`** as the fallback. A vsync-aligned cadence is
+  steadier and cheaper than a busy timer loop, and — because the timestamp above
+  gives the real event time — the poll rate only bounds visual-feedback latency,
+  not judging. The loop **stops entirely** once the event-driven API proves live;
+  connect/disconnect are handled by their own events, so nothing is polled.
+- **Event-driven when the flag is on.** `chrome://flags/#gamepad-raw-input-change-event`
+  (also `edge://`) exposes `gamepadrawinputchanged` on `window`; we attach the
+  listener unconditionally (harmless when it never fires) so it lights up when the
+  user enables it — a one-time hint suggests it when a pad is connected.
 
-The ceiling is still the pad's USB HID report rate (125–1000 Hz). **OPTIONS →
-DISPLAY → Test input quantization** measures it live on the player's device:
-display refresh, our poll rate, each pad's update interval + histogram, and a tap
-log of the real pipeline. Keyboard-emulating pad adapters remain the lowest-jitter
-option (real `keydown` timestamps).
+**Does the event API still help if we have `Gamepad.timestamp`?** Yes, at low
+refresh rates and for fast input. A frame poll only samples state at frame
+boundaries, so (a) a tap that goes down-and-up **between** two frames is missed
+entirely, and (b) if the device (or a noisy analog stick) advanced the timestamp
+after the actual press, the stamped time is the latest sample at the poll, late
+by up to a frame (~16 ms at 60 Hz — inside a W1 window). The event fires on the
+exact report that changed, so it never misses a transition and pins the timestamp
+to the true press time. `Gamepad.timestamp` makes the poll fallback _good_; the
+event API makes it _exact and complete_.
+
+The ceiling is the pad's USB HID report rate (125–1000 Hz), and — with polling —
+what `getGamepads()` exposes to JS (often ~250 Hz internally). **OPTIONS →
+DISPLAY → Test input quantization** infers it live from the `Gamepad.timestamp`
+granularity, and shows whether the event API is actually firing. Keyboard-emulating
+pad adapters remain the lowest-jitter option (real `keydown` timestamps).
 
 ## 4. Calibration is not optional
 
