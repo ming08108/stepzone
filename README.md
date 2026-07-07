@@ -2,7 +2,10 @@
 
 A web-based DDR / StepMania-compatible rhythm **track player**. The engine is
 framework-free TypeScript; the app shell is React. It reads real `.sm`/`.ssc`
-simfiles and plays them in the browser with sample-accurate timing.
+simfiles and plays them in the browser with sample-accurate timing and a
+WebGPU note field.
+
+![Song select](docs/img/song-select.png)
 
 Built from the reimplementation spec in
 [`../itgmania/Docs/TrackPlayerSpec/`](../itgmania/Docs/TrackPlayerSpec/), which
@@ -13,7 +16,7 @@ here cites the spec doc it implements.
 
 **Milestone 5 — Player features (mostly done).** Real song folders and packs
 play end to end in the browser: a Web Audio clock, keyboard and gamepad input
-judged on the event timestamp, a scrolling canvas note field, and
+judged on the event timestamp, a WebGPU note field (arcade + ITG skins), and
 combo/score/life/grade with a results screen — plus song select with
 search/favorites, persisted options (scroll speed, music rate, sync offset, key
 rebinding, mirror/turn mods), and an auto-calibration screen. The pure layers
@@ -54,7 +57,7 @@ src/
   song/       song, steps, difficulty, stepsType     (spec doc 5)
   audio/      syncMap (pure), clock (Web Audio)       (spec doc 6)
   input/      key/gamepad -> column mapping           (spec doc 7)
-  render/     note-field canvas, WebGPU background    (spec doc 8)
+  render/     WebGPU note field + skins, scroll math   (spec doc 8)
   gameplay/   judgment, scoring, life                 (spec doc 4)
   game/       the play-loop orchestrator              (spec doc 9)
   io/         song folders, packs, remembered folder handle
@@ -62,12 +65,30 @@ src/
   ui/         React components
 tests/        vitest suites (mirror the engine)
 docs/
-  LATENCY.md  how we get low latency right on the web
-  ROADMAP.md  milestones
+  LATENCY.md      how we get low latency right on the web
+  RENDER-PERF.md  the WebGPU note field + render benchmark
+  ROADMAP.md      milestones
 ```
 
 There is no barrel module: the app and tests deep-import from the subfolders
 directly (e.g. `src/timing/timingData`).
+
+## Rendering
+
+The note field renders on **WebGPU**: one instanced-quad pipeline over a
+baked texture atlas draws the whole frame in a handful of draw calls, with no
+per-frame canvas work. Two looks ship on the same field through a `GpuSkin`
+split — an arcade (DDR A3) skin and an ITG (Simply Love) skin — picked in
+Player Options. WebGPU is required to play; there is no canvas fallback.
+
+|              Arcade — DDR A3              |          ITG — Simply Love          |
+| :---------------------------------------: | :---------------------------------: |
+| ![Arcade skin](docs/img/field-arcade.png) | ![ITG skin](docs/img/field-itg.png) |
+
+An in-app render benchmark (OPTIONS → DISPLAY → **Run render benchmark**, or
+open `/?bench=auto`) measures the real GPU time of each presented frame via
+WebGPU timestamp queries. The design, the pass order, and the numbers are in
+[`docs/RENDER-PERF.md`](docs/RENDER-PERF.md).
 
 ## Low latency
 
