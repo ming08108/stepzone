@@ -19,7 +19,7 @@ import {
   paintReceptor,
   QUANT_BAND,
   QUANT_TUBE,
-} from '../src/render/themes/ddrA3';
+} from '../src/render/gpu/ddrA3Art';
 import {
   ITG_JUDGMENT,
   ITG_QUANT_COLOR,
@@ -27,7 +27,7 @@ import {
   paintCelMineBody,
   paintCelReceptor,
   paintCelTapBase,
-} from '../src/render/themes/simplyLove';
+} from '../src/render/gpu/simplyLoveArt';
 
 /** A CanvasRenderingContext2D stand-in: every method is a no-op. */
 function mockCtx(): CanvasRenderingContext2D {

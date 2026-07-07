@@ -16,7 +16,7 @@
  * both work.
  */
 
-import { measureWidth, OUTLINE_INK, roundFont } from '../themes/ddrA3';
+import { measureWidth, OUTLINE_INK, roundFont } from './text';
 import type { AtlasRect } from './atlas';
 import type { GpuAtlas } from './atlas';
 import type { QuadBatch } from './quads';

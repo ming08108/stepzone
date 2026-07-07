@@ -29,9 +29,9 @@ import {
 import { isVideoFile } from '../io/songFiles';
 import { columnAnglesFor } from '../render/columns';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
-import type { Feedback, NoteFieldConfig } from '../render/noteField';
+import type { Feedback, NoteFieldConfig } from '../render/fieldConfig';
 import { songMaxBpm } from '../render/scroll';
-import type { RenderMeta } from '../render/theme';
+import type { RenderMeta } from '../render/types';
 import { TimingData } from '../timing/timingData';
 import { PRACTICE_LEAD_SECONDS, PRACTICE_TAIL_SECONDS } from '../game/playOptions';
 

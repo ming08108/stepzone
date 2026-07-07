@@ -6,7 +6,7 @@
  */
 
 import { NoteType, TapNoteScore } from '../../notes/noteTypes';
-import type { JudgmentStyle } from '../theme';
+import type { JudgmentStyle } from '../types';
 
 // ITG note quantization palette (classic StepMania/ITG noteskin colors).
 export const ITG_QUANT_COLOR: Record<NoteType, string> = {

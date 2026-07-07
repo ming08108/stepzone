@@ -40,7 +40,7 @@ import {
   LANE_W,
   MIN_DESIGN_SCALE,
   type NoteFieldConfig,
-} from '../noteField';
+} from '../fieldConfig';
 import {
   advanceCursor,
   FALLBACK_MAX_BPM,
@@ -54,7 +54,7 @@ import {
   yOf,
   type ScrollState,
 } from '../scroll';
-import { RECEPTOR_FLASH, type Feedback, type TapNoteStyle } from '../theme';
+import { RECEPTOR_FLASH, type Feedback, type TapNoteStyle } from '../types';
 import type { NoteSkin } from '../../game/playOptions';
 import { GpuAtlas } from './atlas';
 import { GlyphBank } from './glyphs';

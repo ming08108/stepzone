@@ -1,7 +1,7 @@
 /**
  * Simply Love (ITGmania) GPU skin — the 'itg' look on the WebGPU note field.
- * Same design as the 2D SimplyLoveTheme (themes/simplyLove.ts), baking its
- * exported cel-noteskin paint code once into the atlas and driving it with
+ * The cel-noteskin paint code lives in simplyLoveArt.ts; this skin bakes it
+ * once into the atlas and drives it with
  * instanced quads: cel arrows (with the per-beat stem stripe as a masked,
  * vertically-scrolling overlay), silver hold tubes, the rotating mine, the
  * additive cel explosion, and the SL gameplay chrome — the side HUD panel
@@ -17,8 +17,8 @@
 
 import type { ActiveNote, Judge } from '../../gameplay/judge';
 import { NoteType, TapNoteScore, TapNoteType } from '../../notes/noteTypes';
-import type { Feedback, TapNoteStyle } from '../theme';
-import { measureWidth } from '../themes/ddrA3';
+import type { Feedback, TapNoteStyle } from '../types';
+import { measureWidth } from './text';
 import {
   CEL_FACE,
   font,
@@ -39,7 +39,7 @@ import {
   SL_GRAPH_LO,
   SL_JUDGMENT_LIFE,
   traceCel,
-} from '../themes/simplyLove';
+} from './simplyLoveArt';
 import type { AtlasRect } from './atlas';
 import type { Tint } from './glyphs';
 import type { ColorFn } from './shapes';
