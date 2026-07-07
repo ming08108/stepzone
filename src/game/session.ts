@@ -201,6 +201,7 @@ export class GameSession {
    * omit it (or pass null) to play a synthesized metronome instead.
    */
   async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
+    let freshField = false;
     // Create the WebGPU field once per session (both skins render on it). If
     // the device is unavailable there is no canvas fallback — surface an error.
     if (!this.gpuField) {
@@ -224,9 +225,7 @@ export class GameSession {
       gpu.resize(this.logicalW, this.logicalH, this.dpr);
       gpu.setBeatTimes(this.beatLineTimes);
       if (this.bgMedia) gpu.setBackground(this.bgMedia);
-      // Bake the atlas + compile pipelines now, behind the READY splash, so
-      // the first real notes/explosion don't hitch.
-      gpu.prewarm();
+      freshField = true;
     }
     if (this.stopped) return;
     await this.clock.resume();
@@ -251,6 +250,19 @@ export class GameSession {
     // during the pre-roll (like the negative time of a normal lead-in).
     this.clock.start(this.startOffsetSeconds(), LEAD_IN_SECONDS);
     this.running = true;
+    // Bake the atlas + compile pipelines now — AFTER the audio-decode await
+    // above, not before it. prewarm() paints two synthetic warm-up frames; when
+    // it ran ahead of the (multi-second) decode those phantom arrows sat on the
+    // swapchain the whole time. Running it here and immediately painting the
+    // real starting field in the SAME task overwrites the warm-up frames in the
+    // current swapchain texture before it is ever presented — no phantom flash.
+    const gpu = this.gpuField;
+    if (freshField && gpu) {
+      gpu.prewarm();
+      const visualNow = this.clock.songSecondsNow() - this.visualOffsetSeconds;
+      const beat = this.timing.getBeatFromElapsedTime(visualNow);
+      gpu.draw(this.judge, visualNow, beat, 0, this.feedback);
+    }
     this.raf = requestAnimationFrame(this.loop);
   }
 

@@ -297,8 +297,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
     }
     setResult(null);
-    setPhase('playing');
+    // Keep the LOADING splash up through GPU init + audio decode + prewarm, and
+    // reveal the field only once start() has the live loop running. (Flipping to
+    // 'playing' up front dropped the splash during the multi-second decode, when
+    // the field was still blank / mid-prewarm.) The no-WebGPU and device-lost
+    // paths flip us to 'error' via onError — don't stomp that.
+    setPhase('ready');
     await session.start(req.encodedAudio);
+    if (sessionRef.current === session && session.usingGpuRenderer) {
+      setPhase('playing');
+    }
   };
 
   // Straight into the song: START on Player Options already confirmed intent
