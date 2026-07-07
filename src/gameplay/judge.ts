@@ -70,6 +70,12 @@ export interface JudgeEvent {
 }
 
 const INITIAL_LIFE = 0.5;
+// ITG LifeMeterBar: after a life loss, life gains are withheld until you re-hit
+// a few notes (RegenComboAfterMiss=5, capped at MaxRegenComboAfterMiss=5). The
+// other default modifiers are no-ops — MercifulDrain=false, ProgressiveLifebar=0,
+// and LifeDifficulty resolves to 1.0 (×1 gains, ÷1 losses).
+const REGEN_COMBO_AFTER_MISS = 5;
+const MAX_REGEN_COMBO = 5;
 
 export class Judge {
   readonly windows: TimingWindows;
@@ -97,6 +103,8 @@ export class Judge {
   private readonly rate: number;
   private readonly missHorizon: number;
   private lastUpdate = 0;
+  /** Hits still owed before life regenerates after a loss (ITG regen-after-miss). */
+  private comboToRegainLife = 0;
   // Perf: advance a cursor over the time-sorted notes instead of scanning all
   // of them each frame, and track only the currently-active holds (todo #14).
   private missCursor = 0;
@@ -213,6 +221,7 @@ export class Judge {
     for (const k in this.holdCounts) delete this.holdCounts[k];
     this.actualDance = 0;
     this.lastUpdate = 0;
+    this.comboToRegainLife = 0;
     this.missCursor = 0;
     this.activeHolds.length = 0;
     for (const rc of this.rowCombo.values()) {
@@ -237,6 +246,18 @@ export class Judge {
 
   private changeLife(delta: number): void {
     if (this.failed) return;
+    // Regen-after-miss: a loss withholds regeneration for the next few hits.
+    // Each non-negative judgment pays one down; while any is owed, gains are
+    // zeroed. A loss re-arms it (capped). Matches ITG LifeMeterBar::ChangeLife.
+    if (delta >= 0) {
+      this.comboToRegainLife = Math.max(this.comboToRegainLife - 1, 0);
+      if (this.comboToRegainLife > 0) delta = 0;
+    } else {
+      this.comboToRegainLife = Math.min(
+        MAX_REGEN_COMBO,
+        this.comboToRegainLife + REGEN_COMBO_AFTER_MISS,
+      );
+    }
     this.life = Math.min(1, Math.max(0, this.life + delta));
     if (this.life <= 0) this.failed = true;
   }
