@@ -551,7 +551,7 @@ export function PlayerOptions({
           </button>
         </div>
 
-        <div className="flex w-[600px] flex-none flex-col border-l border-white/[0.09]">
+        <div className="flex w-[600px] flex-none flex-col border-l border-white/[0.09] max-[1024px]:w-[44%]">
           <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/45">
             PREVIEW
           </div>

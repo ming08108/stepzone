@@ -1,10 +1,11 @@
 /**
- * Dev-only visual harness for the note-field themes. Served by the vite dev
+ * Dev-only visual harness for the note-field skins. Served by the vite dev
  * server at /harness/theme.html — NOT part of the production build (the build
- * input is index.html only). Mounts the real NoteFieldRenderer on a 1280x720
+ * input is index.html only). Mounts the real WebGPU note field on a 1280x720
  * canvas and draws one deterministic representative frame: receptors, taps of
  * 4th/8th/12th/16th quantizations, an active hold, a dropped (grey) hold, a
- * mine, a judgment, a combo, and the gauge.
+ * mine, a judgment, a combo, and the gauge. Both looks (arcade DDR A3, ITG
+ * Simply Love) render on the same GPU field via their GpuSkin.
  *
  * URL params:
  *   ?theme=arcade|itg     noteSkin           (default arcade)
@@ -23,7 +24,7 @@ import { Judge } from '../src/gameplay/judge';
 import { HoldNoteScore, TapNoteScore } from '../src/notes/noteTypes';
 import { parseSimfile } from '../src/parse/loader';
 import { beatTimes, GpuNoteField } from '../src/render/gpu/gpuNoteField';
-import { NoteFieldRenderer, type Feedback } from '../src/render/noteField';
+import type { Feedback } from '../src/render/noteField';
 
 // One measure of 4ths (two hits + the two hold heads), one 48-row measure
 // mixing 4th/8th/12th/16th taps plus a mine and the hold tails, one closer.
@@ -146,25 +147,16 @@ async function main(): Promise<void> {
   ]).catch(() => undefined);
   await document.fonts.ready;
 
-  // The arcade look renders on the WebGPU field; ITG stays on the canvas
-  // renderer. Same draw(now, beat) contract either way.
-  let draw: (t: number, b: number) => void;
-  if (skin === 'arcade') {
-    const field = await GpuNoteField.create(canvas, 4, config);
-    if (!field) {
-      document.body.insertAdjacentText('afterbegin', 'WebGPU unavailable — arcade needs it');
-      (window as unknown as { __ready: boolean }).__ready = true;
-      return;
-    }
-    field.resize(canvas.width, canvas.height, 1);
-    field.setBeatTimes(beatTimes((bt) => song.timing.getElapsedTimeFromBeat(bt), 12));
-    draw = (t, b) => field.draw(judge, t, b, 0.42, fb);
-  } else {
-    const renderer = new NoteFieldRenderer(4, config);
-    renderer.resize(canvas.width, canvas.height, 1);
-    const ctx = canvas.getContext('2d')!;
-    draw = (t, b) => renderer.draw(ctx, judge, t, b, 0.42, fb);
+  // Both looks render on the WebGPU field (the skin is picked by config.noteSkin).
+  const field = await GpuNoteField.create(canvas, 4, config);
+  if (!field) {
+    document.body.insertAdjacentText('afterbegin', 'WebGPU unavailable — this app requires it');
+    (window as unknown as { __ready: boolean }).__ready = true;
+    return;
   }
+  field.resize(canvas.width, canvas.height, 1);
+  field.setBeatTimes(beatTimes((bt) => song.timing.getElapsedTimeFromBeat(bt), 12));
+  const draw = (t: number, b: number): void => field.draw(judge, t, b, 0.42, fb);
 
   draw(now, beat);
 
