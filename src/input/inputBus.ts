@@ -40,11 +40,16 @@ export type InputDevice = 'keyboard' | 'gamepad';
  */
 const GAMEPAD_POLL_MS = 4;
 
-/** Structural window subset for the (experimental) event-driven Gamepad API. */
-interface RawGamepadTarget {
-  addEventListener(type: 'rawgamepadinputchange', listener: () => void): void;
-  removeEventListener(type: 'rawgamepadinputchange', listener: () => void): void;
-}
+/**
+ * Event name(s) for Chrome/Edge's experimental event-driven Gamepad API. The
+ * shipping demo dispatches `gamepadrawinputchanged` on window; the earlier
+ * proposal used `rawgamepadinputchange`, so we listen for both (attaching a
+ * listener for an event that never fires is harmless). It's behind a flag —
+ * chrome://flags/#gamepad-raw-input-change-event — not an origin trial, so we
+ * simply attach the listeners and they light up when the user enables it; no
+ * (unreliable) interface-presence check gates the wiring.
+ */
+export const RAW_GAMEPAD_EVENTS = ['gamepadrawinputchanged', 'rawgamepadinputchange'] as const;
 
 /** The subset of KeyboardEvent the bus reads (tests can pass plain objects). */
 export interface KeyEventLike {
@@ -105,8 +110,8 @@ export class InputBus {
   private readonly schedule: ((cb: () => void) => number) | null;
   private readonly cancelFn: (handle: number) => void;
   private readonly now: () => number;
-  /** window when the event-driven Gamepad API is available; else null. */
-  private readonly rawGamepadTarget: RawGamepadTarget | null;
+  /** window (for the event-driven Gamepad API listeners); null outside a DOM. */
+  private readonly rawGamepadTarget: Window | null;
 
   constructor(opts: InputBusOptions = {}) {
     this.target =
@@ -124,10 +129,7 @@ export class InputBus {
     this.cancelFn =
       opts.cancel ?? (typeof window !== 'undefined' ? (h) => window.clearTimeout(h) : () => {});
     this.now = opts.now ?? (() => performance.now());
-    this.rawGamepadTarget =
-      typeof window !== 'undefined' && 'GamepadRawInputChangeEvent' in window
-        ? (window as unknown as RawGamepadTarget)
-        : null;
+    this.rawGamepadTarget = typeof window !== 'undefined' ? window : null;
   }
 
   /** Swap in the current bindings (SettingsContext calls this on load/update). */
@@ -213,15 +215,17 @@ export class InputBus {
     this.target?.addEventListener('keydown', this.keyDown);
     this.target?.addEventListener('keyup', this.keyUp);
     if (this.schedule) this.rafHandle = this.schedule(this.loop);
-    // Event-driven gamepad input (Chrome origin trial): poll the instant new
+    // Event-driven gamepad input (behind chrome://flags): poll the instant new
     // pad data lands. The timer poll stays as the baseline; pollGamepad dedups.
-    this.rawGamepadTarget?.addEventListener('rawgamepadinputchange', this.onRawGamepad);
+    for (const name of RAW_GAMEPAD_EVENTS)
+      this.rawGamepadTarget?.addEventListener(name, this.onRawGamepad);
   }
 
   private stop(): void {
     this.target?.removeEventListener('keydown', this.keyDown);
     this.target?.removeEventListener('keyup', this.keyUp);
-    this.rawGamepadTarget?.removeEventListener('rawgamepadinputchange', this.onRawGamepad);
+    for (const name of RAW_GAMEPAD_EVENTS)
+      this.rawGamepadTarget?.removeEventListener(name, this.onRawGamepad);
     if (this.rafHandle != null) {
       this.cancelFn(this.rafHandle);
       this.rafHandle = null;
