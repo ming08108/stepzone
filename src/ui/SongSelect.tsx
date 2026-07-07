@@ -1,9 +1,10 @@
 /**
- * STEPLINE song select — a build of the design handoff, made fluid: a
- * full-viewport layout (fixed-height bars + a flexing list) that fills any
- * aspect ratio, Space Grotesk, a selected-song detail header with a
+ * Song-select screen — a full-viewport layout (fixed-height bars + a flexing
+ * list) that fills any aspect ratio: a selected-song detail header with a
  * difficulty-chip stack, a filter strip, sortable columns, and a
- * keyboard-navigated centered list (virtualized for large libraries).
+ * keyboard-navigated centered list (virtualized for large libraries). The pure
+ * row/filter/sort/window logic lives in songSelectModel.ts; this file owns
+ * state, effects, and layout.
  */
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { starterEntries } from '../starter';
@@ -12,7 +13,6 @@ import {
   loadLibraryFromFiles,
   pickPackImage,
   readSongAudio,
-  songBpmRange,
   type LibraryEntry,
 } from '../io/songFiles';
 import { resolveBackground, subscribeBgConvert, type BgConvertStatus } from '../io/bgVideo';
@@ -31,37 +31,34 @@ import {
   saveCatalog,
   setSourceEnabled,
   supportsFolderPicker,
-  type CatalogSong,
   type SongSource,
 } from '../io/localFolder';
-import { Song } from '../song/song';
-import { difficultyToString } from '../song/difficulty';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
-import { loadFavorites, saveFavorites, songKey } from '../app/favorites';
+import { loadFavorites, saveFavorites } from '../app/favorites';
 import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
-import {
-  bestChartsPerSlot,
-  DIFF_SLOT_COLORS,
-  DIFF_SLOT_NAMES,
-  difficultySlot,
-} from './difficultyUi';
+import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
+import {
+  bpmText,
+  buildBestsBySong,
+  deriveLevels,
+  entryDir,
+  entryFromCatalog,
+  filterSort,
+  initials,
+  SORTS,
+  toSongVMs,
+  virtualWindow,
+  type SongVM,
+  type Sort,
+} from './songSelectModel';
 
 const AC = '#ff5d47';
 const FAV_CLR = '#ffcf3d';
 /** Classic 256×80 banner shape — the de-facto standard for pack art. */
 const BANNER_RATIO = 256 / 80;
-const NO_BESTS: ReadonlyArray<{ percent: number; grade: string } | null> = [
-  null,
-  null,
-  null,
-  null,
-  null,
-];
-const SORTS = ['title', 'artist', 'pack', 'bpm', 'level', 'best', 'plays'] as const;
-type Sort = (typeof SORTS)[number];
 
 const ROW_H = 44;
 
@@ -93,72 +90,6 @@ const savedFilters = {
   diff: 2,
   favOnly: false,
 };
-
-interface SongVM {
-  entry: LibraryEntry;
-  /** Favorites/stats key (app/favorites songKey). */
-  key: string;
-  title: string;
-  artist: string;
-  pack: string;
-  bpm: string;
-  bpmSort: number;
-  levels: Array<number | null>;
-  /** Best recorded score per difficulty slot, aligned with levels (app/scores). */
-  bests: ReadonlyArray<{ percent: number; grade: string } | null>;
-  /** Times a play of this song was started (app/stats). */
-  plays: number;
-}
-
-function deriveLevels(song: Song): Array<number | null> {
-  return bestChartsPerSlot(song).map((c) => c?.meter ?? null);
-}
-
-function bpmText(entry: LibraryEntry): { text: string; sort: number } {
-  // Catalog entries carry a display string until their simfile is parsed.
-  if (entry.bpm && entry.song.charts.length === 0) {
-    const nums = entry.bpm.split('–').map(Number);
-    return { text: entry.bpm, sort: nums[nums.length - 1] || 0 };
-  }
-  const r = songBpmRange(entry.song);
-  if (r.max <= 0) return { text: '—', sort: 0 };
-  const lo = Math.round(r.min);
-  const hi = Math.round(r.max);
-  return { text: lo === hi ? String(hi) : `${lo}–${hi}`, sort: hi };
-}
-
-/** The song folder (webkitRelativePath dir) an entry's files live in. */
-function entryDir(e: LibraryEntry): string {
-  const p = e.files[0]?.webkitRelativePath ?? '';
-  return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
-}
-
-/** A lightweight row from a cached catalog — real files load on demand. */
-function entryFromCatalog(sourceId: string, c: CatalogSong): LibraryEntry {
-  const song = new Song();
-  song.title = c.title;
-  song.artist = c.artist;
-  return {
-    song, // charts empty until the simfile is read (see ensureLoaded)
-    files: [],
-    sourceName: c.dir.split('/').pop() ?? c.title,
-    bannerUrl: null,
-    pack: c.pack,
-    sourceId,
-    bpm: c.bpm,
-    levels: c.levels,
-    lazyDir: c.dir,
-  };
-}
-
-function initials(title: string): string {
-  return title
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0] ?? '')
-    .join('')
-    .toUpperCase();
-}
 
 export function SongSelect({
   onPlay,
@@ -209,22 +140,7 @@ export function SongSelect({
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
   const stats = useMemo(() => loadStats(), []);
-  const bestsBySong = useMemo(() => {
-    const m = new Map<string, Array<{ percent: number; grade: string } | null>>();
-    // Records are keyed by chart content hash; the song/difficulty labels
-    // stored on each record say where it displays. Bucket like the chip stack.
-    for (const s of Object.values(loadScores())) {
-      const sk = songKey(s.title, s.artist);
-      const slot = difficultySlot(difficultyToString(s.difficulty));
-      const slots = m.get(sk) ?? [null, null, null, null, null];
-      const prev = slots[slot];
-      if (!prev || s.percent > prev.percent) {
-        slots[slot] = { percent: s.percent, grade: s.grade };
-      }
-      m.set(sk, slots);
-    }
-    return m;
-  }, []);
+  const bestsBySong = useMemo(() => buildBestsBySong(loadScores()), []);
 
   const toggleFav = (k: string) => {
     const next = new Set(favs);
@@ -453,63 +369,14 @@ export function SongSelect({
   }, []);
 
   const songs = useMemo<SongVM[]>(
-    () =>
-      entries.map((e) => {
-        const b = bpmText(e);
-        const title = e.song.displayFullTitle || e.sourceName;
-        const key = songKey(title, e.song.artist);
-        return {
-          entry: e,
-          key,
-          title,
-          artist: e.song.artist,
-          pack: e.pack ?? '',
-          bpm: b.text,
-          bpmSort: b.sort,
-          // Catalog rows carry cached levels until their simfile is parsed.
-          levels: e.levels && e.song.charts.length === 0 ? e.levels : deriveLevels(e.song),
-          bests: bestsBySong.get(key) ?? NO_BESTS,
-          plays: stats.songPlays[key] ?? 0,
-        };
-      }),
+    () => toSongVMs(entries, bestsBySong, stats.songPlays),
     [entries, bestsBySong, stats],
   );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const rows = songs.filter(
-      (s) =>
-        (!favOnly || favs.has(s.key)) &&
-        (!q ||
-          s.title.toLowerCase().includes(q) ||
-          s.artist.toLowerCase().includes(q) ||
-          s.pack.toLowerCase().includes(q)) &&
-        s.levels.some((lv) => lv != null && lv >= minLv && lv <= maxLv),
-    );
-    const key: (s: SongVM) => string | number =
-      sort === 'artist'
-        ? (s) => s.artist.toLowerCase()
-        : sort === 'pack'
-          ? // Group by pack (pack-less entries last), titles A–Z inside a pack.
-            // (\uffff sorts packless after every pack; \u0000 separates the keys)
-            (s) => `${s.pack ? s.pack.toLowerCase() : '\uffff'}\u0000${s.title.toLowerCase()}`
-          : sort === 'bpm'
-            ? (s) => s.bpmSort
-            : sort === 'level'
-              ? (s) => s.levels[diff] ?? 99
-              : sort === 'best'
-                ? // Highest score at the selected difficulty first;
-                  // never-played songs sort last.
-                  (s) => -(s.bests[diff]?.percent ?? -1)
-                : sort === 'plays'
-                  ? (s) => -s.plays // most played first
-                  : (s) => s.title.toLowerCase();
-    return rows.slice().sort((x, y) => {
-      const a = key(x);
-      const b = key(y);
-      return a < b ? -1 : a > b ? 1 : 0;
-    });
-  }, [songs, search, minLv, maxLv, favOnly, favs, sort, diff]);
+  const filtered = useMemo(
+    () => filterSort(songs, { search, minLv, maxLv, favOnly, favs, sort, diff }),
+    [songs, search, minLv, maxLv, favOnly, favs, sort, diff],
+  );
 
   const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
   const song = filtered[selClamped];
@@ -712,14 +579,7 @@ export function SongSelect({
 
   // Virtualized window: center the selection, clamp at the ends.
   const total = filtered.length;
-  const off = Math.max(
-    Math.min(viewH - total * ROW_H, 0),
-    Math.min(0, viewH / 2 - (selClamped + 0.5) * ROW_H),
-  );
-  const first = Math.max(0, Math.floor(-off / ROW_H) - 4);
-  const last = Math.min(total, Math.ceil((-off + viewH) / ROW_H) + 4);
-  const topFade = off < 0;
-  const botFade = off + total * ROW_H > viewH;
+  const { off, first, last, topFade, botFade } = virtualWindow(total, viewH, selClamped, ROW_H);
 
   const chips = DIFF_SLOT_NAMES.map((name, i) => {
     const lv = song?.levels[i];
