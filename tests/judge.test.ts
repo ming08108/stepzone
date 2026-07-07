@@ -80,9 +80,35 @@ describe('Judge: doc-9 input trace (spec doc 9 §9.4)', () => {
     expect(judge.percentDancePoints).toBeCloseTo(8 / 15, 4);
   });
 
-  it('ends with life ~0.288 and not failed', () => {
-    expect(judge.life).toBeCloseTo(0.288, 3);
+  it('ends with life ~0.272 and not failed', () => {
+    // ITG regen-after-miss: the U miss withholds regen for the next hits, so the
+    // hold head (+0.008) and Held (+0.008) after it don't refill. The spec's
+    // hand-calc (0.288) omitted that; actual ITGmania LifeMeterBar gives 0.272.
+    expect(judge.life).toBeCloseTo(0.272, 3);
     expect(judge.failed).toBe(false);
+  });
+});
+
+describe('Judge: regen-after-miss (ITG LifeMeterBar)', () => {
+  it('withholds life regen for five hits after a loss', () => {
+    const j = judgeOf([
+      [2, 0],
+      [3, 0],
+      [4, 0],
+      [5, 0],
+      [6, 0],
+      [7, 0],
+    ]);
+    // Miss the first note (aged past the window), dropping life by 0.08.
+    j.update(3.0, []);
+    const afterMiss = j.life;
+    expect(afterMiss).toBeCloseTo(0.42, 3);
+    // The next four W1s are blocked from regenerating — life stays put.
+    for (const t of [3, 4, 5, 6]) j.step(0, t, false);
+    expect(j.life).toBeCloseTo(afterMiss, 3);
+    // The fifth hit pays down the last owed combo and life finally refills.
+    j.step(0, 7, false);
+    expect(j.life).toBeGreaterThan(afterMiss);
   });
 });
 
