@@ -1,24 +1,33 @@
 /**
- * Smoke-exercises the full canvas-renderer draw paths against a no-op canvas
- * context: layout, chrome, HUD underlay/overlay, holds, mines, receptors,
- * explosions, judgment + combo animations, bare mode, reverse, and all three
- * scroll modes. Catches runtime errors the type checker can't (the pixel
- * output itself is not asserted). Both skins run: 'itg' is the real Simply
- * Love theme; 'arcade' exercises the no-WebGPU fallback path, which maps to
- * the same theme (the A3 canvas theme was removed — the arcade look lives in
- * render/gpu/, which needs a real GPU and is verified via the harness).
+ * Smoke-exercises the procedural ART both note-field skins are built from — the
+ * exported paint functions the WebGPU atlas bakes (render/gpu/*Skin.ts). The
+ * per-frame renderer itself lives on the GPU field, which needs a real device
+ * and is verified via the render harness; but a bad paint throws only at bake
+ * time, where prewarm() swallows it — so this guards them against a no-op
+ * canvas context. Pixel output is not asserted, only that nothing throws.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { Judge } from '../src/gameplay/judge';
-import { TapNoteScore } from '../src/notes/noteTypes';
-import { parseSimfile } from '../src/parse/loader';
-import { NoteFieldRenderer, type Feedback, type NoteFieldConfig } from '../src/render/noteField';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const ssc = readFileSync(join(here, '../src/dev/example.ssc'), 'utf8');
+import { NoteType, TapNoteScore } from '../src/notes/noteTypes';
+import {
+  A3_JUDGMENT,
+  JUDGMENT_INK,
+  paintBoom,
+  paintJudgment,
+  paintMineArcs,
+  paintMineOrb,
+  paintNote,
+  paintReceptor,
+  QUANT_BAND,
+  QUANT_TUBE,
+} from '../src/render/themes/ddrA3';
+import {
+  ITG_JUDGMENT,
+  ITG_QUANT_COLOR,
+  paintCelExplosion,
+  paintCelMineBody,
+  paintCelReceptor,
+  paintCelTapBase,
+} from '../src/render/themes/simplyLove';
 
 /** A CanvasRenderingContext2D stand-in: every method is a no-op. */
 function mockCtx(): CanvasRenderingContext2D {
@@ -43,81 +52,47 @@ function mockCtx(): CanvasRenderingContext2D {
   }) as unknown as CanvasRenderingContext2D;
 }
 
-function makeJudge(): Judge {
-  const song = parseSimfile(ssc, 'example.ssc');
-  const chart = song.charts[0];
-  const judge = new Judge(chart.getNoteData(), song.timing);
-  // Hit the first two taps and engage the hold so held/hit states render.
-  judge.step(0, 0.114, false);
-  judge.step(1, 0.66, false);
-  judge.step(3, 2.09, false);
-  judge.update(2.2, [false, false, false, true]);
-  return judge;
-}
+const S = 40;
+const DS = 2;
+const R = 26;
 
-function feedbackAt(now: number, tns: TapNoteScore): Feedback {
-  return {
-    lastJudgment: { tns, atSeconds: now - 0.02 },
-    laneFlash: [now - 0.01, now - 0.5, -999, now],
-    laneHit: [
-      { tns, atSeconds: now - 0.05 },
-      { tns: TapNoteScore.W3, atSeconds: now - 0.2 },
-      null,
-      { tns: TapNoteScore.W1, atSeconds: now },
-    ],
-  };
-}
-
-const TIERS = [
-  TapNoteScore.W1,
-  TapNoteScore.W2,
-  TapNoteScore.W3,
-  TapNoteScore.W4,
-  TapNoteScore.W5,
-  TapNoteScore.Miss,
-  TapNoteScore.HitMine,
-];
-
-describe.each([['arcade'], ['itg']] as const)('NoteFieldRenderer smoke (%s)', (skin) => {
-  const base: Partial<NoteFieldConfig> = {
-    noteSkin: skin,
-    meta: { title: 'Song', subtitle: 'Artist', difficulty: 'dance-single · CHALLENGE 12' },
-  };
-
-  it('draws frames across times, tiers, and combo states without throwing', () => {
-    const judge = makeJudge();
-    const r = new NoteFieldRenderer(4, base);
-    r.resize(1280, 720, 1);
-    const ctx = mockCtx();
-    judge.combo = 10; // force the combo display path
+describe('arcade (DDR A3) paint functions', () => {
+  it('paints every quant note, receptors, mine, explosion, and judgment tier', () => {
+    const c = mockCtx();
     expect(() => {
-      for (const now of [0, 0.7, 2.2, 4.7]) {
-        for (const tns of TIERS) {
-          r.draw(ctx, judge, now, now * 2, now / 10, feedbackAt(now, tns));
-        }
+      for (const q of Object.values(NoteType) as NoteType[]) {
+        if (typeof q !== 'number') continue;
+        paintNote(c, S, DS, QUANT_BAND[q], QUANT_TUBE[q]);
       }
-      judge.combo = 1234; // large-combo sizing branch
-      r.draw(ctx, judge, 2.2, 4.4, 0.3, feedbackAt(2.2, TapNoteScore.W1));
+      paintReceptor(c, S, DS, 0, false);
+      paintReceptor(c, S, DS, 1, true);
+      paintMineOrb(c, R, DS);
+      paintMineArcs(c, R, DS);
+      paintBoom(c, S, DS);
+      for (const key of Object.keys(A3_JUDGMENT)) {
+        const tns = Number(key);
+        const ink = JUDGMENT_INK[tns] ?? JUDGMENT_INK[TapNoteScore.W4];
+        paintJudgment(c, A3_JUDGMENT[tns].label, ink, 30, DS, 8, false);
+      }
     }).not.toThrow();
   });
+});
 
-  it('draws bare, reverse, X/M scroll, and danger life', () => {
-    const judge = makeJudge();
-    const r = new NoteFieldRenderer(4, base);
-    r.resize(600, 400, 2);
-    const ctx = mockCtx();
+describe('Simply Love (ITG) paint functions', () => {
+  it('paints every quant cel note, receptors, mine, and explosion tier', () => {
+    const c = mockCtx();
     expect(() => {
-      r.applyConfig({ bare: true });
-      r.draw(ctx, judge, 1, 2, 0.1, feedbackAt(1, TapNoteScore.W2));
-      r.applyConfig({ bare: false, reverse: true });
-      r.draw(ctx, judge, 1, 2, 0.1, feedbackAt(1, TapNoteScore.W2));
-      r.applyConfig({ reverse: false, scrollMode: 'X', scrollValue: 2 });
-      r.draw(ctx, judge, 1.5, 3, 0.2, feedbackAt(1.5, TapNoteScore.Miss));
-      r.applyConfig({ scrollMode: 'M', scrollValue: 600, songMaxBpm: 150 });
-      judge.life = 0.1; // danger chrome / gauge state
-      r.draw(ctx, judge, 2, 4, 0.4, feedbackAt(2, TapNoteScore.W4));
-      judge.life = 1; // hot/full gauge state
-      r.draw(ctx, judge, 2.1, 4.2, 0.5, feedbackAt(2.1, TapNoteScore.W1));
+      for (const color of Object.values(ITG_QUANT_COLOR)) {
+        paintCelTapBase(c, S, DS, color, false);
+      }
+      paintCelTapBase(c, S, DS, '#7c8087', true); // dead freeze head
+      paintCelReceptor(c, S, DS, 112, false);
+      paintCelReceptor(c, S, DS, 246, true);
+      paintCelMineBody(c, R, DS);
+      for (const key of Object.keys(ITG_JUDGMENT)) {
+        const j = ITG_JUDGMENT[Number(key)];
+        paintCelExplosion(c, S, DS, j.color, true, 0.5);
+      }
     }).not.toThrow();
   });
 });

@@ -2,8 +2,8 @@
  * STEPLINE Player Options — the per-play screen between song select and
  * gameplay. DDR-style: every how-you-play-this-song mod lives here, each a ◀▶
  * row with a help line for the highlighted option and a live preview that
- * renders the real chart (real NoteFieldRenderer + Judge on a silent autoplay
- * clock). The everyday rows (difficulty, scroll type, spacing, music rate) sit
+ * renders the real chart (the real WebGPU note field + Judge on a silent
+ * autoplay clock). The everyday rows (difficulty, scroll type, spacing, music rate) sit
  * on top; turn, scroll direction, note skin, and background fold under an
  * ADVANCED row; the practice loop is its own accent-tinted block at the
  * bottom, with a clickable per-measure song map. Rows

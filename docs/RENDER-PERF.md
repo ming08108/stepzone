@@ -49,10 +49,10 @@ backends and with a background image composited.
 | webgpu stress             | 238 | 0.1%   | 0.15 ms      | 12 896      |
 | webgpu stress + bgimage   | 235 | 0.1%   | 0.15 ms      | 9 979       |
 
-\* Historical: the arcade canvas theme (`DdrA3Theme`) was removed after this
-investigation — the arcade look is WebGPU-only now, so the suite runs the
-three WebGPU scenarios plus the ITG canvas stress. The `max draws/s` above is
-the old command-recording proxy; the metric now drains the GPU each chunk
+\* Historical: both canvas themes were removed after this investigation — both
+looks are WebGPU-only now, so the suite is all WebGPU (arcade typical/stress/
+bgimage + gpu-itg-stress); the canvas ITG scenario is gone. The `max draws/s`
+above is the old command-recording proxy; the metric now drains the GPU each chunk
 (real throughput — see below), so current numbers read lower and truer.
 
 ### Uncapped (vsync disabled, `--disable-gpu-vsync --disable-frame-rate-limit`)
@@ -135,12 +135,15 @@ draw OVER the arrows (the DDR cab draws them there, not beneath). Beat lines
 scroll with the field via a bounded per-frame scan of on-screen beats
 (setBeatTimes supplies each beat's time so C-mod under a BPM change is exact).
 
-Both skins render on the WebGPU field — there is no renderer setting. If WebGPU
-is unavailable (or the device is lost mid-song) the session falls back to the
-canvas renderer, which draws the Simply Love look. `render/themes/ddrA3.ts` and
-`render/themes/simplyLove.ts` remain as the procedural-art modules (palettes +
-paint functions) the GPU atlas bakes from — the canvas SL theme also still
-serves the fallback and the song-select previews.
+Both skins render on the WebGPU field — there is no renderer setting, and no
+canvas fallback: **WebGPU is required to play.** If the device is unavailable
+at start or lost mid-song, gameplay surfaces a "WebGPU required" message
+(session `onError` → Play's error phase) rather than degrading. The canvas
+`NoteFieldRenderer` and both canvas `Theme` classes were deleted; the
+song-select / Player-Options previews (`NoteFieldPreview`) render on the GPU
+field too. `render/themes/ddrA3.ts` and `render/themes/simplyLove.ts` remain
+only as procedural-art modules (palettes + exported paint functions) the GPU
+atlas bakes from.
 
 The dance gauge's animated fills (flowing bands, maxed-gauge rainbow, top
 sheen) render as scrolling patterns clipped by a baked segment-shape alpha

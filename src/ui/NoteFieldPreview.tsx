@@ -1,5 +1,5 @@
 /**
- * Live note-field preview: drives the real NoteFieldRenderer with real note
+ * Live note-field preview: drives the real WebGPU note field with real note
  * data — a Judge on autoplay — so the user sees the true note skin, scroll
  * type/spacing, and direction before playing. When a `clock` is provided
  * (Player Options passes the audio preview's position), the field follows the
@@ -26,7 +26,7 @@ import {
 import { isVideoFile } from '../io/songFiles';
 import { columnAnglesFor } from '../render/columns';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
-import { type Feedback, type NoteFieldConfig, NoteFieldRenderer } from '../render/noteField';
+import type { Feedback, NoteFieldConfig } from '../render/noteField';
 import { songMaxBpm } from '../render/scroll';
 import type { RenderMeta } from '../render/theme';
 import { TimingData } from '../timing/timingData';
@@ -82,11 +82,6 @@ export function NoteFieldPreview({
   const clockRef = useRef(clock);
   clockRef.current = clock;
 
-  // The arcade skin previews on the WebGPU field, ITG on the canvas renderer.
-  // The <canvas> is keyed by backend below: an element can only ever hold one
-  // context type, so switching skins must swap in a fresh element.
-  const backend: 'gpu' | '2d' = noteSkin === 'arcade' ? 'gpu' : '2d';
-
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
@@ -94,8 +89,6 @@ export function NoteFieldPreview({
     let raf = 0;
     let ro: ResizeObserver | null = null;
     let gpuField: GpuNoteField | null = null;
-    let renderer2d: NoteFieldRenderer | null = null;
-    let ctx2d: CanvasRenderingContext2D | null = null;
 
     const maxBpm = songMaxBpm(timing.bpms);
     const angles = columnAnglesFor(stepsType, noteData.numTracks);
@@ -131,18 +124,10 @@ export function NoteFieldPreview({
     let windowStart = 0;
     let windowEnd = 0;
 
-    // Also resets both backends' forward-only cull cursors — required after
-    // every judge rebuild (each loop wrap starts the chart over).
     const resize = () => {
       const w = canvas.clientWidth || 300;
       const h = canvas.clientHeight || 400;
-      if (gpuField) {
-        gpuField.resize(w, h, dpr); // sets the backing store itself
-      } else {
-        canvas.width = Math.round(w * dpr);
-        canvas.height = Math.round(h * dpr);
-        renderer2d?.resize(w, h, dpr);
-      }
+      gpuField?.resize(w, h, dpr); // sets the backing store itself
     };
 
     // Autoplay-hit one note: perfect press at its exact time, holds held to
@@ -256,7 +241,7 @@ export function NoteFieldPreview({
       }
       livePatch.scrollMode = liveRef.current.scrollMode;
       livePatch.scrollValue = liveRef.current.scrollValue;
-      (gpuField ?? renderer2d)?.applyConfig(livePatch);
+      gpuField?.applyConfig(livePatch);
       const beat = timing.getBeatFromElapsedTime(now);
       // HUD progress hairline: the loop for a practice section, else the song.
       const progress = !hud
@@ -273,14 +258,12 @@ export function NoteFieldPreview({
           : songEnd > 0
             ? Math.min(1, Math.max(0, now / songEnd))
             : 0;
-      if (gpuField) gpuField.draw(judge, now, beat, progress, feedback);
-      else if (renderer2d && ctx2d) renderer2d.draw(ctx2d, judge, now, beat, progress, feedback);
+      gpuField?.draw(judge, now, beat, progress, feedback);
       raf = requestAnimationFrame(frame);
     };
 
-    // Backend boot: GPU for the arcade skin (async device init), canvas 2D
-    // otherwise — and as the arcade fallback when WebGPU is unavailable
-    // (which renders the Simply Love look, same as gameplay's fallback).
+    // Both skins preview on the WebGPU field (async device init). If WebGPU is
+    // unavailable the preview simply stays blank — the app requires it to play.
     const fieldConfig: Partial<NoteFieldConfig> = {
       columnAngles: angles,
       noteSkin,
@@ -293,23 +276,16 @@ export function NoteFieldPreview({
       ...(hud && meta ? { meta } : {}),
     };
     void (async () => {
-      if (backend === 'gpu') {
-        gpuField = await GpuNoteField.create(canvas, noteData.numTracks, fieldConfig);
-        if (cancelled) {
-          gpuField?.destroy();
-          gpuField = null;
-          return;
-        }
+      gpuField = await GpuNoteField.create(canvas, noteData.numTracks, fieldConfig);
+      if (cancelled || !gpuField) {
+        gpuField?.destroy();
+        gpuField = null;
+        return;
       }
-      if (!gpuField) {
-        ctx2d = canvas.getContext('2d');
-        if (!ctx2d) return; // context type already claimed — nothing to draw
-        renderer2d = new NoteFieldRenderer(noteData.numTracks, fieldConfig);
-      }
-      gpuField?.setBeatTimes(
+      gpuField.setBeatTimes(
         beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), noteRowToBeat(noteData.lastRow())),
       );
-      (gpuField ?? renderer2d)?.setBackground(bgMedia);
+      gpuField.setBackground(bgMedia);
       rebuild();
       songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
       ro = new ResizeObserver(() => resize());
@@ -347,7 +323,9 @@ export function NoteFieldPreview({
     meta?.difficulty,
   ]);
 
-  return <canvas key={backend} ref={ref} className="h-full w-full" />;
+  // Fresh element per skin: a canvas can hold only one context type/device, so
+  // swapping skins swaps the element rather than reconfiguring in place.
+  return <canvas key={noteSkin} ref={ref} className="h-full w-full" />;
 }
 
 // --- Demo chart for song-less previews (the Settings screen) ----------------
