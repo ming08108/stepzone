@@ -8,9 +8,8 @@
  * without rebuilding. Shared by Player Options (the selected chart) and the
  * Settings screen (the bundled demo pattern from demoChart()).
  *
- * The canvas takes the play window's aspect ratio (contained + centered in its
- * panel, letterboxed when they differ), so the preview lands the arrows exactly
- * where play will — including portrait windows, which preview tall and narrow.
+ * The canvas fills its panel (no letterbox), so the field renders offset-left
+ * with the song background beside it — the same composition as gameplay.
  */
 import { useEffect, useRef } from 'react';
 import type { NoteSkin, ScrollMode } from '../game/playOptions';
@@ -80,7 +79,6 @@ export function NoteFieldPreview({
   mediaRate?: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
   // Live-applied per frame (no rebuild): scroll.
   const liveRef = useRef({ scrollMode, scrollValue });
   liveRef.current = { scrollMode, scrollValue };
@@ -130,27 +128,12 @@ export function NoteFieldPreview({
     let windowEnd = 0;
 
     const resize = () => {
-      const wrap = wrapRef.current;
-      if (!wrap) return;
-      const availW = wrap.clientWidth || 300;
-      const availH = wrap.clientHeight || 400;
-      // Match the play window's aspect ratio so the preview is WYSIWYG: the
-      // field layout (horizontal offset, receptor scale = min(w,h)/720) depends
-      // on it, so a preview at the wrong ratio lies about where the arrows land.
-      // Contain that ratio box inside the available area and center it — a
-      // portrait window previews as a tall, narrow field (letterboxed on the
-      // sides) instead of a stretched one.
-      const ratio = window.innerWidth / Math.max(1, window.innerHeight);
-      let w = availW;
-      let h = w / ratio;
-      if (h > availH) {
-        h = availH;
-        w = h * ratio;
-      }
-      w = Math.max(1, Math.round(w));
-      h = Math.max(1, Math.round(h));
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
+      // Fill the preview panel: the field renders offset-left with the song
+      // background on the right, exactly the gameplay composition, with no
+      // letterbox bars. (min(w,h)/720 keeps the arrow scale sensible at any
+      // panel shape.)
+      const w = canvas.clientWidth || 300;
+      const h = canvas.clientHeight || 400;
       gpuField?.resize(w, h, dpr); // sets the backing store itself
     };
 
@@ -312,11 +295,8 @@ export function NoteFieldPreview({
       gpuField.setBackground(bgMedia);
       rebuild();
       songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
-      // Observe the available area (panel resize) and the window (aspect-ratio
-      // change / rotation) — both feed the contained-size math in resize().
       ro = new ResizeObserver(() => resize());
-      if (wrapRef.current) ro.observe(wrapRef.current);
-      window.addEventListener('resize', resize);
+      ro.observe(canvas);
       raf = requestAnimationFrame(frame);
     })();
 
@@ -324,7 +304,6 @@ export function NoteFieldPreview({
       cancelled = true;
       cancelAnimationFrame(raf);
       ro?.disconnect();
-      window.removeEventListener('resize', resize);
       gpuField?.destroy();
       if (bgMedia instanceof HTMLVideoElement) {
         bgMedia.pause();
@@ -351,19 +330,9 @@ export function NoteFieldPreview({
     meta?.difficulty,
   ]);
 
-  // The wrapper fills the panel; the canvas inside carries the play window's
-  // aspect ratio (sized in resize()), centered with letterbox bars when the
-  // ratios differ. Fresh canvas element per skin: a canvas can hold only one
-  // context type/device, so swapping skins swaps the element rather than
-  // reconfiguring in place.
-  return (
-    <div
-      ref={wrapRef}
-      className="flex h-full w-full items-center justify-center overflow-hidden bg-[#050506]"
-    >
-      <canvas key={noteSkin} ref={ref} className="block" />
-    </div>
-  );
+  // Fresh element per skin: a canvas can hold only one context type/device, so
+  // swapping skins swaps the element rather than reconfiguring in place.
+  return <canvas key={noteSkin} ref={ref} className="h-full w-full" />;
 }
 
 // --- Demo chart for song-less previews (the Settings screen) ----------------
