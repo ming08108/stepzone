@@ -408,174 +408,176 @@ export function PlayerOptions({
         </>
       }
     >
-      <div className="mx-auto flex h-full w-full max-w-[1360px]">
-        <div className="flex min-w-0 flex-1 flex-col justify-center gap-[6px] px-8 py-4">
-          <div className="flex min-h-0 flex-col gap-[6px] overflow-y-auto">
-            {rows.map((r2, i) => {
-              const on = i === row;
-              if (r2.kind === 'section') {
-                // Group header: chevron + label + hairline; the whole row is
-                // the toggle, with the off-default summary while collapsed.
-                const c = advanced || on ? AC : 'rgba(236,236,236,.5)';
+      <div className="flex h-full w-full items-center justify-center">
+        <div className="flex h-full max-h-[860px] w-full max-w-[1680px] min-[2200px]:max-h-[1180px] min-[2200px]:max-w-[2160px]">
+          <div className="flex w-[480px] flex-none flex-col justify-center gap-[6px] px-8 py-4 max-[1024px]:w-[56%] min-[2200px]:w-[560px]">
+            <div className="flex min-h-0 flex-col gap-[6px] overflow-y-auto">
+              {rows.map((r2, i) => {
+                const on = i === row;
+                if (r2.kind === 'section') {
+                  // Group header: chevron + label + hairline; the whole row is
+                  // the toggle, with the off-default summary while collapsed.
+                  const c = advanced || on ? AC : 'rgba(236,236,236,.5)';
+                  return (
+                    <div
+                      key={r2.label}
+                      ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                      onClick={() => {
+                        setRow(i);
+                        r2.adjust(1);
+                      }}
+                      className="mt-1 flex h-[38px] flex-none cursor-pointer items-center gap-3 border border-l-[3px] px-4"
+                      style={{
+                        borderColor: on ? AC : 'transparent',
+                        borderLeftColor: on ? AC : 'transparent',
+                        background: on ? AC + '14' : 'transparent',
+                      }}
+                    >
+                      <span
+                        className="inline-block text-[10px] transition-transform duration-150"
+                        style={{ color: c, transform: advanced ? 'rotate(90deg)' : 'none' }}
+                      >
+                        ▶
+                      </span>
+                      <span className="text-[12px] tracking-[0.22em]" style={{ color: c }}>
+                        {r2.label}
+                      </span>
+                      <span className="h-px min-w-4 flex-1 bg-white/[0.08]" />
+                      {!advanced && r2.value && (
+                        <span className="max-w-[50%] truncate text-[11px] tracking-[0.1em] text-[#ececec]/40">
+                          {r2.value}
+                        </span>
+                      )}
+                      {!advanced && (
+                        <span className="text-[11px] tracking-[0.14em] text-[#ececec]/30">
+                          {r2.value ? '· ' : ''}SHOW
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                const accent = r2.tone === 'accent';
                 return (
                   <div
                     key={r2.label}
                     ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                    onClick={() => {
-                      setRow(i);
-                      r2.adjust(1);
-                    }}
-                    className="mt-1 flex h-[38px] flex-none cursor-pointer items-center gap-3 border border-l-[3px] px-4"
+                    onClick={() => setRow(i)}
+                    className={`flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4${r2.sub ? ' ml-4' : ''}${r2.spaceAbove ? ' mt-2' : ''}`}
                     style={{
-                      borderColor: on ? AC : 'transparent',
-                      borderLeftColor: on ? AC : 'transparent',
-                      background: on ? AC + '14' : 'transparent',
+                      borderColor: on ? AC : accent ? AC + '46' : 'rgba(255,255,255,.1)',
+                      borderLeftColor: on ? AC : accent ? AC + '90' : 'transparent',
+                      background: on ? AC + '14' : accent ? AC + '0d' : 'transparent',
                     }}
                   >
                     <span
-                      className="inline-block text-[10px] transition-transform duration-150"
-                      style={{ color: c, transform: advanced ? 'rotate(90deg)' : 'none' }}
+                      className="flex-1 truncate text-[13px] tracking-[0.14em] text-[#ececec]/85"
+                      style={accent ? { color: AC } : undefined}
                     >
-                      ▶
-                    </span>
-                    <span className="text-[12px] tracking-[0.22em]" style={{ color: c }}>
                       {r2.label}
                     </span>
-                    <span className="h-px min-w-4 flex-1 bg-white/[0.08]" />
-                    {!advanced && r2.value && (
-                      <span className="max-w-[50%] truncate text-[11px] tracking-[0.1em] text-[#ececec]/40">
-                        {r2.value}
-                      </span>
-                    )}
-                    {!advanced && (
-                      <span className="text-[11px] tracking-[0.14em] text-[#ececec]/30">
-                        {r2.value ? '· ' : ''}SHOW
-                      </span>
-                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRow(i);
+                        r2.adjust(-1);
+                      }}
+                      style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                    >
+                      ◀
+                    </button>
+                    <span
+                      className="min-w-[130px] text-center text-[15px] font-bold"
+                      style={r2.valueColor ? { color: r2.valueColor } : undefined}
+                    >
+                      {r2.value}
+                    </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRow(i);
+                        r2.adjust(1);
+                      }}
+                      style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                    >
+                      ▶
+                    </button>
                   </div>
                 );
-              }
-              const accent = r2.tone === 'accent';
-              return (
-                <div
-                  key={r2.label}
-                  ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                  onClick={() => setRow(i)}
-                  className={`flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4${r2.sub ? ' ml-4' : ''}${r2.spaceAbove ? ' mt-2' : ''}`}
-                  style={{
-                    borderColor: on ? AC : accent ? AC + '46' : 'rgba(255,255,255,.1)',
-                    borderLeftColor: on ? AC : accent ? AC + '90' : 'transparent',
-                    background: on ? AC + '14' : accent ? AC + '0d' : 'transparent',
-                  }}
-                >
-                  <span
-                    className="flex-1 truncate text-[13px] tracking-[0.14em] text-[#ececec]/85"
-                    style={accent ? { color: AC } : undefined}
-                  >
-                    {r2.label}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRow(i);
-                      r2.adjust(-1);
-                    }}
-                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                  >
-                    ◀
-                  </button>
-                  <span
-                    className="min-w-[130px] text-center text-[15px] font-bold"
-                    style={r2.valueColor ? { color: r2.valueColor } : undefined}
-                  >
-                    {r2.value}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRow(i);
-                      r2.adjust(1);
-                    }}
-                    style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                  >
-                    ▶
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {practice.on && (
-            <div className="mt-1 flex-none px-1">
-              <div className="mb-1 flex justify-between text-[10px] tracking-[0.18em] text-[#ececec]/40">
-                <span>PRACTICE SECTION — CLICK TO MOVE THE NEAREST EDGE</span>
-                <span>
-                  M{mStart}–M{mEnd} · {fmtTime(beatTime((mStart - 1) * 4))}–
-                  {fmtTime(beatTime(mEnd * 4))}
-                </span>
-              </div>
-              <div className="relative flex h-[30px] gap-[1px] border border-white/[0.09] bg-black/25 p-[3px]">
-                {measures.density.map((c, i) => {
-                  const inSel = i + 1 >= mStart && i + 1 <= mEnd;
-                  return (
-                    <div
-                      key={i}
-                      onClick={() => moveNearestEdge(i + 1)}
-                      className="flex min-w-0 flex-1 cursor-pointer items-end"
-                      title={`Measure ${i + 1}`}
-                    >
-                      <div
-                        className="w-full"
-                        style={{
-                          height: `${10 + 90 * (c / measures.peak)}%`,
-                          background: inSel ? AC : 'rgba(236,236,236,0.22)',
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-                <StripPlayhead timing={preview.timing} measureCount={measures.count} />
-              </div>
+              })}
             </div>
-          )}
 
-          <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/45">
-            {curRow.help}
-          </div>
-          <button
-            onClick={go}
-            className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em]"
-            style={{ background: AC, color: '#0b0c0e' }}
-          >
-            {practice.on ? 'START PRACTICE ▸' : 'START ▸'}
-          </button>
-        </div>
+            {practice.on && (
+              <div className="mt-1 flex-none px-1">
+                <div className="mb-1 flex justify-between text-[10px] tracking-[0.18em] text-[#ececec]/40">
+                  <span>PRACTICE SECTION — CLICK TO MOVE THE NEAREST EDGE</span>
+                  <span>
+                    M{mStart}–M{mEnd} · {fmtTime(beatTime((mStart - 1) * 4))}–
+                    {fmtTime(beatTime(mEnd * 4))}
+                  </span>
+                </div>
+                <div className="relative flex h-[30px] gap-[1px] border border-white/[0.09] bg-black/25 p-[3px]">
+                  {measures.density.map((c, i) => {
+                    const inSel = i + 1 >= mStart && i + 1 <= mEnd;
+                    return (
+                      <div
+                        key={i}
+                        onClick={() => moveNearestEdge(i + 1)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-end"
+                        title={`Measure ${i + 1}`}
+                      >
+                        <div
+                          className="w-full"
+                          style={{
+                            height: `${10 + 90 * (c / measures.peak)}%`,
+                            background: inSel ? AC : 'rgba(236,236,236,0.22)',
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                  <StripPlayhead timing={preview.timing} measureCount={measures.count} />
+                </div>
+              </div>
+            )}
 
-        <div className="flex w-[600px] flex-none flex-col border-l border-white/[0.09] max-[1024px]:w-[44%]">
-          <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/45">
-            PREVIEW
+            <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/45">
+              {curRow.help}
+            </div>
+            <button
+              onClick={go}
+              className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em]"
+              style={{ background: AC, color: '#0b0c0e' }}
+            >
+              {practice.on ? 'START PRACTICE ▸' : 'START ▸'}
+            </button>
           </div>
-          <div className="min-h-0 flex-1">
-            <NoteFieldPreview
-              noteData={preview.noteData}
-              timing={preview.timing}
-              stepsType={chart.stepsType}
-              scrollMode={settings.scrollMode}
-              scrollValue={settings.scrollValue}
-              noteSkin={settings.noteSkin}
-              reverse={settings.reverse}
-              loopWindow={sectionSeconds}
-              clock={previewPositionSeconds}
-              hud
-              meta={{
-                title: req.song.displayFullTitle || 'Untitled',
-                subtitle: req.song.artist,
-                difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
-              }}
-              background={settings.bgMode === 'off' ? null : (req.backgroundFile ?? null)}
-              bgDim={settings.bgMode === 'full' ? 0.25 : 0.6}
-              mediaRate={settings.musicRate}
-            />
+
+          <div className="flex min-w-0 flex-1 flex-col border-l border-white/[0.09]">
+            <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/45">
+              PREVIEW
+            </div>
+            <div className="min-h-0 flex-1">
+              <NoteFieldPreview
+                noteData={preview.noteData}
+                timing={preview.timing}
+                stepsType={chart.stepsType}
+                scrollMode={settings.scrollMode}
+                scrollValue={settings.scrollValue}
+                noteSkin={settings.noteSkin}
+                reverse={settings.reverse}
+                loopWindow={sectionSeconds}
+                clock={previewPositionSeconds}
+                hud
+                meta={{
+                  title: req.song.displayFullTitle || 'Untitled',
+                  subtitle: req.song.artist,
+                  difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
+                }}
+                background={settings.bgMode === 'off' ? null : (req.backgroundFile ?? null)}
+                bgDim={settings.bgMode === 'full' ? 0.25 : 0.6}
+                mediaRate={settings.musicRate}
+              />
+            </div>
           </div>
         </div>
       </div>
