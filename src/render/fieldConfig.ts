@@ -8,9 +8,9 @@
 
 import { DEFAULT_PLAY_OPTIONS, type PlayOptions } from '../game/playOptions';
 import { FALLBACK_MAX_BPM } from './scroll';
-import type { RenderMeta } from './theme';
+import type { RenderMeta } from './types';
 
-export type { Feedback, RenderMeta } from './theme';
+export type { Feedback, RenderMeta } from './types';
 
 // Design grid: the playfield is authored on a 720px-tall reference layout and
 // scaled by ds = min(height, width) / 720. Height sets the scale; the width

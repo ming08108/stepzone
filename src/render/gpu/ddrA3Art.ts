@@ -38,20 +38,8 @@
  */
 
 import { NoteType, TapNoteScore } from '../../notes/noteTypes';
-import type { JudgmentStyle } from '../theme';
-
-// --- Fonts -------------------------------------------------------------------
-// A3's HUD lettering is a heavy rounded pop face; Arial Rounded (macOS/Office)
-// degrades to Segoe UI Black / Chakra Petch elsewhere.
-const ROUND_FONT = '"Arial Rounded MT Bold", "Segoe UI", "Chakra Petch", system-ui, sans-serif';
-const SQUARE_FONT = '"Chakra Petch", "Segoe UI", system-ui, sans-serif';
-
-export function roundFont(px: number): string {
-  return `900 ${px}px ${ROUND_FONT}`;
-}
-export function squareFont(w: number, px: number): string {
-  return `${w} ${px}px ${SQUARE_FONT}`;
-}
+import type { JudgmentStyle } from '../types';
+import { OUTLINE_INK, roundFont, squareFont } from './text';
 
 // --- Palette -----------------------------------------------------------------
 
@@ -59,7 +47,6 @@ export const GOLD_LIGHT = '#f6dc5a'; // gold-cab trim highlight
 export const GOLD_MID = '#c9a227';
 export const GOLD_DARK = '#6e5310';
 export const PANEL_BG = 'rgba(0,0,0,0.86)';
-export const OUTLINE_INK = '#0b0c10'; // arrow border / interior black
 
 // A3 difficulty colors (Scripts/02 Colors.lua) — yes, Difficult=red, Expert=green.
 export const DIFF_COLOR: ReadonlyArray<readonly [string, string]> = [
@@ -252,18 +239,6 @@ export function tracePoly(ctx: CanvasRenderingContext2D, pts: Pts, s: number): v
 }
 
 // --- Text measurement -----------------------------------------------------------
-
-/** Shared scratch context for text measurement (null when unavailable). */
-let measurer: CanvasRenderingContext2D | null | undefined;
-export function measureWidth(font: string, text: string): number | null {
-  if (measurer === undefined) {
-    measurer =
-      typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
-  }
-  if (!measurer) return null;
-  measurer.font = font;
-  return measurer.measureText(text).width;
-}
 
 // --- Art painters (shared with the WebGPU renderer's sprite baker) -------------
 

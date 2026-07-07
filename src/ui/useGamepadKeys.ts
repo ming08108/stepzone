@@ -1,7 +1,7 @@
 /**
  * Compat adapter: gamepad-role presses from the unified input bus are
  * re-dispatched as synthetic keydowns (▲▼◀▶ / Enter / Escape) for screens
- * whose keyboard handlers are entrenched (SongSelectStepline, PlayerOptions) —
+ * whose keyboard handlers are entrenched (SongSelect, PlayerOptions) —
  * a controller drives them through their existing keyboard logic with no
  * duplication. Real keyboard input reaches those handlers directly, so ONLY
  * gamepad events are bridged (the synthetic events carry no `code`, so the
