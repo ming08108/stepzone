@@ -22,10 +22,10 @@ import type { GpuAtlas } from './atlas';
 import type { QuadBatch } from './quads';
 
 /** A3 = combo (white rim + outline + gradient) / score (outline + flat white).
- *  SL = slcombo (Space Grotesk 800 + hard 45° drop shadow, for the combo). The
- *  SL dance % is a whole-string slot, not per-glyph. All bake white-ish and
- *  tint per quad. */
-export type GlyphStyle = 'combo' | 'score' | 'slcombo';
+ *  SL = slcombo (Space Grotesk 800 + hard 45° drop shadow, for the combo) and
+ *  slpct (flat Space Grotesk 800, for the live dance %). All bake white-ish and
+ *  tint per quad, so a changing number never re-rasterizes. */
+export type GlyphStyle = 'combo' | 'score' | 'slcombo' | 'slpct';
 export type Tint = readonly [number, number, number, number];
 
 const SL_FONT = (w: number, px: number): string =>
@@ -89,6 +89,16 @@ const STYLES: Record<GlyphStyle, StyleSpec> = {
       c.shadowOffsetY = 0;
     },
   },
+  slpct: {
+    font: (px) => SL_FONT(800, px),
+    padX: (px) => Math.ceil(px * 0.12),
+    paint: (c, s, px, padX, baseY) => {
+      c.textAlign = 'left';
+      c.font = SL_FONT(800, px);
+      c.fillStyle = '#ffffff'; // tinted to #ececec per quad
+      c.fillText(s, padX, baseY);
+    },
+  },
 };
 
 /** Display size `px`, optionally baked at `bakePx` (then scaled) with an extra
@@ -98,6 +108,9 @@ export interface DrawOpts {
   px: number;
   bakePx?: number;
   scaleX?: number;
+  /** Extra pen advance between glyphs (display css px) — matches a canvas
+   *  letterSpacing so per-glyph output lines up with the old whole-string bake. */
+  tracking?: number;
 }
 
 interface Glyph {
@@ -152,8 +165,12 @@ export class GlyphBank {
   /** Total pen width of `text` for centering/right-align (display css px). */
   measure(style: GlyphStyle, o: DrawOpts, text: string): number {
     const { bakePx, scale, scaleX } = this.opt(o);
+    const tracking = o.tracking ?? 0;
     let total = 0;
-    for (const ch of text) total += this.glyph(style, bakePx, ch).advance * scale * scaleX;
+    for (let i = 0; i < text.length; i++) {
+      total += this.glyph(style, bakePx, text[i]).advance * scale * scaleX;
+      if (i < text.length - 1) total += tracking;
+    }
     return total;
   }
 
@@ -191,11 +208,13 @@ export class GlyphBank {
     tintOf: (i: number, ch: string) => Tint,
   ): void {
     const { bakePx, scale, scaleX } = this.opt(o);
+    const tracking = o.tracking ?? 0;
     let penX = align === 'right' ? x - this.measure(style, o, text) : x;
     for (let i = 0; i < text.length; i++) {
       const g = this.glyph(style, bakePx, text[i]);
       this.place(b, g, penX, baseline, scale, scaleX, tintOf(i, text[i]));
       penX += g.advance * scale * scaleX;
+      if (i < text.length - 1) penX += tracking;
     }
   }
 

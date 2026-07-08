@@ -140,6 +140,8 @@ export class QuadBatch {
   private count = 0;
   private segments: Array<{ add: boolean; start: number; count: number }> = [];
   private readonly viewScratch = new Float32Array(4); // reused each begin() (no per-frame alloc)
+  /** Diagnostic: instance-buffer regrows (each destroys+recreates a GPU buffer). */
+  grows = 0;
 
   constructor(
     private readonly device: GPUDevice,
@@ -237,6 +239,7 @@ export class QuadBatch {
   ): void {
     if (a <= 0 || w === 0 || h === 0) return;
     if ((this.count + 1) * FLOATS_PER_INSTANCE > this.data.length) {
+      this.grows++;
       const grown = new Float32Array(this.data.length * 2);
       grown.set(this.data);
       this.data = grown;
