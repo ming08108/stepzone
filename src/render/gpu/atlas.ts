@@ -48,6 +48,8 @@ export class GpuAtlas {
   private sprites = new Map<string, AtlasRect | null>();
   private slots = new Map<string, Slot>();
   private warnedClamp = false;
+  /** Diagnostic: total sprite rasterizations (a mid-frame bake is a stutter). */
+  bakes = 0;
   // Shelf allocator state.
   private shelfX = PAD;
   private shelfY = PAD;
@@ -125,6 +127,7 @@ export class GpuAtlas {
     uh: number,
     paint: (c: CanvasRenderingContext2D) => void,
   ): void {
+    this.bakes++;
     const c = this.sctx;
     c.save();
     c.clearRect(0, 0, uw, uh);

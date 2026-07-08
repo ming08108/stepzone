@@ -277,6 +277,12 @@ export class GpuNoteField {
     this.timer.reset();
   }
 
+  /** Diagnostic counters for stutter hunting: cumulative sprite bakes (a mid-run
+   *  bake is a big one-frame raster) and instance-buffer regrows. */
+  perfStats(): { bakes: number; grows: number } {
+    return { bakes: this.atlas.bakes, grows: this.batch.grows + this.hudBatch.grows };
+  }
+
   /** Real GPU ms of each presented frame timed since resetGpuTimes(). Readbacks
    *  lag ~a frame, so drain after awaiting gpuIdle(). */
   gpuFrameTimes(): number[] {

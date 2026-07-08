@@ -123,6 +123,11 @@ export interface ScenarioResult {
   gcCount: number | null;
   /** Bytes allocated per measured frame (heap rises summed / frames). */
   allocPerFrame: number | null;
+  /** Sprite bakes during the measured window — should be 0 (all art prewarmed);
+   *  a nonzero count means a mid-run raster stutter. */
+  bakesInWindow: number;
+  /** Instance-buffer regrows during the window (each a GPU-buffer realloc). */
+  growsInWindow: number;
 }
 
 export interface DeviceInfo {
@@ -312,6 +317,8 @@ interface Scene {
   endSeconds: number;
   /** Render one frame (autoplay/judging already ticked by the caller). */
   render: (now: number, beat: number, progress: number) => void;
+  /** Cumulative atlas bakes + instance-buffer regrows, for stutter diagnosis. */
+  perfStats: () => { bakes: number; grows: number };
   /** Real GPU-time-per-frame plumbing (gpuTimer.ts); absent when timestamps
    *  are unavailable. */
   gpu?: {
@@ -394,6 +401,7 @@ async function buildScene(
   return {
     ...common,
     render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
+    perfStats: () => field.perfStats(),
     gpu: field.gpuTimingAvailable
       ? {
           reset: () => field.resetGpuTimes(),
@@ -430,6 +438,8 @@ async function runScenario(
     | 'gpuMs'
     | 'gcCount'
     | 'allocPerFrame'
+    | 'bakesInWindow'
+    | 'growsInWindow'
   > = {
     id: scn.id,
     label: scn.label,
@@ -446,6 +456,8 @@ async function runScenario(
     gpuMs: null,
     gcCount: null,
     allocPerFrame: null,
+    bakesInWindow: 0,
+    growsInWindow: 0,
   });
 
   const built = await buildScene(scn, opts.container);
@@ -462,6 +474,8 @@ async function runScenario(
     let measureStartWall = 0;
     let lastProgressAt = 0;
     let songNow = START_OFFSET_SECONDS;
+    let bakes0 = 0;
+    let grows0 = 0;
     // Heap sampling: with --enable-precise-memory-info, usedJSHeapSize is exact,
     // so a drop between frames is a GC and a rise is bytes allocated that frame.
     const heapOf = (): number =>
@@ -496,6 +510,9 @@ async function runScenario(
         measuring = true;
         measureStartWall = wall;
         prevHeap = heapOf(); // baseline after warmup allocations have settled
+        const p = scene.perfStats(); // bake/grow baseline after prewarm + warmup
+        bakes0 = p.bakes;
+        grows0 = p.grows;
         scene.gpu?.reset(); // start GPU-time collection at the measure window
       } else if (measuring) {
         frameDeltas.push(delta);
@@ -546,6 +563,8 @@ async function runScenario(
       gpuMs,
       gcCount: heapAvail ? gcCount : null,
       allocPerFrame: heapAvail ? allocBytes / Math.max(1, frames) : null,
+      bakesInWindow: scene.perfStats().bakes - bakes0,
+      growsInWindow: scene.perfStats().grows - grows0,
     };
   } finally {
     scene.cleanup();

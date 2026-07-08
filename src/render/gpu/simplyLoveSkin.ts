@@ -63,6 +63,8 @@ function parseColor(s: string): [number, number, number, number] {
 }
 
 const WHITE_TINT: Tint = [1, 1, 1, 1];
+const SL_PCT_TINT: Tint = parseColor('#ececec'); // dance % ink (glyphs bake white)
+const SL_PCT_CHARS = '0123456789.%'; // prewarmed so the live % never rasterizes
 
 /** Corner list for a rect, for ShapeBatch.poly (convex). */
 function rect(x: number, y: number, w: number, h: number): Array<[number, number]> {
@@ -515,36 +517,21 @@ export class SimplyLoveGpuSkin implements GpuSkin {
       }
     }
 
-    // Dance % (big Wendy digits, right-aligned). A repaint-in-place slot keyed
-    // by the value — a single small changing string, like the 2D theme draws it
-    // (the per-glyph path is for the reusable arcade score digits).
+    // Dance % (big Wendy digits, right-aligned): composited per-glyph so the
+    // value changing every hit never re-rasterizes (the old repaint-in-place
+    // slot baked a fresh texture each change — a per-hit stutter at 4K).
     const pct = (judge.percentDancePoints * 100).toFixed(2) + '%';
-    const pF = font(ds, 800, 44);
-    const pw = (measureWidth(pF, pct) ?? pct.length * 24 * ds) + 1 * ds * (pct.length - 1);
-    const pBoxW = pw + 8 * ds;
-    const pBoxH = 60 * ds;
-    const pctSpr = ctx.atlas.slot('sl-pct', pct, pBoxW, pBoxH, (c) => {
-      c.textAlign = 'left';
-      c.textBaseline = 'alphabetic';
-      c.font = pF;
-      if ('letterSpacing' in c) c.letterSpacing = `${(1 * ds).toFixed(2)}px`;
-      c.fillStyle = '#ececec';
-      c.fillText(pct, 4 * ds, 46 * ds);
-      if ('letterSpacing' in c) c.letterSpacing = '0px';
-    });
-    if (pctSpr) {
-      ctx.hud.push(
-        px + pW - pBoxW / 2,
-        lY + lH + 6 * ds + pBoxH / 2,
-        pBoxW,
-        pBoxH,
-        pctSpr,
-        1,
-        1,
-        1,
-        1,
-      );
-    }
+    const pctO = { px: 44 * ds, bakePx: Math.round(44 * ds), tracking: 1 * ds };
+    ctx.glyphs.drawNumber(
+      ctx.hud,
+      'slpct',
+      pct,
+      px + pW - 4 * ds,
+      lY + lH + 52 * ds,
+      pctO,
+      'right',
+      () => SL_PCT_TINT,
+    );
     const diff = ctx.meta.difficulty.toUpperCase();
     const dFont = font(ds, 700, 15);
     // measureWidth ignores letterSpacing, so add it back per gap.
@@ -812,11 +799,16 @@ export class SimplyLoveGpuSkin implements GpuSkin {
         this.sprJudgment(ctx, n);
       }
       this.sprJudgment(ctx, TapNoteScore.W1, true); // FA+ white Fantastic
-      // Combo digits (the dance % is a repaint-in-place slot, not per-glyph).
+      // Combo digits + dance-% glyphs (both per-glyph now, so neither re-bakes).
       ctx.glyphs.measure(
         'slcombo',
         { px: 48 * ctx.ds, bakePx: Math.round(48 * ctx.ds) },
         '0123456789',
+      );
+      ctx.glyphs.measure(
+        'slpct',
+        { px: 44 * ctx.ds, bakePx: Math.round(44 * ctx.ds) },
+        SL_PCT_CHARS,
       );
     } catch {
       // Baking is best-effort; a missing sprite just draws nothing.
