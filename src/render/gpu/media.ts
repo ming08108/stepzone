@@ -61,6 +61,8 @@ export class MediaLayer {
   private source: Media | null = null;
   private imageTex: GPUTexture | null = null;
   private imageBind: GPUBindGroup | null = null;
+  private readonly ndc = new Float32Array(4); // reused each draw (no per-frame alloc)
+  private videoLayout?: GPUBindGroupLayout; // cached (a video rebuilds only the bind group)
 
   constructor(
     private readonly device: GPUDevice,
@@ -147,12 +149,11 @@ export class MediaLayer {
     const dh = bh * scale;
     const x0 = (viewW - dw) / 2;
     const y0 = (viewH - dh) / 2;
-    const ndc = new Float32Array([
-      (x0 / viewW) * 2 - 1,
-      1 - ((y0 + dh) / viewH) * 2,
-      ((x0 + dw) / viewW) * 2 - 1,
-      1 - (y0 / viewH) * 2,
-    ]);
+    const ndc = this.ndc;
+    ndc[0] = (x0 / viewW) * 2 - 1;
+    ndc[1] = 1 - ((y0 + dh) / viewH) * 2;
+    ndc[2] = ((x0 + dw) / viewW) * 2 - 1;
+    ndc[3] = 1 - (y0 / viewH) * 2;
     this.device.queue.writeBuffer(this.uniform, 0, ndc);
 
     if (src instanceof HTMLVideoElement) {
@@ -162,8 +163,11 @@ export class MediaLayer {
       } catch {
         return; // frame not available yet — keep the cleared background
       }
+      // The external texture is transient (valid one frame) so the bind group
+      // must be rebuilt each frame; the layout is stable, so cache it.
+      this.videoLayout ??= this.pipeVideo.getBindGroupLayout(0);
       const bind = this.device.createBindGroup({
-        layout: this.pipeVideo.getBindGroupLayout(0),
+        layout: this.videoLayout,
         entries: [
           { binding: 0, resource: { buffer: this.uniform } },
           { binding: 1, resource: this.sampler },

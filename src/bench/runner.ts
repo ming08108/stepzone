@@ -40,6 +40,9 @@ export interface BenchScenario {
   life?: number;
   /** Composite a full-screen background image behind the field. */
   bgImage?: boolean;
+  /** Composite a moving background VIDEO — exercises the per-frame external-
+   *  texture import + bind-group rebuild the image path never touches. */
+  bgVideo?: boolean;
   /** Seconds of measured rAF time (default 5). */
   seconds?: number;
 }
@@ -81,6 +84,15 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
     chart: STRESS_CHART,
     scrollValue: 1,
     bgImage: true,
+  },
+  {
+    id: 'gpu-arcade-stress-bgvideo',
+    label: 'WEBGPU · STRESS + BG VIDEO',
+    backend: 'webgpu',
+    noteSkin: 'arcade',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+    bgVideo: true,
   },
   {
     id: 'gpu-itg-stress',
@@ -230,6 +242,61 @@ function makeBgBitmap(): ImageBitmap | null {
   }
 }
 
+/** A moving canvas streamed to a <video>, so the note field's video-background
+ *  path (importExternalTexture + per-frame bind group) runs like a real song
+ *  video. The canvas repaint is main-thread (a real decode is off-thread), so
+ *  this over-counts CPU a little — the point is exercising the GPU video path. */
+function makeBgVideo(): Promise<{ el: HTMLVideoElement; stop: () => void } | null> {
+  return new Promise((resolve) => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 854;
+      canvas.height = 480;
+      const c = canvas.getContext('2d');
+      if (!c || typeof canvas.captureStream !== 'function') return resolve(null);
+      let t = 0;
+      let raf = 0;
+      const paint = (): void => {
+        const h = (t * 1.5) % 360;
+        const g = c.createLinearGradient(0, 0, 854, 480);
+        g.addColorStop(0, `hsl(${h},55%,32%)`);
+        g.addColorStop(1, `hsl(${(h + 140) % 360},55%,26%)`);
+        c.fillStyle = g;
+        c.fillRect(0, 0, 854, 480);
+        c.fillStyle = 'rgba(255,255,255,0.16)';
+        c.beginPath();
+        c.arc(427 + 220 * Math.cos(t / 22), 240 + 150 * Math.sin(t / 18), 90, 0, Math.PI * 2);
+        c.fill();
+        t++;
+        raf = requestAnimationFrame(paint);
+      };
+      paint();
+      const stream = canvas.captureStream(30);
+      const el = document.createElement('video');
+      el.srcObject = stream;
+      el.muted = true;
+      el.playsInline = true;
+      const stop = (): void => {
+        cancelAnimationFrame(raf);
+        for (const tr of stream.getTracks()) tr.stop();
+      };
+      void el.play().catch(() => undefined);
+      const t0 = performance.now();
+      const wait = (): void => {
+        if (el.readyState >= 2) return resolve({ el, stop });
+        if (performance.now() - t0 > 3000) {
+          stop();
+          return resolve(null);
+        }
+        setTimeout(wait, 30);
+      };
+      wait();
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 async function collectWebgpuInfo(): Promise<DeviceInfo['webgpu']> {
   try {
     if (!navigator.gpu) return null;
@@ -372,6 +439,8 @@ async function buildScene(
 
   const bg = scn.bgImage ? makeBgBitmap() : null;
   if (scn.bgImage && !bg) return { skipped: 'OffscreenCanvas unavailable' };
+  const video = scn.bgVideo ? await makeBgVideo() : null;
+  if (scn.bgVideo && !video) return { skipped: 'captureStream video unavailable' };
 
   const common = {
     judge,
@@ -397,6 +466,7 @@ async function buildScene(
   const lastBeat = judge.notes.length ? judge.notes[judge.notes.length - 1].beat : 0;
   field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
   if (bg) field.setBackground(bg);
+  else if (video) field.setBackground(video.el);
   field.prewarm(); // bake atlas + compile pipelines before the measured window
   return {
     ...common,
@@ -415,6 +485,7 @@ async function buildScene(
     cleanup: () => {
       field.destroy();
       bg?.close();
+      video?.stop();
       canvas.remove();
     },
   };
