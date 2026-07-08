@@ -131,6 +131,19 @@ export class GpuNoteField {
   private fieldLeft = 0;
   private receptorY = 0;
   private lastDs = -1;
+  // Reusable render-pass descriptor + submit array — mutated per frame (view,
+  // timestampWrites, command buffer) instead of reallocating the literals.
+  private readonly clearValue: GPUColor = { r: 11 / 255, g: 12 / 255, b: 14 / 255, a: 1 };
+  private readonly colorAttachment: GPURenderPassColorAttachment = {
+    view: undefined as unknown as GPUTextureView,
+    clearValue: this.clearValue,
+    loadOp: 'clear',
+    storeOp: 'store',
+  };
+  private readonly passDesc: GPURenderPassDescriptor = {
+    colorAttachments: [this.colorAttachment],
+  };
+  private readonly submitScratch: GPUCommandBuffer[] = [undefined as unknown as GPUCommandBuffer];
 
   private firstVisibleIdx = 0;
   private lastCombo = 0;
@@ -617,22 +630,13 @@ export class GpuNoteField {
 
     // --- Encode ---------------------------------------------------------------
     try {
-      const view = this.ctx.getCurrentTexture().createView();
+      // #0b0c0e clear like the 2D field; the surface is non-srgb unorm so the
+      // clear values are raw byte fractions. Descriptor is reused per frame —
+      // only the swapchain view + timestamp writes change.
+      this.colorAttachment.view = this.ctx.getCurrentTexture().createView();
+      this.passDesc.timestampWrites = this.timer.timestampWrites();
       const enc = this.device.createCommandEncoder();
-      const pass = enc.beginRenderPass({
-        colorAttachments: [
-          {
-            view,
-            // #0b0c0e like the 2D field. The surface is non-srgb unorm, so
-            // clear values are raw byte fractions (canvas-equivalent), not
-            // linear-light.
-            clearValue: { r: 11 / 255, g: 12 / 255, b: 14 / 255, a: 1 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          },
-        ],
-        timestampWrites: this.timer.timestampWrites(), // real GPU time of this frame
-      });
+      const pass = enc.beginRenderPass(this.passDesc);
       this.media.draw(pass, width, height);
       this.underShapes.flush(pass); // SL chrome + density, UNDER the notes
       this.batch.flush(pass); // field, notes, explosions (textured quads)
@@ -640,7 +644,8 @@ export class GpuNoteField {
       this.hudBatch.flush(pass); // HUD text/digits over their backgrounds
       pass.end();
       this.timer.resolve(enc);
-      this.device.queue.submit([enc.finish()]);
+      this.submitScratch[0] = enc.finish();
+      this.device.queue.submit(this.submitScratch);
       this.timer.afterSubmit();
     } catch {
       this.lost = true;

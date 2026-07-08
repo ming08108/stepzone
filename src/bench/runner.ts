@@ -117,6 +117,12 @@ export interface ScenarioResult {
   /** Real GPU time per presented frame, ms (WebGPU timestamp query). null when
    *  timestamps are unavailable. */
   gpuMs: FrameStats | null;
+  /** GC pauses observed during the window (heap-size drops between frames) —
+   *  each is a potential stutter; the leading indicator of per-frame allocation
+   *  churn. Requires --enable-precise-memory-info; null otherwise. */
+  gcCount: number | null;
+  /** Bytes allocated per measured frame (heap rises summed / frames). */
+  allocPerFrame: number | null;
 }
 
 export interface DeviceInfo {
@@ -415,7 +421,15 @@ async function runScenario(
 ): Promise<ScenarioResult> {
   const base: Omit<
     ScenarioResult,
-    'frames' | 'seconds' | 'fps' | 'frameMs' | 'missedPct' | 'drawCpuMs' | 'gpuMs'
+    | 'frames'
+    | 'seconds'
+    | 'fps'
+    | 'frameMs'
+    | 'missedPct'
+    | 'drawCpuMs'
+    | 'gpuMs'
+    | 'gcCount'
+    | 'allocPerFrame'
   > = {
     id: scn.id,
     label: scn.label,
@@ -430,6 +444,8 @@ async function runScenario(
     missedPct: 0,
     drawCpuMs: stats([]),
     gpuMs: null,
+    gcCount: null,
+    allocPerFrame: null,
   });
 
   const built = await buildScene(scn, opts.container);
@@ -446,6 +462,15 @@ async function runScenario(
     let measureStartWall = 0;
     let lastProgressAt = 0;
     let songNow = START_OFFSET_SECONDS;
+    // Heap sampling: with --enable-precise-memory-info, usedJSHeapSize is exact,
+    // so a drop between frames is a GC and a rise is bytes allocated that frame.
+    const heapOf = (): number =>
+      (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ??
+      0;
+    const heapAvail = heapOf() > 0;
+    let prevHeap = 0;
+    let gcCount = 0;
+    let allocBytes = 0;
 
     const drawOnce = (now: number): number => {
       scene.auto.tick(now);
@@ -470,10 +495,18 @@ async function runScenario(
       if (!measuring && wall - wall0 >= WARMUP_SECONDS * 1000) {
         measuring = true;
         measureStartWall = wall;
+        prevHeap = heapOf(); // baseline after warmup allocations have settled
         scene.gpu?.reset(); // start GPU-time collection at the measure window
       } else if (measuring) {
         frameDeltas.push(delta);
         drawTimes.push(drawMs);
+        if (heapAvail) {
+          const h = heapOf();
+          const d = h - prevHeap;
+          if (d < 0) gcCount++;
+          else allocBytes += d;
+          prevHeap = h;
+        }
         if (wall - measureStartWall >= measureSeconds * 1000) break;
       }
 
@@ -511,6 +544,8 @@ async function runScenario(
         Math.max(1, frameDeltas.length),
       drawCpuMs: drawStats,
       gpuMs,
+      gcCount: heapAvail ? gcCount : null,
+      allocPerFrame: heapAvail ? allocBytes / Math.max(1, frames) : null,
     };
   } finally {
     scene.cleanup();

@@ -38,9 +38,17 @@ export class GpuTimer {
   }
 
   /** Pass to beginRenderPass({ …, timestampWrites }); undefined when disabled. */
+  private tsWrites?: GPURenderPassTimestampWrites;
   timestampWrites(): GPURenderPassTimestampWrites | undefined {
     if (!this.enabled || !this.querySet) return undefined;
-    return { querySet: this.querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 };
+    // Reused across frames (querySet is stable) — no per-frame descriptor alloc.
+    if (!this.tsWrites)
+      this.tsWrites = {
+        querySet: this.querySet,
+        beginningOfPassWriteIndex: 0,
+        endOfPassWriteIndex: 1,
+      };
+    return this.tsWrites;
   }
 
   /** Resolve the pair into a pooled readback buffer. Call after pass.end(),

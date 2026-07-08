@@ -50,8 +50,9 @@ import {
   traceSegments,
   type HoldSkin,
 } from '../themes/ddrA3';
+import type { AtlasRect } from './atlas';
 import type { Tint } from './glyphs';
-import { cropUV } from './quads';
+import { cropUV, type QuadOpts } from './quads';
 import type { ColorFn } from './shapes';
 import type { GpuSkin, SkinCtx } from './skin';
 
@@ -90,6 +91,11 @@ export class DdrA3GpuSkin implements GpuSkin {
   readonly receptorOffset = RECEPTOR_OFFSET;
   readonly explosionSeconds = A3_EXPLOSION;
   readonly beatLines = true;
+  // Hot-path: cache the note-sprite rect by band color so the per-note draw is
+  // a Map lookup — no template-string key or paint closure allocated per frame.
+  private readonly noteSprites = new Map<string, AtlasRect | null>();
+  // Reused opts for the per-note rotation push (avoids a `{rot}` alloc/note).
+  private readonly rotOpt: QuadOpts = { rot: 0 };
 
   fieldLeft(bare: boolean, width: number, numTracks: number, colW: number, ds: number): number {
     return bare
@@ -99,12 +105,16 @@ export class DdrA3GpuSkin implements GpuSkin {
 
   // --- Sprite getters (baked on demand; keys mirror the 2D SpriteStore) -----
 
-  private sprNote(ctx: SkinCtx, band: typeof NOTE_GREEN, tube: string) {
+  private sprNote(ctx: SkinCtx, band: typeof NOTE_GREEN, tube: string): AtlasRect | null {
+    const cached = this.noteSprites.get(band[1]);
+    if (cached !== undefined) return cached;
     const m = ctx.arrowS + 9 * ctx.ds;
-    return ctx.atlas.sprite(`note:${band[1]}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`note:${band[1]}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       paintNote(c, ctx.arrowS, ctx.ds, band, tube);
     });
+    this.noteSprites.set(band[1], rect);
+    return rect;
   }
 
   private sprReceptor(ctx: SkinCtx, kind: 'dim' | 'bright' | 'press') {
@@ -378,10 +388,10 @@ export class DdrA3GpuSkin implements GpuSkin {
     const tube = dead ? TUBE_GREY : head ? QUANT_TUBE[NoteType.N12TH] : QUANT_TUBE[quant];
     const spr = this.sprNote(ctx, band, tube);
     const m = ctx.arrowS + 9 * ctx.ds;
-    if (spr)
-      b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, {
-        rot: ctx.angle(track),
-      });
+    if (spr) {
+      this.rotOpt.rot = ctx.angle(track);
+      b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
+    }
   }
 
   mine(ctx: SkinCtx, x: number, y: number, now: number, beatPulse: number): void {
@@ -920,6 +930,7 @@ export class DdrA3GpuSkin implements GpuSkin {
   }
 
   clear(): void {
-    // The skin caches no per-frame state (grade metrics recompute per call).
+    // ds/atlas changed — the baked note rects are invalid; rebake on next use.
+    this.noteSprites.clear();
   }
 }
