@@ -23,7 +23,7 @@ import type { NoteSkin } from '../game/playOptions';
 import { Judge } from '../gameplay/judge';
 import { TapNoteScore, TapNoteType } from '../notes/noteTypes';
 import { parseSimfile } from '../parse/loader';
-import type { Feedback } from '../render/noteField';
+import type { Feedback } from '../render/fieldConfig';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { makeBenchSsc, type BenchChartOpts } from './benchChart';
 

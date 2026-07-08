@@ -3,9 +3,8 @@
  * mechanics — scroll math, the forward-only cull cursor, the receptor/hold/
  * note/explosion loops, the three batches, and the render-pass encode — and
  * delegates every bit of ART to a GpuSkin: the arcade DDR A3 look
- * (ddrA3Skin.ts) or Simply Love / ITG (simplyLoveSkin.ts). This mirrors the
- * 2D renderer's Theme split (render/theme.ts), so the two skins draw with the
- * same pass order the canvas orchestrator used:
+ * (ddrA3Skin.ts, art in ddrA3Art.ts) or Simply Love / ITG (simplyLoveSkin.ts,
+ * art in simplyLoveArt.ts). Both skins draw with the same fixed pass order:
  *
  *   chrome → hudUnderlay → [beat lines] → receptors → holds → notes →
  *   explosions → hudOverlay
@@ -21,7 +20,7 @@
 
 import type { Judge } from '../../gameplay/judge';
 import type { NoteType } from '../../notes/noteTypes';
-import type { RenderMeta, TapNoteStyle, Feedback } from '../theme';
+import type { RenderMeta, TapNoteStyle, Feedback } from '../types';
 import type { AtlasRect, GpuAtlas } from './atlas';
 import type { GlyphBank } from './glyphs';
 import type { QuadBatch } from './quads';

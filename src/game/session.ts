@@ -22,7 +22,7 @@ import {
 } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
-import type { Feedback, NoteFieldConfig } from '../render/noteField';
+import type { Feedback, NoteFieldConfig } from '../render/fieldConfig';
 import { songMaxBpm } from '../render/scroll';
 import { difficultyToString } from '../song/difficulty';
 import type { Song } from '../song/song';

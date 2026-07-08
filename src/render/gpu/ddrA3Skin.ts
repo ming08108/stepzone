@@ -13,7 +13,7 @@
 
 import type { Judge } from '../../gameplay/judge';
 import { NoteType, TapNoteScore } from '../../notes/noteTypes';
-import type { Feedback, TapNoteStyle } from '../theme';
+import type { Feedback, TapNoteStyle } from '../types';
 import {
   A3_EXPLOSION,
   A3_JUDGMENT,
@@ -33,7 +33,6 @@ import {
   QUANT_BAND,
   QUANT_TUBE,
   TUBE_GREY,
-  measureWidth,
   paintBoom,
   paintDifficulty,
   paintGaugeChrome,
@@ -46,10 +45,10 @@ import {
   paintNote,
   paintReceptor,
   paintSongPanel,
-  roundFont,
   traceSegments,
   type HoldSkin,
-} from '../themes/ddrA3';
+} from './ddrA3Art';
+import { measureWidth, roundFont } from './text';
 import type { AtlasRect } from './atlas';
 import type { Tint } from './glyphs';
 import { cropUV, type QuadOpts } from './quads';

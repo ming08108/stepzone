@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Play } from './Play';
 import { PlayerOptions } from './PlayerOptions';
 import { Inspector } from './Inspector';
-import { SongSelect } from './SongSelectStepline';
+import { SongSelect } from './SongSelect';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
