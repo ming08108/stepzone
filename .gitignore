@@ -21,3 +21,6 @@ pnpm-debug.log*
 *.zip
 todo*.txt
 todos*.txt
+
+# Claude Code transient worktrees
+.claude/worktrees/
