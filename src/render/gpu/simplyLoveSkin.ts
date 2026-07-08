@@ -41,6 +41,7 @@ import {
   traceCel,
 } from '../themes/simplyLove';
 import type { AtlasRect } from './atlas';
+import type { QuadOpts } from './quads';
 import type { Tint } from './glyphs';
 import type { ColorFn } from './shapes';
 import type { GpuSkin, SkinCtx } from './skin';
@@ -97,6 +98,15 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     lastT: number;
   } | null = null;
 
+  // Hot-path zero-alloc: cache baked rects by a STABLE key (face color, kind,
+  // 'stripe'…) so per-note/hold/mine draws are Map lookups — no template-string
+  // key or paint closure built per frame. Reused opts objects for the rotation
+  // (and masked-stripe) pushes avoid a `{…}` alloc per quad. Reset on clear().
+  private readonly rectCache = new Map<string, AtlasRect | null>();
+  private readonly rotOpt: QuadOpts = { rot: 0 };
+  private readonly stripeOpt: QuadOpts = { rot: 0, mask: undefined, phaseV: 0 };
+  private readonly repeatOpt: QuadOpts = { repeatV: 0 };
+
   fieldLeft(bare: boolean, width: number, numTracks: number, colW: number, ds: number): number {
     if (bare) return (width - numTracks * colW) / 2;
     return 48 * ds;
@@ -104,6 +114,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
 
   clear(): void {
     this.density = null;
+    this.rectCache.clear();
   }
 
   // --- sprite bakers ---------------------------------------------------------
@@ -114,33 +125,43 @@ export class SimplyLoveGpuSkin implements GpuSkin {
   }
 
   private sprTap(ctx: SkinCtx, faceColor: string): AtlasRect | null {
+    const hit = this.rectCache.get(faceColor);
+    if (hit !== undefined) return hit;
     const s = ctx.arrowS;
     const ds = ctx.ds;
     const m = this.pad(ctx);
-    return ctx.atlas.sprite(`sltap:${faceColor}:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`sltap:${faceColor}:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       paintCelTapBase(c, s, ds, faceColor, faceColor === '#7c8087');
     });
+    this.rectCache.set(faceColor, rect);
+    return rect;
   }
 
   /** White CEL_FACE alpha — clips the stem stripe to the arrow face. */
   private sprFaceMask(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('facemask');
+    if (hit !== undefined) return hit;
     const s = ctx.arrowS;
     const m = this.pad(ctx);
-    return ctx.atlas.sprite(`slfacemask:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`slfacemask:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       traceCel(c, s, CEL_FACE);
       c.fillStyle = '#ffffff';
       c.fill();
     });
+    this.rectCache.set('facemask', rect);
+    return rect;
   }
 
   /** One vertical white bump in the stem column; scrolled via phaseV, masked
    *  by the face. Transparent at top/bottom so the wrap is seamless. */
   private sprStripe(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('stripe');
+    if (hit !== undefined) return hit;
     const s = ctx.arrowS;
     const m = this.pad(ctx);
-    return ctx.atlas.sprite(`slstripe:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`slstripe:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       const g = c.createLinearGradient(0, -m, 0, m);
       g.addColorStop(0, 'rgba(255,255,255,0)');
@@ -149,34 +170,46 @@ export class SimplyLoveGpuSkin implements GpuSkin {
       c.fillStyle = g;
       c.fillRect(-0.188 * s, -m, 0.376 * s, 2 * m);
     });
+    this.rectCache.set('stripe', rect);
+    return rect;
   }
 
   private sprReceptor(ctx: SkinCtx, kind: 'dim' | 'bright' | 'press'): AtlasRect | null {
+    const hit = this.rectCache.get(kind);
+    if (hit !== undefined) return hit;
     const s = ctx.arrowS;
     const ds = ctx.ds;
     const m = this.pad(ctx);
     const val = kind === 'press' ? 246 : kind === 'bright' ? 216 : 112;
-    return ctx.atlas.sprite(`slrec:${kind}:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`slrec:${kind}:${Math.round(s)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       paintCelReceptor(c, s, ds, val, kind === 'press');
     });
+    this.rectCache.set(kind, rect);
+    return rect;
   }
 
   private sprMineBody(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('minebody');
+    if (hit !== undefined) return hit;
     const r = ctx.arrowS * 0.66;
     const ds = ctx.ds;
     const m = r + 3 * ds;
-    return ctx.atlas.sprite(`slminebody:${Math.round(r)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`slminebody:${Math.round(r)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       paintCelMineBody(c, r, ds);
     });
+    this.rectCache.set('minebody', rect);
+    return rect;
   }
 
   private sprMineCore(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('minecore');
+    if (hit !== undefined) return hit;
     const r = ctx.arrowS * 0.66;
     const ds = ctx.ds;
     const m = r * 0.3 + 12 * ds; // room for the glow
-    return ctx.atlas.sprite(`slminecore:${Math.round(r)}`, 2 * m, 2 * m, (c) => {
+    const rect = ctx.atlas.sprite(`slminecore:${Math.round(r)}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       c.shadowColor = 'rgba(255,48,48,0.8)';
       c.shadowBlur = 12 * ds;
@@ -185,6 +218,8 @@ export class SimplyLoveGpuSkin implements GpuSkin {
       c.arc(0, 0, r * 0.3, 0, Math.PI * 2);
       c.fill();
     });
+    this.rectCache.set('minecore', rect);
+    return rect;
   }
 
   private boomPad(ctx: SkinCtx): number {
@@ -206,8 +241,11 @@ export class SimplyLoveGpuSkin implements GpuSkin {
 
   /** Horizontal silver gradient strip (constant down the tube). */
   private sprTube(ctx: SkinCtx, alive: boolean): AtlasRect | null {
+    const ck = alive ? 'tube1' : 'tube0';
+    const hit = this.rectCache.get(ck);
+    if (hit !== undefined) return hit;
     const w = ctx.arrowS * 1.5;
-    return ctx.atlas.sprite(`sltube:${alive}:${Math.round(w)}`, w, 8, (c) => {
+    const rect = ctx.atlas.sprite(`sltube:${alive}:${Math.round(w)}`, w, 8, (c) => {
       const g = c.createLinearGradient(0, 0, w, 0);
       if (alive) {
         g.addColorStop(0, 'rgba(148,154,162,0.95)');
@@ -223,17 +261,28 @@ export class SimplyLoveGpuSkin implements GpuSkin {
       c.fillStyle = g;
       c.fillRect(0, 0, w, 8);
     });
+    this.rectCache.set(ck, rect);
+    return rect;
   }
 
   /** One 26·ds sheen period: a 4·ds white band at the top, transparent below. */
   private sprSheen(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('sheen');
+    if (hit !== undefined) return hit;
     const w = ctx.arrowS * 1.5;
     const ds = ctx.ds;
     const period = 26 * ds;
-    return ctx.atlas.sprite(`slsheen:${Math.round(w)}:${Math.round(period)}`, w, period, (c) => {
-      c.fillStyle = '#ffffff';
-      c.fillRect(0, 0, w, 4 * ds);
-    });
+    const rect = ctx.atlas.sprite(
+      `slsheen:${Math.round(w)}:${Math.round(period)}`,
+      w,
+      period,
+      (c) => {
+        c.fillStyle = '#ffffff';
+        c.fillRect(0, 0, w, 4 * ds);
+      },
+    );
+    this.rectCache.set('sheen', rect);
+    return rect;
   }
 
   // --- art hooks -------------------------------------------------------------
@@ -257,18 +306,19 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const m = this.pad(ctx);
     const x = ctx.laneX(track);
     const y = ctx.receptorY;
-    const rot = ctx.angle(track);
+    const o = this.rotOpt;
+    o.rot = ctx.angle(track);
     if (pressed) {
       const spr = this.sprReceptor(ctx, 'press');
-      if (spr) ctx.batch.push(x, y, 2 * m * 0.92, 2 * m * 0.92, spr, 1, 1, 1, 1, { rot });
+      if (spr) ctx.batch.push(x, y, 2 * m * 0.92, 2 * m * 0.92, spr, 1, 1, 1, 1, o);
       return;
     }
     const f = beatPulse * beatPulse;
     const dim = this.sprReceptor(ctx, 'dim');
-    if (dim) ctx.batch.push(x, y, 2 * m, 2 * m, dim, 1, 1, 1, 1, { rot });
+    if (dim) ctx.batch.push(x, y, 2 * m, 2 * m, dim, 1, 1, 1, 1, o);
     if (f > 0.02) {
       const bright = this.sprReceptor(ctx, 'bright');
-      if (bright) ctx.batch.push(x, y, 2 * m, 2 * m, bright, 1, 1, 1, f, { rot });
+      if (bright) ctx.batch.push(x, y, 2 * m, 2 * m, bright, 1, 1, 1, f, o);
     }
   }
 
@@ -286,19 +336,19 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const faceColor = dead ? '#7c8087' : ITG_QUANT_COLOR[quant];
     const x = ctx.laneX(track);
     const rot = ctx.angle(track);
+    this.rotOpt.rot = rot;
     const base = this.sprTap(ctx, faceColor);
-    if (base) ctx.batch.push(x, y, 2 * m, 2 * m, base, 1, 1, 1, 1, { rot });
+    if (base) ctx.batch.push(x, y, 2 * m, 2 * m, base, 1, 1, 1, 1, this.rotOpt);
     // Animated stem stripe (inert on a scored head), clipped to the face.
     if (!dead) {
       const stripe = this.sprStripe(ctx);
       const mask = this.sprFaceMask(ctx);
       if (stripe && mask) {
-        const frac = beat - Math.floor(beat);
-        ctx.batch.push(x, y, 2 * m, 2 * m, stripe, 1, 1, 1, 1, {
-          rot,
-          mask,
-          phaseV: -frac,
-        });
+        const o = this.stripeOpt;
+        o.rot = rot;
+        o.mask = mask;
+        o.phaseV = -(beat - Math.floor(beat));
+        ctx.batch.push(x, y, 2 * m, 2 * m, stripe, 1, 1, 1, 1, o);
       }
     }
   }
@@ -327,9 +377,9 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     // Cel sheen bands riding the tube (tile anchored at the top).
     const sheen = this.sprSheen(ctx);
     if (sheen) {
-      const reps = Math.max(1, h / (26 * ds));
       const a = alive ? 0.3 : 0.1;
-      ctx.batch.push(x, cy, w, h, sheen, 1, 1, 1, a, { repeatV: reps });
+      this.repeatOpt.repeatV = Math.max(1, h / (26 * ds));
+      ctx.batch.push(x, cy, w, h, sheen, 1, 1, 1, a, this.repeatOpt);
     }
     // Dark side rims.
     if (white) {
@@ -371,7 +421,10 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const ds = ctx.ds;
     const mb = r + 3 * ds;
     const body = this.sprMineBody(ctx);
-    if (body) ctx.batch.push(x, y, 2 * mb, 2 * mb, body, 1, 1, 1, 1, { rot: now * 2.2 });
+    if (body) {
+      this.rotOpt.rot = now * 2.2;
+      ctx.batch.push(x, y, 2 * mb, 2 * mb, body, 1, 1, 1, 1, this.rotOpt);
+    }
     const core = this.sprMineCore(ctx);
     const mc = r * 0.3 + 12 * ds;
     if (core) ctx.batch.push(x, y, 2 * mc, 2 * mc, core, 1, 1, 1, 0.55 + 0.45 * beatPulse);

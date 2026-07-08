@@ -111,13 +111,19 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
     setProgress(null);
     setError('');
     try {
-      // ?only=<substring> narrows the suite (fast iteration / automation).
-      const only = new URLSearchParams(location.search).get('only');
+      // ?only=<substring> narrows the suite; ?secs=<n> overrides the measured
+      // window per scenario (a longer window gives a stabler p99/max tail).
+      const params = new URLSearchParams(location.search);
+      const only = params.get('only');
+      const secs = Number(params.get('secs'));
+      let scenarios = only ? BENCH_SCENARIOS.filter((s) => s.id.includes(only)) : BENCH_SCENARIOS;
+      if (Number.isFinite(secs) && secs > 0)
+        scenarios = scenarios.map((s) => ({ ...s, seconds: secs }));
       const r = await runBenchmark({
         container,
         signal: abort.signal,
         onProgress: setProgress,
-        scenarios: only ? BENCH_SCENARIOS.filter((s) => s.id.includes(only)) : undefined,
+        scenarios,
       });
       setResult(r);
       setPhase('done');

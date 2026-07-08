@@ -139,6 +139,7 @@ export class QuadBatch {
   private buffer: GPUBuffer;
   private count = 0;
   private segments: Array<{ add: boolean; start: number; count: number }> = [];
+  private readonly viewScratch = new Float32Array(4); // reused each begin() (no per-frame alloc)
 
   constructor(
     private readonly device: GPUDevice,
@@ -211,7 +212,10 @@ export class QuadBatch {
   begin(viewW: number, viewH: number): void {
     this.count = 0;
     this.segments.length = 0;
-    this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([viewW, viewH, 0, 0]));
+    const v = this.viewScratch;
+    v[0] = viewW;
+    v[1] = viewH;
+    this.device.queue.writeBuffer(this.uniform, 0, v);
   }
 
   /**
