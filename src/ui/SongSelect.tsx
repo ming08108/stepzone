@@ -86,13 +86,42 @@ function stashPackImages(packImages: Map<string, File>): void {
   }
 }
 
+// Packs whose folder is being walked right now — so the detail-header backdrop
+// and the grid loader (or a fast A→B→A cursor) never walk the same pack twice
+// or leak the loser's object URL.
+const packArtPending = new Set<string>();
+
+/**
+ * Resolve one pack's banner exactly once: list its folder, cache the object URL
+ * (or null for "known none"), then `notify`. A no-op if already cached or a walk
+ * is in flight — the in-flight walker's `notify` re-renders every consumer.
+ */
+async function resolvePackArt(
+  pack: string,
+  sourceId: string,
+  dir: string,
+  notify: () => void,
+): Promise<void> {
+  if (packArtUrls.get(pack) !== undefined || packArtPending.has(pack)) return;
+  packArtPending.add(pack);
+  try {
+    const files = await readSongFolder(sourceId, dir);
+    const pick = pickPackImage(files ?? []);
+    packArtUrls.set(pack, pick ? URL.createObjectURL(pick) : null);
+  } finally {
+    packArtPending.delete(pack);
+  }
+  notify();
+}
+
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
 const savedFilters = {
   sort: 'pack' as Sort, // packs are the arcade's natural grouping (todos3 #7)
   search: '',
   minLv: 1,
-  maxLv: 20,
+  maxLv: 999, // sentinel "no upper cap" — displayed/applied as the library's max level
+
   sel: 0,
   diff: 2,
   favOnly: false,
@@ -394,9 +423,20 @@ export function SongSelect({
     [entries, bestsBySong, stats],
   );
 
+  // Highest chart level in the library (floored at 20 so a small library keeps
+  // the familiar range). MAX LV defaults to "no cap" (a large sentinel) and is
+  // applied/shown as effMaxLv, so charts above 20 — common in ITG/tech packs —
+  // are reachable instead of being hidden by the old hard ceiling of 20.
+  const levelCeil = useMemo(() => {
+    let m = 20;
+    for (const s of songs) for (const lv of s.levels) if (lv != null && lv > m) m = lv;
+    return m;
+  }, [songs]);
+  const effMaxLv = Math.min(maxLv, levelCeil);
+
   const filtered = useMemo(
-    () => filterSort(songs, { search, minLv, maxLv, favOnly, favs, sort, diff }),
-    [songs, search, minLv, maxLv, favOnly, favs, sort, diff],
+    () => filterSort(songs, { search, minLv, maxLv: effMaxLv, favOnly, favs, sort, diff }),
+    [songs, search, minLv, effMaxLv, favOnly, favs, sort, diff],
   );
 
   // Pack wheel: an ALL SONGS group, then each pack (from the filtered songs)
@@ -487,7 +527,12 @@ export function SongSelect({
       stopPreview();
       return;
     }
-    if (!song?.entry) return;
+    // Inside a pack but nothing highlighted (filters emptied the list) — the
+    // sample would otherwise keep looping with no new preview to supersede it.
+    if (!song?.entry) {
+      stopPreview();
+      return;
+    }
     let alive = true;
     void ensureLoaded(song.entry).then((e) => {
       // Already-decoded audio (prefetched neighbors) starts near-instantly.
@@ -518,46 +563,31 @@ export function SongSelect({
       alive = false;
       clearTimeout(t);
     };
-  }, [selClamped, filtered, ensureLoaded]);
+    // shownSongs (not filtered) is what's indexed — it also changes when a pack
+    // opens without filtered/selClamped moving, so prefetch the right neighbors.
+  }, [selClamped, shownSongs, ensureLoaded]);
 
   // The selected song's pack art, a dim backdrop behind the detail header (#8).
-  // Full scans stashed it already; catalog rows resolve it with one directory
-  // listing of the pack folder, remembered (even as "none") per pack.
-  const [packArt, setPackArt] = useState<string | null>(null);
+  // Read straight from the module cache (recomputed as packArtTick advances);
+  // the effect below just kicks a one-time walk when it isn't cached yet.
+  const packArt = !inPacks && song?.pack ? (packArtUrls.get(song.pack) ?? null) : null;
   useEffect(() => {
-    const pack = song?.pack || '';
-    const entry = song?.entry;
-    if (!pack || !entry) {
-      setPackArt(null);
-      return;
-    }
-    const known = packArtUrls.get(pack);
-    if (known !== undefined) {
-      setPackArt(known);
-      return;
-    }
-    if (!entry.sourceId || !entry.lazyDir || !entry.lazyDir.includes('/')) {
-      setPackArt(null);
-      return;
-    }
+    const pack = song?.pack;
+    const e = song?.entry;
+    if (inPacks || !pack || !e?.sourceId || !e.lazyDir || !e.lazyDir.includes('/')) return;
     let alive = true;
-    setPackArt(null);
-    const packDir = entry.lazyDir.slice(0, entry.lazyDir.lastIndexOf('/'));
-    void readSongFolder(entry.sourceId, packDir).then((files) => {
-      const pick = pickPackImage(files ?? []);
-      const url = pick ? URL.createObjectURL(pick) : null;
-      packArtUrls.set(pack, url);
-      if (alive) setPackArt(url);
+    void resolvePackArt(pack, e.sourceId, e.lazyDir.slice(0, e.lazyDir.lastIndexOf('/')), () => {
+      if (alive) setPackArtTick((t) => t + 1);
     });
     return () => {
       alive = false;
     };
-  }, [song?.pack, song?.entry]);
+  }, [inPacks, song?.pack, song?.entry]);
 
   // Grid banners (#8): a catalog-restored library has an empty packArtUrls cache,
   // so nothing shows on first paint. When the pack grid is up, walk each shown
-  // pack's folder once — sequentially, so a large library doesn't fire hundreds
-  // of directory listings at once — and bump packArtTick as each banner lands.
+  // pack's folder once — sequentially (so a large library doesn't fire hundreds
+  // of listings at once) and deduped against the detail walk above.
   useEffect(() => {
     if (!inPacks) return;
     let alive = true;
@@ -579,10 +609,9 @@ export function SongSelect({
     void (async () => {
       for (const j of jobs) {
         if (!alive) return;
-        const files = await readSongFolder(j.sourceId, j.dir);
-        const pick = pickPackImage(files ?? []);
-        packArtUrls.set(j.pack, pick ? URL.createObjectURL(pick) : null);
-        if (alive) setPackArtTick((t) => t + 1);
+        await resolvePackArt(j.pack, j.sourceId, j.dir, () => {
+          if (alive) setPackArtTick((t) => t + 1);
+        });
       }
     })();
     return () => {
@@ -616,14 +645,16 @@ export function SongSelect({
     setSort('pack');
     setSearch('');
     setMinLv(1);
-    setMaxLv(20);
+    setMaxLv(999);
     setFavOnly(false);
   };
   const adjust = (i: number, dir: number) => {
     const kind = overlayRows[i]?.kind;
     if (kind === 'sort') setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
-    else if (kind === 'min') setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
-    else if (kind === 'max') setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
+    else if (kind === 'min') setMinLv((v) => Math.max(1, Math.min(effMaxLv, v + dir)));
+    // Step from the displayed value (effMaxLv), clamped to the library's ceiling.
+    else if (kind === 'max')
+      setMaxLv((v) => Math.max(minLv, Math.min(levelCeil, Math.min(v, levelCeil) + dir)));
     else if (kind === 'fav') setFavOnly((v) => !v);
   };
   // Confirm on a menu row: BACK leaves the pack, RESET clears filters, the value
@@ -776,7 +807,7 @@ export function SongSelect({
     ...(inPack ? [{ label: 'BACK', value: '‹ PACKS', kind: 'back' as OverlayKind }] : []),
     { label: 'SORT', value: sort.toUpperCase(), kind: 'sort' },
     { label: 'MIN LV', value: String(minLv), kind: 'min' },
-    { label: 'MAX LV', value: String(maxLv), kind: 'max' },
+    { label: 'MAX LV', value: String(effMaxLv), kind: 'max' },
     { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL', kind: 'fav' },
     { label: 'RESET', value: '↺', kind: 'reset' },
   ];
@@ -1191,19 +1222,18 @@ export function SongSelect({
         ref={listRef}
         className="relative min-h-0 flex-1 overflow-hidden"
         onWheel={(e) => {
-          // Scroll wheel moves the selection (#6). Accumulate for trackpads.
+          // Song list: the wheel moves the selection (this container has no native
+          // scroll). The pack grid scrolls natively (its own overflow-y-auto), so
+          // leave the wheel to it — moving packSel here would double-move.
+          if (inPacks) return;
+          // Accumulate for trackpads.
           wheelAcc.current += e.deltaY;
           const step = 30;
           if (Math.abs(wheelAcc.current) < step) return;
           const dir = wheelAcc.current > 0 ? 1 : -1;
           wheelAcc.current = 0;
-          if (inPacks) {
-            const n = Math.max(1, packList.length);
-            setPackSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
-          } else {
-            const n = Math.max(1, shownSongs.length);
-            setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
-          }
+          const n = Math.max(1, shownSongs.length);
+          setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
         }}
       >
         {inPacks && (
