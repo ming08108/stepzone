@@ -1087,6 +1087,44 @@ export function SongSelect({
         {!inPacks &&
           overlayRows.map((o, i) => {
             const on = overlay && i === osel;
+            const cls =
+              'flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap';
+            const st = {
+              color: on ? '#ececec' : 'rgba(236,236,236,.55)',
+              borderColor: on ? AC : 'rgba(255,255,255,.12)',
+              background: on ? AC + '14' : 'transparent',
+            };
+            // The level ranges clamp (no wrap), so a single-direction click would
+            // strand the value — mouse users get explicit −/+ steppers. Keyboard
+            // ▲▼ still adjusts the focused row.
+            if (o.kind === 'min' || o.kind === 'max') {
+              return (
+                <div key={o.label} className={cls} style={st}>
+                  <span className="opacity-60">{o.label}</span>
+                  <button
+                    aria-label={`decrease ${o.label}`}
+                    className="px-[3px] font-bold hover:text-white"
+                    onClick={() => {
+                      setOsel(i);
+                      adjust(i, -1);
+                    }}
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[18px] text-center font-bold">{o.value}</span>
+                  <button
+                    aria-label={`increase ${o.label}`}
+                    className="px-[3px] font-bold hover:text-white"
+                    onClick={() => {
+                      setOsel(i);
+                      adjust(i, 1);
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              );
+            }
             return (
               <button
                 key={o.label}
@@ -1095,12 +1133,8 @@ export function SongSelect({
                   if (o.kind === 'back' || o.kind === 'reset') activateRow(i);
                   else adjust(i, 1);
                 }}
-                className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
-                style={{
-                  color: on ? '#ececec' : 'rgba(236,236,236,.55)',
-                  borderColor: on ? AC : 'rgba(255,255,255,.12)',
-                  background: on ? AC + '14' : 'transparent',
-                }}
+                className={cls}
+                style={st}
               >
                 <span className="opacity-60">{o.label}</span>
                 <span className="font-bold">{o.value}</span>
