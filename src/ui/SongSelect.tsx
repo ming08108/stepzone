@@ -610,14 +610,15 @@ export function SongSelect({
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
   }, [shownSongs, sel, diff, onPlay, ensureLoaded]);
 
+  // RESET clears the FILTERS only — sort, search, level range, faves. It must
+  // not touch navigation (which pack is open / the grid cursor); resetting your
+  // filters shouldn't eject you out to the pack grid.
   const reset = () => {
     setSort('pack');
     setSearch('');
     setMinLv(1);
     setMaxLv(20);
     setFavOnly(false);
-    setOpenPack(null);
-    setPackSel(0);
   };
   const adjust = (i: number, dir: number) => {
     const kind = overlayRows[i]?.kind;
