@@ -272,6 +272,11 @@ export class InputBus {
     this.kbCount.clear();
     this.padDown.clear();
     this.detect = createTransitionDetector(CONTROL_ROLES);
+    // Re-arm the fallback poll for the next subscriber: without this, once a raw
+    // gamepad event has fired, `rawActive` stays true and the next start()'s
+    // loop polls a single frame then never reschedules. A raw event re-proves
+    // the event API is live and stops the poll again.
+    this.rawActive = false;
   }
 
   private readonly loop = (): void => {
