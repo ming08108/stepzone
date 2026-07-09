@@ -91,6 +91,7 @@ const savedFilters = {
   diff: 2,
   favOnly: false,
   group: 'all' as 'all' | 'pack',
+  openPack: null as string | null,
 };
 
 export function SongSelect({
@@ -137,6 +138,10 @@ export function SongSelect({
   const [maxLv, setMaxLv] = useState(savedFilters.maxLv);
   const [favOnly, setFavOnly] = useState(savedFilters.favOnly);
   const [group, setGroup] = useState<'all' | 'pack'>(savedFilters.group);
+  // Pack-wheel drill-down: in 'pack' mode with no open pack, the list shows a
+  // table of packs; opening one shows its songs. `packSel` is the pack cursor.
+  const [openPack, setOpenPack] = useState<string | null>(savedFilters.openPack);
+  const [packSel, setPackSel] = useState(0);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
@@ -377,23 +382,50 @@ export function SongSelect({
   );
 
   const filtered = useMemo(
-    // Grouping by pack forces the pack sort so songs are pack-contiguous — the
-    // list then just interleaves a header before each pack (listRows below).
-    () =>
-      filterSort(songs, {
-        search,
-        minLv,
-        maxLv,
-        favOnly,
-        favs,
-        sort: group === 'pack' ? 'pack' : sort,
-        diff,
-      }),
-    [songs, search, minLv, maxLv, favOnly, favs, sort, diff, group],
+    () => filterSort(songs, { search, minLv, maxLv, favOnly, favs, sort, diff }),
+    [songs, search, minLv, maxLv, favOnly, favs, sort, diff],
   );
 
-  const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
-  const song = filtered[selClamped];
+  // Pack wheel: the list of packs (from the filtered songs), A→Z with counts.
+  const packList = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of filtered) {
+      const p = s.pack || '—';
+      counts.set(p, (counts.get(p) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([pack, count]) => ({ pack, count }));
+  }, [filtered]);
+
+  // Pack-list level (pack mode, nothing opened) vs inside an opened pack.
+  const inPacks = group === 'pack' && openPack === null;
+  const inPack = group === 'pack' && openPack !== null;
+  // Songs shown in the list: everything, or just the opened pack's songs.
+  const shownSongs = useMemo(
+    () =>
+      group === 'pack' && openPack !== null
+        ? filtered.filter((s) => (s.pack || '—') === openPack)
+        : filtered,
+    [filtered, openPack, group],
+  );
+  const packClamped = Math.min(packSel, Math.max(0, packList.length - 1));
+
+  const openPackAt = (idx: number) => {
+    const p = packList[idx];
+    if (!p) return;
+    setPackSel(idx);
+    setOpenPack(p.pack);
+    setSel(0);
+  };
+  const closePack = () => {
+    setOpenPack(null);
+    setSel(0);
+  };
+
+  const selClamped = Math.min(sel, Math.max(0, shownSongs.length - 1));
+  const song = shownSongs[selClamped];
+  const selPack = inPacks ? (packList[packClamped]?.pack ?? null) : null;
   const songBest = song?.bests[diff] ?? null;
 
   // The header art box follows each image's own shape (jackets are square,
@@ -408,6 +440,9 @@ export function SongSelect({
     144 *
       Math.min(BANNER_RATIO, Math.max(1, bannerUrl ? (artRatio ?? BANNER_RATIO) : BANNER_RATIO)),
   );
+  // Pack-wheel header: the highlighted pack's art (if scanned) + song count.
+  const packBannerUrl = inPacks && selPack ? (packArtUrls.get(selPack) ?? null) : null;
+  const packCount = inPacks ? (packList[packClamped]?.count ?? 0) : 0;
 
   // Remember filters/selection so returning from a song restores the list (#2).
   useEffect(() => {
@@ -419,6 +454,7 @@ export function SongSelect({
     savedFilters.diff = diff;
     savedFilters.favOnly = favOnly;
     savedFilters.group = group;
+    savedFilters.openPack = openPack;
   });
 
   // Loop the highlighted song's sample snippet (#5); stop when leaving.
@@ -440,12 +476,12 @@ export function SongSelect({
   // Warm the preview cache for songs near the cursor (todos3 #4), so scrolling
   // onto a neighbor starts its sample immediately instead of after a decode.
   useEffect(() => {
-    if (filtered.length === 0) return;
+    if (shownSongs.length === 0) return;
     let alive = true;
     const t = setTimeout(() => {
       void (async () => {
         for (const off of [1, -1, 2, -2]) {
-          const vm = filtered[selClamped + off];
+          const vm = shownSongs[selClamped + off];
           if (!vm || !alive) continue;
           const e = await ensureLoaded(vm.entry); // no-op unless a catalog row
           if (alive) prefetchSong(e);
@@ -493,7 +529,7 @@ export function SongSelect({
   }, [song?.pack, song?.entry]);
 
   const start = useCallback(async () => {
-    const s = filtered[Math.min(sel, Math.max(0, filtered.length - 1))];
+    const s = shownSongs[Math.min(sel, Math.max(0, shownSongs.length - 1))];
     if (!s || s.levels[diff] == null) return;
     const entry = await ensureLoaded(s.entry); // no-op unless a catalog row
     const chart = bestChartsPerSlot(entry.song)[diff];
@@ -503,7 +539,7 @@ export function SongSelect({
     // (which also queues a background conversion for next time).
     const bg = await resolveBackground(entry);
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
-  }, [filtered, sel, diff, onPlay, ensureLoaded]);
+  }, [shownSongs, sel, diff, onPlay, ensureLoaded]);
 
   const reset = () => {
     setSort('pack');
@@ -512,13 +548,20 @@ export function SongSelect({
     setMaxLv(20);
     setFavOnly(false);
     setGroup('all');
+    setOpenPack(null);
+    setPackSel(0);
   };
   const adjust = (i: number, dir: number) => {
     if (i === 0) setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
     else if (i === 1) setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
     else if (i === 2) setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
     else if (i === 3) setFavOnly((v) => !v);
-    else if (i === 4) setGroup((v) => (v === 'pack' ? 'all' : 'pack'));
+    else if (i === 4) {
+      setGroup((v) => (v === 'pack' ? 'all' : 'pack'));
+      setOpenPack(null);
+      setPackSel(0);
+      setSel(0);
+    }
   };
 
   // Keyboard navigation (arcade model).
@@ -556,21 +599,37 @@ export function SongSelect({
         else if (e.key === 'ArrowUp') adjust(osel, 1);
         else if (e.key === 'ArrowDown') adjust(osel, -1);
         else if (isConfirm) osel === overlayRows.length - 1 ? reset() : setOverlay(false);
+      } else if (inPacks) {
+        // Pack-wheel level: navigate packs, confirm opens one, back → options.
+        if (typing) return;
+        e.preventDefault();
+        const n = Math.max(1, packList.length);
+        if (e.key === 'ArrowUp') setPackSel((packClamped - 1 + n) % n);
+        else if (e.key === 'ArrowDown') setPackSel((packClamped + 1) % n);
+        else if (isConfirm) openPackAt(packClamped);
+        else if (isBack) {
+          setOverlay(true);
+          setOsel(0);
+        }
       } else {
         if (typing) return;
         e.preventDefault();
-        const n = Math.max(1, filtered.length);
+        const n = Math.max(1, shownSongs.length);
         if (e.key === 'ArrowUp') setSel((selClamped - 1 + n) % n);
         else if (e.key === 'ArrowDown') setSel((selClamped + 1) % n);
         else if (e.key === 'ArrowLeft') setDiff((v) => Math.max(0, v - 1));
         else if (e.key === 'ArrowRight') setDiff((v) => Math.min(4, v + 1));
         else if (isConfirm) void start();
         else if (e.key === 'f' || e.key === 'F') {
-          const s = filtered[selClamped];
+          const s = shownSongs[selClamped];
           if (s) toggleFav(s.key);
         } else if (isBack) {
-          setOverlay(true);
-          setOsel(0);
+          // Inside a pack → back returns to the pack list; else open options.
+          if (inPack) closePack();
+          else {
+            setOverlay(true);
+            setOsel(0);
+          }
         }
       }
     };
@@ -600,37 +659,14 @@ export function SongSelect({
     }
   };
 
-  // Display rows: songs, or (grouped) a pack header before each pack's songs.
-  // `si` is the index into `filtered`, so selection/nav stay on songs.
-  const listRows = useMemo<
-    Array<{ kind: 'header'; pack: string } | { kind: 'song'; song: SongVM; si: number }>
-  >(() => {
-    if (group !== 'pack') return filtered.map((song, si) => ({ kind: 'song', song, si }));
-    const out: Array<
-      { kind: 'header'; pack: string } | { kind: 'song'; song: SongVM; si: number }
-    > = [];
-    let cur: string | null = null;
-    filtered.forEach((song, si) => {
-      const p = song.pack || '—';
-      if (p !== cur) {
-        cur = p;
-        out.push({ kind: 'header', pack: p });
-      }
-      out.push({ kind: 'song', song, si });
-    });
-    return out;
-  }, [filtered, group]);
-
-  // Virtualized window: center the selected song's row, clamp at the ends.
-  const total = listRows.length;
-  const selRow =
-    group === 'pack'
-      ? Math.max(
-          0,
-          listRows.findIndex((r) => r.kind === 'song' && r.si === selClamped),
-        )
-      : selClamped;
-  const { off, first, last, topFade, botFade } = virtualWindow(total, viewH, selRow, ROW_H);
+  // Virtualized window: center the cursor (pack or song), clamp at the ends.
+  const total = inPacks ? packList.length : shownSongs.length;
+  const { off, first, last, topFade, botFade } = virtualWindow(
+    total,
+    viewH,
+    inPacks ? packClamped : selClamped,
+    ROW_H,
+  );
 
   const chips = DIFF_SLOT_NAMES.map((name, i) => {
     const lv = song?.levels[i];
@@ -794,9 +830,9 @@ export function SongSelect({
       <div
         className="flex h-[176px] flex-none items-center gap-6 border-b border-white/[0.09] px-[28px]"
         style={
-          packArt
+          (inPacks ? packBannerUrl : packArt)
             ? {
-                backgroundImage: `linear-gradient(to right, #0b0c0e 0%, rgba(11,12,14,.55) 30%, rgba(11,12,14,.55) 70%, #0b0c0e 100%), url(${packArt})`,
+                backgroundImage: `linear-gradient(to right, #0b0c0e 0%, rgba(11,12,14,.55) 30%, rgba(11,12,14,.55) 70%, #0b0c0e 100%), url(${inPacks ? packBannerUrl : packArt})`,
                 backgroundSize: 'auto, cover',
                 backgroundPosition: 'center, center',
               }
@@ -807,7 +843,20 @@ export function SongSelect({
           className="relative h-[144px] flex-none overflow-hidden outline outline-1 outline-white/[0.14]"
           style={{ width: artW, transition: 'width .16s ease-out' }}
         >
-          {bannerUrl ? (
+          {inPacks ? (
+            packBannerUrl ? (
+              <img src={packBannerUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div
+                className="flex h-full w-full items-center justify-center text-[42px] font-bold tracking-[0.06em] text-white/90"
+                style={{
+                  background: `repeating-linear-gradient(135deg, #1d3a5e 0 20px, #205a6e 20px 40px)`,
+                }}
+              >
+                {selPack ? initials(selPack) : ''}
+              </div>
+            )
+          ) : bannerUrl ? (
             <>
               <img
                 src={bannerUrl}
@@ -841,55 +890,85 @@ export function SongSelect({
           )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              onClick={() => song && toggleFav(song.key)}
-              title="Favorite (F)"
-              className="flex-none text-[26px] leading-none"
-              style={{ color: song && favs.has(song.key) ? FAV_CLR : 'rgba(236,236,236,.25)' }}
-            >
-              {song && favs.has(song.key) ? '★' : '☆'}
-            </button>
-            <div className="truncate text-[34px] font-bold leading-[1.15]">
-              {song?.title ?? '—'}
-            </div>
-          </div>
-          <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
-          <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
-            <span>BPM {song?.bpm ?? '—'}</span>
-            <span>{song?.pack ?? ''}</span>
-            <span className="font-bold" style={{ color: AC }}>
-              {DIFF_SLOT_NAMES[diff]} {song?.levels[diff] ?? '—'}
-            </span>
-            {songBest && (
-              <span style={{ color: '#59f07f' }}>
-                BEST {(songBest.percent * 100).toFixed(2)}% · {songBest.grade}
-              </span>
-            )}
-            {song != null && song.plays > 0 && <span>{song.plays} PLAYS</span>}
-          </div>
+          {inPacks ? (
+            <>
+              <div className="text-[13px] tracking-[0.24em] text-[#ececec]/45">PACK</div>
+              <div className="truncate text-[34px] font-bold leading-[1.15]">{selPack ?? '—'}</div>
+              <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
+                <span>
+                  {packCount} SONG{packCount === 1 ? '' : 'S'}
+                </span>
+                <span className="font-bold" style={{ color: AC }}>
+                  SELECT TO OPEN ›
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  onClick={() => song && toggleFav(song.key)}
+                  title="Favorite (F)"
+                  className="flex-none text-[26px] leading-none"
+                  style={{ color: song && favs.has(song.key) ? FAV_CLR : 'rgba(236,236,236,.25)' }}
+                >
+                  {song && favs.has(song.key) ? '★' : '☆'}
+                </button>
+                <div className="truncate text-[34px] font-bold leading-[1.15]">
+                  {song?.title ?? '—'}
+                </div>
+              </div>
+              <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
+              <div className="mt-2 flex items-center gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
+                <span>BPM {song?.bpm ?? '—'}</span>
+                {inPack ? (
+                  <button
+                    onClick={closePack}
+                    className="font-bold hover:text-[#ececec]"
+                    style={{ color: AC }}
+                    title="Back to packs (Esc)"
+                  >
+                    ‹ {openPack}
+                  </button>
+                ) : (
+                  <span>{song?.pack ?? ''}</span>
+                )}
+                <span className="font-bold" style={{ color: AC }}>
+                  {DIFF_SLOT_NAMES[diff]} {song?.levels[diff] ?? '—'}
+                </span>
+                {songBest && (
+                  <span style={{ color: '#59f07f' }}>
+                    BEST {(songBest.percent * 100).toFixed(2)}% · {songBest.grade}
+                  </span>
+                )}
+                {song != null && song.plays > 0 && <span>{song.plays} PLAYS</span>}
+              </div>
+            </>
+          )}
         </div>
-        <div className="flex flex-none flex-col items-stretch gap-[5px]">
-          {chips.map((c, i) => (
-            <button
-              key={c.name}
-              onClick={() => setDiff(i)}
-              disabled={!c.has}
-              className="flex w-[158px] items-center gap-2 border px-[10px] py-[4px] text-[12px] tracking-[0.1em]"
-              style={{
-                cursor: c.has ? 'pointer' : 'default',
-                opacity: c.has ? 1 : 0.3,
-                color: c.on ? '#ececec' : 'rgba(236,236,236,.55)',
-                borderColor: c.on ? AC : 'rgba(255,255,255,.12)',
-                background: c.on ? AC + '1a' : 'transparent',
-              }}
-            >
-              <span className="h-2 w-2 flex-none rounded-full" style={{ background: c.clr }} />
-              <span className="flex-1 text-left">{c.name}</span>
-              <span className="font-bold">{c.lv}</span>
-            </button>
-          ))}
-        </div>
+        {!inPacks && (
+          <div className="flex flex-none flex-col items-stretch gap-[5px]">
+            {chips.map((c, i) => (
+              <button
+                key={c.name}
+                onClick={() => setDiff(i)}
+                disabled={!c.has}
+                className="flex w-[158px] items-center gap-2 border px-[10px] py-[4px] text-[12px] tracking-[0.1em]"
+                style={{
+                  cursor: c.has ? 'pointer' : 'default',
+                  opacity: c.has ? 1 : 0.3,
+                  color: c.on ? '#ececec' : 'rgba(236,236,236,.55)',
+                  borderColor: c.on ? AC : 'rgba(255,255,255,.12)',
+                  background: c.on ? AC + '1a' : 'transparent',
+                }}
+              >
+                <span className="h-2 w-2 flex-none rounded-full" style={{ background: c.clr }} />
+                <span className="flex-1 text-left">{c.name}</span>
+                <span className="font-bold">{c.lv}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Filter strip */}
@@ -980,8 +1059,13 @@ export function SongSelect({
           if (Math.abs(wheelAcc.current) < step) return;
           const dir = wheelAcc.current > 0 ? 1 : -1;
           wheelAcc.current = 0;
-          const n = Math.max(1, filtered.length);
-          setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
+          if (inPacks) {
+            const n = Math.max(1, packList.length);
+            setPackSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
+          } else {
+            const n = Math.max(1, shownSongs.length);
+            setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
+          }
         }}
       >
         <div
@@ -999,83 +1083,96 @@ export function SongSelect({
               transition: 'transform .16s ease-out',
             }}
           >
-            {listRows.slice(first, last).map((r, k) => {
-              const rowIdx = first + k;
-              if (r.kind === 'header') {
+            {inPacks &&
+              packList.slice(first, last).map((p, k) => {
+                const rowIdx = first + k;
+                const on = rowIdx === packClamped;
                 return (
                   <div
-                    key={`h${rowIdx}`}
-                    className="absolute inset-x-0 flex items-center gap-3 px-[28px]"
-                    style={{ top: rowIdx * ROW_H, height: ROW_H }}
+                    key={p.pack}
+                    onClick={() => setPackSel(rowIdx)}
+                    onDoubleClick={() => openPackAt(rowIdx)}
+                    className="absolute inset-x-0 grid cursor-pointer grid-cols-[1fr_70px_28px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
+                    style={{
+                      top: rowIdx * ROW_H,
+                      height: ROW_H,
+                      fontSize: 16,
+                      fontWeight: on ? 700 : 400,
+                      color: on ? '#ececec' : 'rgba(236,236,236,.7)',
+                      background: on ? AC + '1a' : 'transparent',
+                      borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
+                    }}
                   >
-                    <span
-                      className="flex-none text-[13px] font-bold tracking-[0.16em]"
-                      style={{ color: AC }}
-                    >
-                      {r.pack}
+                    <span className="overflow-hidden text-ellipsis tracking-[0.02em]">
+                      {p.pack}
                     </span>
-                    <div className="h-px flex-1 bg-white/[0.08]" />
+                    <span className="justify-self-end text-[13px] opacity-45">
+                      {p.count} SONG{p.count === 1 ? '' : 'S'}
+                    </span>
+                    <span className="justify-self-end text-[18px] opacity-40">›</span>
                   </div>
                 );
-              }
-              const s = r.song;
-              const on = r.si === selClamped;
-              const lv = s.levels[diff];
-              const best = s.bests[diff];
-              return (
-                <div
-                  key={rowIdx}
-                  onClick={() => setSel(r.si)}
-                  onDoubleClick={() => {
-                    setSel(r.si);
-                    void start();
-                  }}
-                  className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
-                  style={{
-                    top: rowIdx * ROW_H,
-                    height: ROW_H,
-                    fontSize: 16,
-                    fontWeight: on ? 700 : 400,
-                    color: on ? '#ececec' : 'rgba(236,236,236,.6)',
-                    background: on ? AC + '1a' : 'transparent',
-                    borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
-                  }}
-                >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleFav(s.key);
-                      }}
-                      title="Favorite (F)"
-                      aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
-                      className="flex-none text-[15px] leading-none"
-                      style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.28)' }}
-                    >
-                      {favs.has(s.key) ? '★' : '☆'}
-                    </button>
-                    <span className="overflow-hidden text-ellipsis">{s.title}</span>
-                  </span>
-                  <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
-                  <span className="overflow-hidden text-ellipsis text-[14px] opacity-40">
-                    {s.pack || '—'}
-                  </span>
-                  <span className="justify-self-end opacity-60">{s.bpm}</span>
-                  <span className="justify-self-end text-[13px] opacity-70">
-                    {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
-                  </span>
-                  <span className="justify-self-end text-[13px] opacity-45">
-                    {s.plays > 0 ? s.plays : ''}
-                  </span>
-                  <span
-                    className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
-                    style={{ background: AC + '1f', color: AC }}
+              })}
+            {!inPacks &&
+              shownSongs.slice(first, last).map((s, k) => {
+                const i = first + k;
+                const on = i === selClamped;
+                const lv = s.levels[diff];
+                const best = s.bests[diff];
+                return (
+                  <div
+                    key={i}
+                    onClick={() => setSel(i)}
+                    onDoubleClick={() => {
+                      setSel(i);
+                      void start();
+                    }}
+                    className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
+                    style={{
+                      top: i * ROW_H,
+                      height: ROW_H,
+                      fontSize: 16,
+                      fontWeight: on ? 700 : 400,
+                      color: on ? '#ececec' : 'rgba(236,236,236,.6)',
+                      background: on ? AC + '1a' : 'transparent',
+                      borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
+                    }}
                   >
-                    {lv == null ? '—' : lv}
-                  </span>
-                </div>
-              );
-            })}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFav(s.key);
+                        }}
+                        title="Favorite (F)"
+                        aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
+                        className="flex-none text-[15px] leading-none"
+                        style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.28)' }}
+                      >
+                        {favs.has(s.key) ? '★' : '☆'}
+                      </button>
+                      <span className="overflow-hidden text-ellipsis">{s.title}</span>
+                    </span>
+                    <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
+                    <span className="overflow-hidden text-ellipsis text-[14px] opacity-40">
+                      {s.pack || '—'}
+                    </span>
+                    <span className="justify-self-end opacity-60">{s.bpm}</span>
+                    <span className="justify-self-end text-[13px] opacity-70">
+                      {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
+                    </span>
+                    <span className="justify-self-end text-[13px] opacity-45">
+                      {s.plays > 0 ? s.plays : ''}
+                    </span>
+                    <span
+                      className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
+                      style={{ background: AC + '1f', color: AC }}
+                    >
+                      {lv == null ? '—' : lv}
+                    </span>
+                  </div>
+                );
+              })}
           </div>
         </div>
         {drag && (
