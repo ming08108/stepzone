@@ -62,6 +62,9 @@ const FAV_CLR = '#ffcf3d';
 const BANNER_RATIO = 256 / 80;
 
 const ROW_H = 44;
+/** Sentinel "pack" that opens the flat all-songs view from the pack wheel. */
+const ALL_PACK = '__ALL_SONGS__';
+const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
 
 // The loaded library, kept across remounts like the filters below: returning
 // from a song reuses it instead of re-reading the folder and re-deriving every
@@ -90,7 +93,6 @@ const savedFilters = {
   sel: 0,
   diff: 2,
   favOnly: false,
-  group: 'all' as 'all' | 'pack',
   openPack: null as string | null,
 };
 
@@ -137,9 +139,9 @@ export function SongSelect({
   const [minLv, setMinLv] = useState(savedFilters.minLv);
   const [maxLv, setMaxLv] = useState(savedFilters.maxLv);
   const [favOnly, setFavOnly] = useState(savedFilters.favOnly);
-  const [group, setGroup] = useState<'all' | 'pack'>(savedFilters.group);
-  // Pack-wheel drill-down: in 'pack' mode with no open pack, the list shows a
-  // table of packs; opening one shows its songs. `packSel` is the pack cursor.
+  // Pack wheel (always on, ITGmania-style): with no pack open the list shows a
+  // table of packs (plus an ALL SONGS group); opening one shows its songs.
+  // `packSel` is the pack cursor, `sel` the song cursor within the open pack.
   const [openPack, setOpenPack] = useState<string | null>(savedFilters.openPack);
   const [packSel, setPackSel] = useState(0);
   const [favs, setFavs] = useState(() => loadFavorites());
@@ -386,28 +388,30 @@ export function SongSelect({
     [songs, search, minLv, maxLv, favOnly, favs, sort, diff],
   );
 
-  // Pack wheel: the list of packs (from the filtered songs), A→Z with counts.
+  // Pack wheel: an ALL SONGS group, then each pack (from the filtered songs)
+  // A→Z with its song count.
   const packList = useMemo(() => {
     const counts = new Map<string, number>();
     for (const s of filtered) {
       const p = s.pack || '—';
       counts.set(p, (counts.get(p) ?? 0) + 1);
     }
-    return [...counts.entries()]
+    const packs = [...counts.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([pack, count]) => ({ pack, count }));
+    return [{ pack: ALL_PACK, count: filtered.length }, ...packs];
   }, [filtered]);
 
-  // Pack-list level (pack mode, nothing opened) vs inside an opened pack.
-  const inPacks = group === 'pack' && openPack === null;
-  const inPack = group === 'pack' && openPack !== null;
-  // Songs shown in the list: everything, or just the opened pack's songs.
+  // Pack-list level (nothing opened) vs inside an opened pack/all-songs group.
+  const inPacks = openPack === null;
+  const inPack = openPack !== null;
+  // Songs shown in the list: the opened pack's songs (or all for ALL SONGS).
   const shownSongs = useMemo(
     () =>
-      group === 'pack' && openPack !== null
-        ? filtered.filter((s) => (s.pack || '—') === openPack)
-        : filtered,
-    [filtered, openPack, group],
+      openPack === null || openPack === ALL_PACK
+        ? filtered
+        : filtered.filter((s) => (s.pack || '—') === openPack),
+    [filtered, openPack],
   );
   const packClamped = Math.min(packSel, Math.max(0, packList.length - 1));
 
@@ -453,7 +457,6 @@ export function SongSelect({
     savedFilters.sel = selClamped;
     savedFilters.diff = diff;
     savedFilters.favOnly = favOnly;
-    savedFilters.group = group;
     savedFilters.openPack = openPack;
   });
 
@@ -547,7 +550,6 @@ export function SongSelect({
     setMinLv(1);
     setMaxLv(20);
     setFavOnly(false);
-    setGroup('all');
     setOpenPack(null);
     setPackSel(0);
   };
@@ -556,12 +558,6 @@ export function SongSelect({
     else if (i === 1) setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
     else if (i === 2) setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
     else if (i === 3) setFavOnly((v) => !v);
-    else if (i === 4) {
-      setGroup((v) => (v === 'pack' ? 'all' : 'pack'));
-      setOpenPack(null);
-      setPackSel(0);
-      setSel(0);
-    }
   };
 
   // Keyboard navigation (arcade model).
@@ -604,8 +600,9 @@ export function SongSelect({
         if (typing) return;
         e.preventDefault();
         const n = Math.max(1, packList.length);
-        if (e.key === 'ArrowUp') setPackSel((packClamped - 1 + n) % n);
-        else if (e.key === 'ArrowDown') setPackSel((packClamped + 1) % n);
+        // Functional updates advance from the LATEST cursor (never a stale one).
+        if (e.key === 'ArrowUp') setPackSel((p) => (Math.min(p, n - 1) - 1 + n) % n);
+        else if (e.key === 'ArrowDown') setPackSel((p) => (Math.min(p, n - 1) + 1) % n);
         else if (isConfirm) openPackAt(packClamped);
         else if (isBack) {
           setOverlay(true);
@@ -615,8 +612,8 @@ export function SongSelect({
         if (typing) return;
         e.preventDefault();
         const n = Math.max(1, shownSongs.length);
-        if (e.key === 'ArrowUp') setSel((selClamped - 1 + n) % n);
-        else if (e.key === 'ArrowDown') setSel((selClamped + 1) % n);
+        if (e.key === 'ArrowUp') setSel((s) => (Math.min(s, n - 1) - 1 + n) % n);
+        else if (e.key === 'ArrowDown') setSel((s) => (Math.min(s, n - 1) + 1) % n);
         else if (e.key === 'ArrowLeft') setDiff((v) => Math.max(0, v - 1));
         else if (e.key === 'ArrowRight') setDiff((v) => Math.min(4, v + 1));
         else if (isConfirm) void start();
@@ -635,7 +632,23 @@ export function SongSelect({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [overlay, osel, filtered, selClamped, start, sort, minLv, maxLv, favs]);
+  }, [
+    overlay,
+    osel,
+    filtered,
+    selClamped,
+    packClamped,
+    inPacks,
+    inPack,
+    openPack,
+    packList,
+    shownSongs,
+    start,
+    sort,
+    minLv,
+    maxLv,
+    favs,
+  ]);
 
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
@@ -680,7 +693,6 @@ export function SongSelect({
     { label: 'MIN LV', value: String(minLv) },
     { label: 'MAX LV', value: String(maxLv) },
     { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL' },
-    { label: 'GROUP', value: group === 'pack' ? 'BY PACK' : 'ALL' },
     { label: 'RESET', value: '↺' },
   ];
 
@@ -853,7 +865,7 @@ export function SongSelect({
                   background: `repeating-linear-gradient(135deg, #1d3a5e 0 20px, #205a6e 20px 40px)`,
                 }}
               >
-                {selPack ? initials(selPack) : ''}
+                {selPack === ALL_PACK ? 'ALL' : selPack ? initials(selPack) : ''}
               </div>
             )
           ) : bannerUrl ? (
@@ -893,7 +905,9 @@ export function SongSelect({
           {inPacks ? (
             <>
               <div className="text-[13px] tracking-[0.24em] text-[#ececec]/45">PACK</div>
-              <div className="truncate text-[34px] font-bold leading-[1.15]">{selPack ?? '—'}</div>
+              <div className="truncate text-[34px] font-bold leading-[1.15]">
+                {packLabel(selPack)}
+              </div>
               <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
                 <span>
                   {packCount} SONG{packCount === 1 ? '' : 'S'}
@@ -928,7 +942,7 @@ export function SongSelect({
                     style={{ color: AC }}
                     title="Back to packs (Esc)"
                   >
-                    ‹ {openPack}
+                    ‹ {packLabel(openPack)}
                   </button>
                 ) : (
                   <span>{song?.pack ?? ''}</span>
@@ -1104,7 +1118,7 @@ export function SongSelect({
                     }}
                   >
                     <span className="overflow-hidden text-ellipsis tracking-[0.02em]">
-                      {p.pack}
+                      {packLabel(p.pack)}
                     </span>
                     <span className="justify-self-end text-[13px] opacity-45">
                       {p.count} SONG{p.count === 1 ? '' : 'S'}
