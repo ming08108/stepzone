@@ -18,6 +18,12 @@ export function RawGamepadHint() {
   const [show, setShow] = useState(false);
   const dismissed = useRef(false);
 
+  const dismiss = () => {
+    dismissed.current = true;
+    saveJson(DISMISS_KEY, true);
+    setShow(false);
+  };
+
   useEffect(() => {
     if (SUPPORTED || loadJson<boolean>(DISMISS_KEY)) return;
     // Browsers hide a pad from getGamepads() until it gets input, so poll (like
@@ -33,13 +39,18 @@ export function RawGamepadHint() {
     return () => window.clearInterval(id);
   }, []);
 
-  if (!show) return null;
+  // A passive banner can't be dismissed by a pad button without hijacking the
+  // menu nav underneath (the bus has no event-consume), so it clears itself
+  // after a read's worth of time — a controller-only player is never stuck with
+  // it. Mouse users can still hit ✕ immediately.
+  useEffect(() => {
+    if (!show) return;
+    const id = window.setTimeout(dismiss, 15000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show]);
 
-  const dismiss = () => {
-    dismissed.current = true;
-    saveJson(DISMISS_KEY, true);
-    setShow(false);
-  };
+  if (!show) return null;
 
   return (
     <div

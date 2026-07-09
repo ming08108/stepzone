@@ -81,8 +81,10 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     if (!e.pressed || e.repeat) return;
     if (e.device === 'keyboard') e.nativeEvent?.preventDefault();
     if (e.role === 'back') {
-      stop();
-      onBack();
+      // Running → STOP this run but stay on screen (a pad-reachable STOP, and a
+      // guard against an accidental mid-calibration exit). Idle → leave.
+      if (clockRef.current) stop();
+      else onBack();
       return;
     }
     if (e.role === 'confirm') {

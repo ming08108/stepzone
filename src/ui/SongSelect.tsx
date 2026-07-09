@@ -104,7 +104,6 @@ export function SongSelect({
   onOptions,
 }: {
   onPlay: (r: PlayRequest) => void;
-  onInspect: () => void;
   onOptions: () => void;
 }) {
   const [entries, setEntries] = useState<LibraryEntry[]>(() => libraryCache ?? []);

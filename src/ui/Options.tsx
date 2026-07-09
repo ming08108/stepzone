@@ -77,11 +77,13 @@ export function Options({
   onCalibrate,
   onBenchmark,
   onInputTest,
+  onInspect,
 }: {
   onBack: () => void;
   onCalibrate: () => void;
   onBenchmark: () => void;
   onInputTest: () => void;
+  onInspect: () => void;
 }) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -257,6 +259,16 @@ export function Options({
               <span className="text-[12px] text-[#ececec]/40">
                 controller update rate + timing granularity
               </span>
+            </Row>
+            <Row label="INSPECTOR">
+              <button
+                onClick={onInspect}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+              >
+                Open engine inspector ▸
+              </button>
+              <span className="text-[12px] text-[#ececec]/40">live render/session internals</span>
             </Row>
           </Section>
 
