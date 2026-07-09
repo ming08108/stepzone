@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadLibraryFromFiles } from '../src/io/songFiles';
+import { loadLibraryFromFiles, pickPackImage } from '../src/io/songFiles';
 
 /** A File with a folder path, like a directory pick / dropped folder provides. */
 function fileAt(path: string, content: string): File {
@@ -33,5 +33,29 @@ describe('loadLibraryFromFiles (pack grouping, todo #12)', () => {
     const { entries, warnings } = await loadLibraryFromFiles([fileAt('x/readme.txt', 'hi')]);
     expect(entries).toHaveLength(0);
     expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('pickPackImage', () => {
+  const img = (name: string) => new File(['x'], name);
+
+  // The "[22] DDR A" pack ships a real banner next to a macOS AppleDouble twin
+  // (._…png) that sorts first; the resource fork isn't a decodable image.
+  it('skips ._ AppleDouble images and picks the real banner', () => {
+    const pick = pickPackImage([
+      img('._DanceDanceRevolution A (AC) (BETA).png'),
+      img('DanceDanceRevolution A (AC) (International).png'),
+    ]);
+    expect(pick?.name).toBe('DanceDanceRevolution A (AC) (International).png');
+  });
+
+  it('returns null when only hidden/junk files are present', () => {
+    expect(pickPackImage([img('._banner.png'), img('.DS_Store')])).toBeNull();
+  });
+
+  it('prefers a background, then a banner, then any real image', () => {
+    expect(pickPackImage([img('a.png'), img('pack-bg.png')])?.name).toBe('pack-bg.png');
+    expect(pickPackImage([img('a.png'), img('banner.jpg')])?.name).toBe('banner.jpg');
+    expect(pickPackImage([img('only.png')])?.name).toBe('only.png');
   });
 });
