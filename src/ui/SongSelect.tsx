@@ -66,6 +66,9 @@ const ROW_H = 44;
 const ALL_PACK = '__ALL_SONGS__';
 const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
 
+/** A row in the SELECT menu overlay (sort/filter, plus BACK inside a pack). */
+type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset';
+
 // The loaded library, kept across remounts like the filters below: returning
 // from a song reuses it instead of re-reading the folder and re-deriving every
 // row (parsed simfiles on the entries survive too). Session-scoped — a full
@@ -147,6 +150,8 @@ export function SongSelect({
   // `packSel` is the pack cursor, `sel` the song cursor within the open pack.
   const [openPack, setOpenPack] = useState<string | null>(savedFilters.openPack);
   const [packSel, setPackSel] = useState(0);
+  // Bumped as lazily-walked pack banners arrive, so the grid re-reads packArtUrls.
+  const [packArtTick, setPackArtTick] = useState(0);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
@@ -550,6 +555,48 @@ export function SongSelect({
     };
   }, [song?.pack, song?.entry]);
 
+  // Grid banners (#8): a catalog-restored library has an empty packArtUrls cache,
+  // so nothing shows on first paint. When the pack grid is up, walk each shown
+  // pack's folder once — sequentially, so a large library doesn't fire hundreds
+  // of directory listings at once — and bump packArtTick as each banner lands.
+  useEffect(() => {
+    if (!inPacks) return;
+    let alive = true;
+    const queued = new Set<string>();
+    const jobs: { pack: string; sourceId: string; dir: string }[] = [];
+    for (const s of filtered) {
+      const pack = s.pack || '—';
+      if (queued.has(pack) || packArtUrls.get(pack) !== undefined) continue;
+      const e = s.entry;
+      if (!e?.sourceId || !e.lazyDir || !e.lazyDir.includes('/')) continue;
+      queued.add(pack);
+      jobs.push({
+        pack,
+        sourceId: e.sourceId,
+        dir: e.lazyDir.slice(0, e.lazyDir.lastIndexOf('/')),
+      });
+    }
+    if (jobs.length === 0) return;
+    void (async () => {
+      for (const j of jobs) {
+        if (!alive) return;
+        const files = await readSongFolder(j.sourceId, j.dir);
+        const pick = pickPackImage(files ?? []);
+        packArtUrls.set(j.pack, pick ? URL.createObjectURL(pick) : null);
+        if (alive) setPackArtTick((t) => t + 1);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [inPacks, filtered]);
+
+  // Banner per pack-grid card, recomputed as banners arrive (packArtTick).
+  const packArtByIndex = useMemo(
+    () => packList.map((p) => (p.pack === ALL_PACK ? null : (packArtUrls.get(p.pack) ?? null))),
+    [packList, packArtTick],
+  );
+
   const start = useCallback(async () => {
     const s = shownSongs[Math.min(sel, Math.max(0, shownSongs.length - 1))];
     if (!s || s.levels[diff] == null) return;
@@ -573,10 +620,21 @@ export function SongSelect({
     setPackSel(0);
   };
   const adjust = (i: number, dir: number) => {
-    if (i === 0) setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
-    else if (i === 1) setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
-    else if (i === 2) setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
-    else if (i === 3) setFavOnly((v) => !v);
+    const kind = overlayRows[i]?.kind;
+    if (kind === 'sort') setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
+    else if (kind === 'min') setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
+    else if (kind === 'max') setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
+    else if (kind === 'fav') setFavOnly((v) => !v);
+  };
+  // Confirm on a menu row: BACK leaves the pack, RESET clears filters, the value
+  // rows just dismiss (they are tuned with ◀▶, not confirm).
+  const activateRow = (i: number) => {
+    const kind = overlayRows[i]?.kind;
+    if (kind === 'back') {
+      closePack();
+      setOverlay(false);
+    } else if (kind === 'reset') reset();
+    else setOverlay(false);
   };
 
   // Keyboard navigation (arcade model).
@@ -613,7 +671,7 @@ export function SongSelect({
         else if (e.key === 'ArrowRight') setOsel((v) => Math.min(overlayRows.length - 1, v + 1));
         else if (e.key === 'ArrowUp') adjust(osel, 1);
         else if (e.key === 'ArrowDown') adjust(osel, -1);
-        else if (isConfirm) osel === overlayRows.length - 1 ? reset() : setOverlay(false);
+        else if (isConfirm) activateRow(osel);
       } else if (inPacks) {
         // Pack grid: ◀▶ move one, ▲▼ move a row (packCols), confirm opens.
         if (typing) return;
@@ -648,12 +706,10 @@ export function SongSelect({
           const s = shownSongs[selClamped];
           if (s) toggleFav(s.key);
         } else if (isBack) {
-          // Inside a pack → back returns to the pack list; else open options.
-          if (inPack) closePack();
-          else {
-            setOverlay(true);
-            setOsel(0);
-          }
+          // SELECT opens the menu (sort/filter, plus BACK TO PACKS inside a pack,
+          // pre-highlighted so SELECT→START steps back up a level).
+          setOverlay(true);
+          setOsel(0);
         }
       }
     };
@@ -716,12 +772,15 @@ export function SongSelect({
     return { name, lv: has ? lv : '—', clr: DIFF_SLOT_COLORS[i], on, has };
   });
 
-  const overlayRows = [
-    { label: 'SORT', value: sort.toUpperCase() },
-    { label: 'MIN LV', value: String(minLv) },
-    { label: 'MAX LV', value: String(maxLv) },
-    { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL' },
-    { label: 'RESET', value: '↺' },
+  // The SELECT menu. Inside a pack it leads with BACK TO PACKS, so SELECT is the
+  // single "menu" button (options + up-a-level) the whole pad flow needs.
+  const overlayRows: { label: string; value: string; kind: OverlayKind }[] = [
+    ...(inPack ? [{ label: 'BACK', value: '‹ PACKS', kind: 'back' as OverlayKind }] : []),
+    { label: 'SORT', value: sort.toUpperCase(), kind: 'sort' },
+    { label: 'MIN LV', value: String(minLv), kind: 'min' },
+    { label: 'MAX LV', value: String(maxLv), kind: 'max' },
+    { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL', kind: 'fav' },
+    { label: 'RESET', value: '↺', kind: 'reset' },
   ];
 
   return (
@@ -1033,7 +1092,8 @@ export function SongSelect({
               key={o.label}
               onClick={() => {
                 setOsel(i);
-                i === overlayRows.length - 1 ? reset() : adjust(i, 1);
+                if (o.kind === 'back' || o.kind === 'reset') activateRow(i);
+                else adjust(i, 1);
               }}
               className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
               style={{
@@ -1050,7 +1110,7 @@ export function SongSelect({
         <span className="flex-1" />
         {overlay && (
           <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
-            ◀▶ MOVE · ▲▼ ADJUST · SELECT DONE
+            ◀▶ MOVE · ▲▼ ADJUST · START — DO · SELECT — CLOSE
           </span>
         )}
       </div>
@@ -1120,7 +1180,7 @@ export function SongSelect({
             >
               {packList.map((p, i) => {
                 const on = i === packClamped;
-                const art = p.pack === ALL_PACK ? null : (packArtUrls.get(p.pack) ?? null);
+                const art = packArtByIndex[i] ?? null;
                 return (
                   <div
                     key={p.pack}
@@ -1303,8 +1363,8 @@ export function SongSelect({
             <span>▲▼ SONG</span>
             <span>◀▶ DIFFICULTY</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — PLAY</span>
-            <button onClick={inPack ? closePack : () => setOverlay((v) => !v)}>
-              {inPack ? 'SELECT — BACK TO PACKS' : 'SELECT — SORT / FILTER'}
+            <button onClick={() => setOverlay((v) => !v)}>
+              {inPack ? 'SELECT — MENU' : 'SELECT — SORT / FILTER'}
             </button>
             <span>F — FAVORITE</span>
           </>
