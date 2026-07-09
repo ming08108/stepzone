@@ -83,7 +83,6 @@ export class GameSession {
   private readonly loopEndSeconds: number = 0;
   private loopCount = 1;
   private bgVideo: HTMLVideoElement | null = null;
-  private energy = 0;
   private logicalW = 800;
   private logicalH = 720;
 
@@ -280,7 +279,6 @@ export class GameSession {
     this.feedback.laneFlash.fill(-999);
     this.feedback.laneHit.fill(null);
     this.offsets.length = 0;
-    this.energy = 0;
     this.clock.start(this.startOffsetSeconds(), 0.25);
     this.onLoop?.(this.loopCount);
   }
@@ -324,7 +322,6 @@ export class GameSession {
 
     this.judge.update(now, this.held);
 
-    this.energy *= 0.9;
     if (this.judge.judgmentSeq !== this.lastSeq) {
       this.lastSeq = this.judge.judgmentSeq;
       this.feedback.lastJudgment = {
@@ -332,7 +329,6 @@ export class GameSession {
         atSeconds: now,
         white: this.judge.lastWhite,
       };
-      this.energy = Math.min(1, this.energy + 0.55);
     }
 
     // Rendering uses a visually-offset clock (judgment stays on the raw `now`).
