@@ -166,6 +166,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
   const ctaRef = useRef<HTMLButtonElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  // Results screen: ▲▼ chooses between CONTINUE (0) and RETRY (1) on the pad.
+  const [doneSel, setDoneSel] = useState(0);
+  const doneSelRef = useRef(0);
+  doneSelRef.current = doneSel;
   const bgUrlRef = useRef<string | null>(null);
   const bgMediaRef = useRef<HTMLVideoElement | ImageBitmap | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
@@ -255,12 +260,18 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       return;
     }
     if (!e.pressed || e.repeat) return;
+    // Results screen: ▲▼ chooses CONTINUE vs RETRY.
+    if (phaseRef.current === 'done' && (e.role === 'up' || e.role === 'down')) {
+      e.nativeEvent?.preventDefault();
+      setDoneSel(e.role === 'up' ? 0 : 1);
+      return;
+    }
     if (e.role === 'confirm') {
       // A focused button already activates on the native Enter keydown — only
-      // route to the primary CTA when nothing else will handle it.
+      // route to a button when nothing else will handle it.
       if (e.device === 'keyboard' && document.activeElement?.tagName === 'BUTTON') return;
       e.nativeEvent?.preventDefault();
-      ctaRef.current?.click();
+      (doneSelRef.current === 1 ? retryRef : ctaRef).current?.click();
     } else if (e.role === 'back') {
       e.nativeEvent?.preventDefault();
       onExitRef.current();
@@ -287,9 +298,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   }, [phase]);
 
   // Ready/done overlays: focus the primary button so Enter/confirm activate it.
+  // Entering results resets the selection to CONTINUE.
   useEffect(() => {
     if (phase !== 'playing') ctaRef.current?.focus();
+    if (phase === 'done') setDoneSel(0);
   }, [phase]);
+
+  // On the results screen, keep DOM focus on the ▲▼-selected button so a
+  // keyboard Enter and a pad confirm both activate the same one.
+  useEffect(() => {
+    if (phase === 'done') (doneSel === 1 ? retryRef : ctaRef).current?.focus();
+  }, [phase, doneSel]);
 
   const start = async () => {
     const canvas = canvasRef.current;
@@ -552,20 +571,33 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                   BEST {(result.best.percent * 100).toFixed(2)}% · {result.best.plays} PLAYS
                 </div>
               )}
-              <button
-                ref={ctaRef}
-                onClick={onExit}
-                className="mt-3 text-[18px] tracking-[0.22em] outline-none"
-                style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
-              >
-                PRESS START TO CONTINUE
-              </button>
-              <button
-                onClick={start}
-                className="text-[14px] tracking-[0.14em] text-[#ececec]/50 outline-none hover:text-[#ececec] focus-visible:text-[#ececec]"
-              >
-                RETRY
-              </button>
+              <div className="mt-3 flex flex-col items-center gap-1.5">
+                <button
+                  ref={ctaRef}
+                  onClick={onExit}
+                  className="text-[18px] tracking-[0.22em] outline-none"
+                  style={{
+                    color: doneSel === 0 ? AC : 'rgba(236,236,236,.45)',
+                    animation: doneSel === 0 ? 'blinkStart 1.4s infinite' : undefined,
+                  }}
+                >
+                  CONTINUE
+                </button>
+                <button
+                  ref={retryRef}
+                  onClick={start}
+                  className="text-[16px] tracking-[0.18em] outline-none"
+                  style={{
+                    color: doneSel === 1 ? AC : 'rgba(236,236,236,.45)',
+                    animation: doneSel === 1 ? 'blinkStart 1.4s infinite' : undefined,
+                  }}
+                >
+                  RETRY
+                </button>
+                <div className="mt-1 text-[11px] tracking-[0.16em] text-[#ececec]/35">
+                  ▲▼ SELECT · START — CONFIRM · SELECT — QUIT
+                </div>
+              </div>
             </>
           )}
         </div>

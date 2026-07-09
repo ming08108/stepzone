@@ -72,6 +72,7 @@ export function App() {
         onCalibrate={() => setView('calibrate')}
         onBenchmark={() => setView('benchmark')}
         onInputTest={() => setView('inputtest')}
+        onInspect={() => setView('inspect')}
       />
     );
   } else if (view === 'benchmark') {
@@ -82,7 +83,7 @@ export function App() {
     body = <Calibrate onBack={() => setView('options')} />;
   } else if (view === 'inspect') {
     body = (
-      <Chrome title="engine inspector" onBack={() => setView('menu')}>
+      <Chrome title="engine inspector" onBack={() => setView('options')}>
         <Inspector />
       </Chrome>
     );
@@ -93,7 +94,6 @@ export function App() {
           setReq(r);
           setView('playoptions');
         }}
-        onInspect={() => setView('inspect')}
         onOptions={() => setView('options')}
       />
     );
