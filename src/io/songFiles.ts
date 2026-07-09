@@ -207,7 +207,10 @@ export function isImageFile(name: string): boolean {
 /** The best pack-art candidate among a folder's files: an image named like a
  *  background, else one named like a banner, else any image; null when none. */
 export function pickPackImage(files: File[]): File | null {
-  const imgs = files.filter((f) => isImageFile(f.name));
+  // Exclude AppleDouble/hidden junk (._foo.png): they carry an image extension
+  // but are resource forks that fail to decode, and often sort ahead of the
+  // real banner — so imgs[0] would pick the broken one.
+  const imgs = files.filter((f) => isImageFile(f.name) && !f.name.startsWith('.'));
   return (
     imgs.find((f) => /bg|background/i.test(f.name)) ??
     imgs.find((f) => /banner/i.test(f.name)) ??

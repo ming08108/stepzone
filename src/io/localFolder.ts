@@ -343,6 +343,9 @@ export async function readSongFolder(sourceId: string, dir: string): Promise<Fil
     const files: File[] = [];
     for await (const h of d.values()) {
       if (h.kind !== 'file') continue;
+      // Skip hidden/AppleDouble junk (._foo.png etc.) — same as the full walk.
+      // These shadow real files (banners, simfiles) and aren't valid content.
+      if (h.name.startsWith('.')) continue;
       const dot = h.name.lastIndexOf('.');
       if (dot < 0 || !KEEP_EXT.has(h.name.slice(dot).toLowerCase())) continue;
       const f = await (h as FileSystemFileHandle).getFile();
