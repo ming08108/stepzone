@@ -971,13 +971,20 @@ export function SongSelect({
                     borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
                   }}
                 >
-                  <span className="overflow-hidden text-ellipsis">
-                    {favs.has(s.key) && (
-                      <span className="mr-1" style={{ color: FAV_CLR }}>
-                        ★
-                      </span>
-                    )}
-                    {s.title}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFav(s.key);
+                      }}
+                      title="Favorite (F)"
+                      aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
+                      className="flex-none text-[15px] leading-none"
+                      style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.28)' }}
+                    >
+                      {favs.has(s.key) ? '★' : '☆'}
+                    </button>
+                    <span className="overflow-hidden text-ellipsis">{s.title}</span>
                   </span>
                   <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
                   <span className="overflow-hidden text-ellipsis text-[14px] opacity-40">
