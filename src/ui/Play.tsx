@@ -64,6 +64,8 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 }
 
 const AC = '#ff5d47';
+/** How long `back` must be held mid-song to quit (stray taps don't drop out). */
+const QUIT_HOLD_MS = 900;
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -169,6 +171,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
+  // Hold-to-quit: `back` held mid-song for QUIT_HOLD_MS exits (with a fill).
+  const [quitting, setQuitting] = useState(false);
+  const quitTimerRef = useRef<number | null>(null);
   // Bank a session's hit steps into the lifetime counter exactly once —
   // whichever comes first of finishing, retrying, or leaving mid-song.
   const bankedRef = useRef(new WeakSet<GameSession>());
@@ -222,10 +227,23 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   onExitRef.current = onExit;
   useControls((e) => {
     if (phaseRef.current === 'playing') {
-      // Quit mid-song from the keyboard/gamepad (Escape / pad back) — no mouse.
-      if (e.role === 'back' && e.pressed && !e.repeat) {
+      // Quit mid-song from the keyboard/gamepad (Escape / pad back) — no mouse,
+      // but held (QUIT_HOLD_MS) so a stray press mid-stream can't drop you out.
+      if (e.role === 'back') {
         e.nativeEvent?.preventDefault();
-        onExitRef.current();
+        if (e.pressed && !e.repeat && quitTimerRef.current === null) {
+          setQuitting(true);
+          quitTimerRef.current = window.setTimeout(() => {
+            quitTimerRef.current = null;
+            if (phaseRef.current === 'playing') onExitRef.current();
+          }, QUIT_HOLD_MS);
+        } else if (!e.pressed) {
+          if (quitTimerRef.current !== null) {
+            clearTimeout(quitTimerRef.current);
+            quitTimerRef.current = null;
+          }
+          setQuitting(false);
+        }
         return;
       }
       if (e.repeat) return;
@@ -254,9 +272,19 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       bankSteps(sessionRef.current);
       sessionRef.current?.stop();
       cleanupBg();
+      if (quitTimerRef.current !== null) clearTimeout(quitTimerRef.current);
     },
     [],
   );
+
+  // Leaving the playing phase (finished / retry) cancels any in-progress quit hold.
+  useEffect(() => {
+    if (phase !== 'playing' && quitTimerRef.current !== null) {
+      clearTimeout(quitTimerRef.current);
+      quitTimerRef.current = null;
+      setQuitting(false);
+    }
+  }, [phase]);
 
   // Ready/done overlays: focus the primary button so Enter/confirm activate it.
   useEffect(() => {
@@ -414,6 +442,28 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       </div>
 
       {phase === 'playing' && <FpsMeter />}
+
+      {phase === 'playing' && quitting && (
+        <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-black/35">
+          <div className="flex flex-col items-center gap-3 border border-white/15 bg-black/75 px-9 py-6">
+            <div className="text-[13px] font-bold tracking-[0.3em] text-[#ececec]/85">
+              HOLD TO QUIT
+            </div>
+            <div className="h-[7px] w-[240px] overflow-hidden rounded-full bg-white/[0.12]">
+              <div
+                className="h-full w-full origin-left rounded-full"
+                style={{
+                  backgroundColor: AC,
+                  animation: `quitFill ${QUIT_HOLD_MS}ms linear forwards`,
+                }}
+              />
+            </div>
+            <div className="text-[11px] tracking-[0.2em] text-[#ececec]/40">
+              RELEASE TO KEEP PLAYING
+            </div>
+          </div>
+        </div>
+      )}
 
       {phase === 'playing' && req.practice && (
         <div

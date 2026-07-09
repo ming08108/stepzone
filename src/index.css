@@ -107,6 +107,15 @@
       opacity: 0.35;
     }
   }
+  /* Hold-to-quit progress fill (left → right). */
+  @keyframes quitFill {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
 }
 
 @layer components {
