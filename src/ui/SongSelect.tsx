@@ -90,6 +90,7 @@ const savedFilters = {
   sel: 0,
   diff: 2,
   favOnly: false,
+  group: 'all' as 'all' | 'pack',
 };
 
 export function SongSelect({
@@ -135,6 +136,7 @@ export function SongSelect({
   const [minLv, setMinLv] = useState(savedFilters.minLv);
   const [maxLv, setMaxLv] = useState(savedFilters.maxLv);
   const [favOnly, setFavOnly] = useState(savedFilters.favOnly);
+  const [group, setGroup] = useState<'all' | 'pack'>(savedFilters.group);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
@@ -375,8 +377,19 @@ export function SongSelect({
   );
 
   const filtered = useMemo(
-    () => filterSort(songs, { search, minLv, maxLv, favOnly, favs, sort, diff }),
-    [songs, search, minLv, maxLv, favOnly, favs, sort, diff],
+    // Grouping by pack forces the pack sort so songs are pack-contiguous — the
+    // list then just interleaves a header before each pack (listRows below).
+    () =>
+      filterSort(songs, {
+        search,
+        minLv,
+        maxLv,
+        favOnly,
+        favs,
+        sort: group === 'pack' ? 'pack' : sort,
+        diff,
+      }),
+    [songs, search, minLv, maxLv, favOnly, favs, sort, diff, group],
   );
 
   const selClamped = Math.min(sel, Math.max(0, filtered.length - 1));
@@ -405,6 +418,7 @@ export function SongSelect({
     savedFilters.sel = selClamped;
     savedFilters.diff = diff;
     savedFilters.favOnly = favOnly;
+    savedFilters.group = group;
   });
 
   // Loop the highlighted song's sample snippet (#5); stop when leaving.
@@ -497,12 +511,14 @@ export function SongSelect({
     setMinLv(1);
     setMaxLv(20);
     setFavOnly(false);
+    setGroup('all');
   };
   const adjust = (i: number, dir: number) => {
     if (i === 0) setSort(SORTS[(SORTS.indexOf(sort) + dir + SORTS.length) % SORTS.length]);
     else if (i === 1) setMinLv((v) => Math.min(maxLv, Math.max(1, v + dir)));
     else if (i === 2) setMaxLv((v) => Math.max(minLv, Math.min(20, v + dir)));
     else if (i === 3) setFavOnly((v) => !v);
+    else if (i === 4) setGroup((v) => (v === 'pack' ? 'all' : 'pack'));
   };
 
   // Keyboard navigation (arcade model).
@@ -536,10 +552,10 @@ export function SongSelect({
         if (typing && !isConfirm) return;
         e.preventDefault();
         if (e.key === 'ArrowLeft') setOsel((v) => Math.max(0, v - 1));
-        else if (e.key === 'ArrowRight') setOsel((v) => Math.min(4, v + 1));
+        else if (e.key === 'ArrowRight') setOsel((v) => Math.min(overlayRows.length - 1, v + 1));
         else if (e.key === 'ArrowUp') adjust(osel, 1);
         else if (e.key === 'ArrowDown') adjust(osel, -1);
-        else if (isConfirm) osel === 4 ? reset() : setOverlay(false);
+        else if (isConfirm) osel === overlayRows.length - 1 ? reset() : setOverlay(false);
       } else {
         if (typing) return;
         e.preventDefault();
@@ -584,9 +600,37 @@ export function SongSelect({
     }
   };
 
-  // Virtualized window: center the selection, clamp at the ends.
-  const total = filtered.length;
-  const { off, first, last, topFade, botFade } = virtualWindow(total, viewH, selClamped, ROW_H);
+  // Display rows: songs, or (grouped) a pack header before each pack's songs.
+  // `si` is the index into `filtered`, so selection/nav stay on songs.
+  const listRows = useMemo<
+    Array<{ kind: 'header'; pack: string } | { kind: 'song'; song: SongVM; si: number }>
+  >(() => {
+    if (group !== 'pack') return filtered.map((song, si) => ({ kind: 'song', song, si }));
+    const out: Array<
+      { kind: 'header'; pack: string } | { kind: 'song'; song: SongVM; si: number }
+    > = [];
+    let cur: string | null = null;
+    filtered.forEach((song, si) => {
+      const p = song.pack || '—';
+      if (p !== cur) {
+        cur = p;
+        out.push({ kind: 'header', pack: p });
+      }
+      out.push({ kind: 'song', song, si });
+    });
+    return out;
+  }, [filtered, group]);
+
+  // Virtualized window: center the selected song's row, clamp at the ends.
+  const total = listRows.length;
+  const selRow =
+    group === 'pack'
+      ? Math.max(
+          0,
+          listRows.findIndex((r) => r.kind === 'song' && r.si === selClamped),
+        )
+      : selClamped;
+  const { off, first, last, topFade, botFade } = virtualWindow(total, viewH, selRow, ROW_H);
 
   const chips = DIFF_SLOT_NAMES.map((name, i) => {
     const lv = song?.levels[i];
@@ -600,6 +644,7 @@ export function SongSelect({
     { label: 'MIN LV', value: String(minLv) },
     { label: 'MAX LV', value: String(maxLv) },
     { label: 'FAVES', value: favOnly ? '★ ONLY' : 'ALL' },
+    { label: 'GROUP', value: group === 'pack' ? 'BY PACK' : 'ALL' },
     { label: 'RESET', value: '↺' },
   ];
 
@@ -954,22 +999,40 @@ export function SongSelect({
               transition: 'transform .16s ease-out',
             }}
           >
-            {filtered.slice(first, last).map((s, k) => {
-              const i = first + k;
-              const on = i === selClamped;
+            {listRows.slice(first, last).map((r, k) => {
+              const rowIdx = first + k;
+              if (r.kind === 'header') {
+                return (
+                  <div
+                    key={`h${rowIdx}`}
+                    className="absolute inset-x-0 flex items-center gap-3 px-[28px]"
+                    style={{ top: rowIdx * ROW_H, height: ROW_H }}
+                  >
+                    <span
+                      className="flex-none text-[13px] font-bold tracking-[0.16em]"
+                      style={{ color: AC }}
+                    >
+                      {r.pack}
+                    </span>
+                    <div className="h-px flex-1 bg-white/[0.08]" />
+                  </div>
+                );
+              }
+              const s = r.song;
+              const on = r.si === selClamped;
               const lv = s.levels[diff];
               const best = s.bests[diff];
               return (
                 <div
-                  key={i}
-                  onClick={() => setSel(i)}
+                  key={rowIdx}
+                  onClick={() => setSel(r.si)}
                   onDoubleClick={() => {
-                    setSel(i);
+                    setSel(r.si);
                     void start();
                   }}
                   className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
                   style={{
-                    top: i * ROW_H,
+                    top: rowIdx * ROW_H,
                     height: ROW_H,
                     fontSize: 16,
                     fontWeight: on ? 700 : 400,
