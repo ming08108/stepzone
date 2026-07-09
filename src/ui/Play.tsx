@@ -41,8 +41,8 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
   const max = Math.max(1, ...buckets);
   const mean = ms.reduce((a, b) => a + b, 0) / ms.length;
   return (
-    <div className="w-[24rem] max-w-full">
-      <div className="flex h-16 items-end justify-center gap-[2px]">
+    <div className="w-[34rem] max-w-full">
+      <div className="flex h-24 items-end justify-center gap-[3px]">
         {buckets.map((c, i) => (
           <div
             key={i}
@@ -51,7 +51,7 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
           />
         ))}
       </div>
-      <div className="mt-1 flex justify-between text-xs text-muted">
+      <div className="mt-1.5 flex justify-between text-[13px] text-muted">
         <span>early</span>
         <span className={mean < -5 ? 'text-[#4b8be6]' : mean > 5 ? 'text-[#ffd94b]' : 'text-ink'}>
           avg {mean >= 0 ? '+' : ''}
@@ -92,35 +92,35 @@ function ResultHeader({ result }: { result: Result }) {
   const gc = gradeColor(result.grade);
   return (
     <>
-      <div className="text-[15px] tracking-[0.3em] text-[#ececec]/70">RESULTS</div>
-      <div className="my-1 flex items-center gap-6">
+      <div className="text-[17px] tracking-[0.32em] text-[#ececec]/70">RESULTS</div>
+      <div className="my-2 flex items-center gap-9">
         <div
-          className="flex min-w-[132px] items-center justify-center border-2 px-5 py-2"
+          className="flex min-w-[176px] items-center justify-center border-2 px-8 py-3"
           style={{
             borderColor: gc,
             background: `${gc}0d`,
-            boxShadow: `0 0 44px ${gc}40, inset 0 0 26px ${gc}1f`,
+            boxShadow: `0 0 60px ${gc}44, inset 0 0 34px ${gc}24`,
           }}
         >
           <span
             className="font-black leading-none"
             style={{
               color: gc,
-              fontSize: result.grade.length > 2 ? 62 : 84,
+              fontSize: result.grade.length > 2 ? 86 : 118,
               letterSpacing: '0.02em',
-              textShadow: `0 0 22px ${gc}99`,
+              textShadow: `0 0 30px ${gc}aa`,
             }}
           >
             {result.grade}
           </span>
         </div>
         <div className="flex flex-col items-start">
-          <div className="text-[54px] font-bold leading-none tabular-nums">
+          <div className="text-[74px] font-bold leading-none tabular-nums">
             {(result.percent * 100).toFixed(2)}
-            <span className="text-[30px] text-[#ececec]/55">%</span>
+            <span className="text-[40px] text-[#ececec]/55">%</span>
           </div>
           <div
-            className="mt-1.5 text-[16px] font-bold tracking-[0.24em]"
+            className="mt-2 text-[20px] font-bold tracking-[0.24em]"
             style={{ color: result.failed ? AC : '#59f07f' }}
           >
             {result.failed ? 'FAILED' : 'CLEARED'}
@@ -531,17 +531,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                   RATE ×{settings.musicRate.toFixed(2)} — SCORE NOT SAVED
                 </div>
               )}
-              <div className="mt-2 w-[280px]">
+              <div className="mt-3 w-[400px] max-w-full">
                 {JUDGMENT_ROWS.map(([tns, label, color]) => (
                   <div
                     key={tns}
-                    className="flex justify-between border-b border-white/[0.06] py-0.5 text-[15px] tracking-[0.1em]"
+                    className="flex justify-between border-b border-white/[0.06] py-1 text-[18px] tracking-[0.1em]"
                   >
                     <span style={{ color }}>{label}</span>
                     <span className="font-bold tabular-nums">{result.counts[tns] ?? 0}</span>
                   </div>
                 ))}
-                <div className="flex justify-between border-t border-white/20 py-0.5 text-[15px] tracking-[0.1em]">
+                <div className="flex justify-between border-t border-white/20 py-1 text-[18px] tracking-[0.1em]">
                   <span className="text-[#ececec]/60">MAX COMBO</span>
                   <span className="font-bold tabular-nums">{result.maxCombo}</span>
                 </div>
@@ -555,14 +555,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               <button
                 ref={ctaRef}
                 onClick={onExit}
-                className="mt-2 text-[15px] tracking-[0.22em] outline-none"
+                className="mt-3 text-[18px] tracking-[0.22em] outline-none"
                 style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
               >
                 PRESS START TO CONTINUE
               </button>
               <button
                 onClick={start}
-                className="text-[12px] tracking-[0.14em] text-[#ececec]/50 outline-none hover:text-[#ececec] focus-visible:text-[#ececec]"
+                className="text-[14px] tracking-[0.14em] text-[#ececec]/50 outline-none hover:text-[#ececec] focus-visible:text-[#ececec]"
               >
                 RETRY
               </button>
