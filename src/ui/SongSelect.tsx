@@ -79,12 +79,30 @@ let libraryCache: LibraryEntry[] | null = null;
 // Module-scoped like libraryCache so revisits don't re-read pack folders.
 const packArtUrls = new Map<string, string | null>();
 
-/** Stash freshly-walked pack art (full scans carry the pack-root files). */
+/**
+ * Stash freshly-walked pack art (full scans carry the pack-root files). A full
+ * scan is fresh ground truth for the packs it found images for, so it replaces
+ * (and revokes) any cached URL — this is what makes a rescan pick up a changed
+ * banner file, with no ad-hoc invalidation in the rescan path. Revoking a
+ * still-rendered URL is safe: an already-decoded <img> keeps its bitmap, and
+ * consumers re-read the cache when entries/packArtTick change right after. A
+ * pack whose image was deleted on disk keeps its stale art (absent from
+ * packImages, so untouched) — better than revoking art that may belong to a
+ * same-named pack in another source.
+ */
 function stashPackImages(packImages: Map<string, File>): void {
   for (const [pack, file] of packImages) {
-    if (!packArtUrls.get(pack)) packArtUrls.set(pack, URL.createObjectURL(file));
+    const old = packArtUrls.get(pack);
+    if (old) URL.revokeObjectURL(old);
+    packArtUrls.set(pack, URL.createObjectURL(file));
   }
 }
+
+// Pack names referenced by the current entries — mirrored from the sweep
+// effect below so resolvePackArt, whose walk may outlive its pack (source
+// removed mid-walk), can tell that minting a URL now would leak it: the sweep
+// only reclaims packs that are in the map at the time entries change.
+let livePackNames = new Set<string>();
 
 // Packs whose folder is being walked right now — so the detail-header backdrop
 // and the grid loader (or a fast A→B→A cursor) never walk the same pack twice
@@ -104,13 +122,19 @@ async function resolvePackArt(
 ): Promise<void> {
   if (packArtUrls.get(pack) !== undefined || packArtPending.has(pack)) return;
   packArtPending.add(pack);
+  let files: File[] | null;
   try {
-    const files = await readSongFolder(sourceId, dir);
-    const pick = pickPackImage(files ?? []);
-    packArtUrls.set(pack, pick ? URL.createObjectURL(pick) : null);
+    files = await readSongFolder(sourceId, dir);
   } finally {
     packArtPending.delete(pack);
   }
+  // The library may have moved on during the walk: the pack may be gone
+  // entirely (minting now would leak past the sweep, which already ran), or a
+  // full scan may have stashed fresh art meanwhile (fresher than this walk's
+  // read — leave it).
+  if (!livePackNames.has(pack) || packArtUrls.get(pack) !== undefined) return;
+  const pick = pickPackImage(files ?? []);
+  packArtUrls.set(pack, pick ? URL.createObjectURL(pick) : null);
   notify();
 }
 
@@ -215,9 +239,17 @@ export function SongSelect({
   }, []);
 
   // Keep the module cache current: once real library content is in (a loaded
-  // or catalog-cached song folder), leaving the screen must not lose it.
+  // or catalog-cached song folder), leaving the screen must not lose it. Once
+  // the cache exists it tracks entries unconditionally — including a degrade
+  // to starter-only (last source disabled/removed), or a stale cache would
+  // resurrect the removed songs on remount, with banner URLs the sweep below
+  // has already revoked. Before that, starter-only must NOT populate the
+  // cache: it's the transient state while auto-load restores the real folder,
+  // and caching it would make a quick remount skip that restore.
   useEffect(() => {
-    if (entries.some((e) => e.files.length > 0 || e.sourceId)) libraryCache = entries;
+    if (libraryCache || entries.some((e) => e.files.length > 0 || e.sourceId)) {
+      libraryCache = entries;
+    }
   }, [entries]);
 
   // Free object URLs owned by content that leaves the library. Each catalog
@@ -234,8 +266,10 @@ export function SongSelect({
     }
     prevEntriesRef.current = entries;
     // Pack art whose pack is gone entirely (a source was removed or disabled).
+    // The live set is also published for resolvePackArt's post-walk check.
     const livePacks = new Set<string>();
     for (const e of entries) if (e.pack) livePacks.add(e.pack);
+    livePackNames = livePacks;
     for (const [pack, url] of packArtUrls) {
       if (livePacks.has(pack)) continue;
       if (url) URL.revokeObjectURL(url);
@@ -426,15 +460,11 @@ export function SongSelect({
     setSources(await listSources());
   };
 
+  // A changed banner file is picked up by stashPackImages replacing the stale
+  // URL when the scan lands — nothing is dropped up front, so a failed or
+  // empty rescan (dismissed permission prompt, transient error) leaves the
+  // currently-displayed art intact.
   const rescanSource = async (s: SongSource) => {
-    // Drop this source's cached pack art up front so a changed banner file
-    // re-resolves (the pack stays "live", so the diff effect won't catch it).
-    for (const e of entries) {
-      if (e.sourceId !== s.id || !e.pack) continue;
-      const url = packArtUrls.get(e.pack);
-      if (url) URL.revokeObjectURL(url);
-      packArtUrls.delete(e.pack);
-    }
     await loadSource(s.id, true);
     setSources(await listSources());
   };
