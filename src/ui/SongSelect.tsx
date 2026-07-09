@@ -689,10 +689,8 @@ export function SongSelect({
         else if (e.key === 'ArrowDown')
           setPackSel((p) => Math.min(n - 1, Math.min(p, n - 1) + cols));
         else if (isConfirm) openPackAt(packClamped);
-        else if (isBack) {
-          setOverlay(true);
-          setOsel(0);
-        }
+        // No SELECT menu on the grid: sort/filter are a song-list tool, and the
+        // grid is the root, so there is nowhere to back out to.
       } else {
         if (typing) return;
         e.preventDefault();
@@ -1085,28 +1083,30 @@ export function SongSelect({
           placeholder="SEARCH…"
           className="w-[210px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[13px] tracking-[0.04em] text-[#ececec] outline-none"
         />
-        {overlayRows.map((o, i) => {
-          const on = overlay && i === osel;
-          return (
-            <button
-              key={o.label}
-              onClick={() => {
-                setOsel(i);
-                if (o.kind === 'back' || o.kind === 'reset') activateRow(i);
-                else adjust(i, 1);
-              }}
-              className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
-              style={{
-                color: on ? '#ececec' : 'rgba(236,236,236,.55)',
-                borderColor: on ? AC : 'rgba(255,255,255,.12)',
-                background: on ? AC + '14' : 'transparent',
-              }}
-            >
-              <span className="opacity-60">{o.label}</span>
-              <span className="font-bold">{o.value}</span>
-            </button>
-          );
-        })}
+        {/* Sort/filter are a song-list tool; the pack grid keeps only SEARCH. */}
+        {!inPacks &&
+          overlayRows.map((o, i) => {
+            const on = overlay && i === osel;
+            return (
+              <button
+                key={o.label}
+                onClick={() => {
+                  setOsel(i);
+                  if (o.kind === 'back' || o.kind === 'reset') activateRow(i);
+                  else adjust(i, 1);
+                }}
+                className="flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap"
+                style={{
+                  color: on ? '#ececec' : 'rgba(236,236,236,.55)',
+                  borderColor: on ? AC : 'rgba(255,255,255,.12)',
+                  background: on ? AC + '14' : 'transparent',
+                }}
+              >
+                <span className="opacity-60">{o.label}</span>
+                <span className="font-bold">{o.value}</span>
+              </button>
+            );
+          })}
         <span className="flex-1" />
         {overlay && (
           <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
@@ -1356,7 +1356,6 @@ export function SongSelect({
           <>
             <span>◀▶▲▼ PACK</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — OPEN</span>
-            <button onClick={() => setOverlay((v) => !v)}>SELECT — SORT / FILTER</button>
           </>
         ) : (
           <>
