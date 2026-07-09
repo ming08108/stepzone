@@ -34,6 +34,22 @@ describe('loadLibraryFromFiles (pack grouping, todo #12)', () => {
     expect(entries).toHaveLength(0);
     expect(warnings.length).toBeGreaterThan(0);
   });
+
+  // Drop / <input webkitdirectory> don't pre-filter AppleDouble twins; a
+  // ._one.ssc resource fork (binary, ext .ssc) must not shadow the real one.ssc.
+  it('ignores AppleDouble/hidden files so the real simfile still parses', async () => {
+    const files = [
+      fileAt('Pack/Song One/._one.ssc', 'AppleDouble binary junk'),
+      fileAt('Pack/Song One/one.ssc', ssc('Song One')),
+      fileAt('Pack/Song One/._one.ogg', 'junk'),
+      fileAt('Pack/Song One/one.ogg', 'fake-audio'),
+    ];
+    const { entries, warnings } = await loadLibraryFromFiles(files);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].song.title).toBe('Song One');
+    expect(entries[0].files.some((f) => f.name.startsWith('.'))).toBe(false);
+    expect(warnings).toHaveLength(0);
+  });
 });
 
 describe('pickPackImage', () => {

@@ -137,6 +137,12 @@ export async function loadLibraryFromFiles(
   const warnings: string[] = [];
   const groups = new Map<string, File[]>();
   for (const f of files) {
+    // Drop / <input webkitdirectory> paths don't skip AppleDouble/hidden files
+    // (the FSA walk and readSongFolder do). Filter here so a ._Song.ssc resource
+    // fork can't shadow the real simfile, audio, banner, or background — this is
+    // the one chokepoint every eager parse and every entry's file list flows
+    // through. See localFolder.ts collectFiles/readSongFolder for the same guard.
+    if (basename(f.name).startsWith('.')) continue;
     const dir = dirOf(f);
     const g = groups.get(dir);
     if (g) g.push(f);
