@@ -24,6 +24,12 @@ import { SyncMap } from './syncMap';
  * when it is missing or not yet warmed up we approximate with
  * currentTime - outputLatency.
  */
+/** How often to re-anchor the audio↔perf mapping. Long enough that `now`
+ *  extrapolates smoothly with performance.now() between anchors (no per-frame
+ *  quantization to the audio callback), short enough that the crystal drift
+ *  between the clocks stays well under a millisecond. */
+const ANCHOR_INTERVAL_MS = 250;
+
 export function anchorSyncFromOutput(ctx: AudioContext, sync: SyncMap): void {
   const ts = ctx.getOutputTimestamp?.();
   if (
@@ -138,15 +144,30 @@ export class WebAudioClock {
     }
   }
 
-  /** Re-anchor the SyncMap from the audio hardware. Call once per frame. */
+  private lastAnchorPerf = 0;
+
+  /** Re-anchor the SyncMap from the audio hardware (a fresh getOutputTimestamp
+   *  snapshot: contextTime paired with a ~now performanceTime). */
   refresh(): void {
     anchorSyncFromOutput(this.ctx, this.sync);
+    this.lastAnchorPerf = performance.now();
   }
 
-  /** Song position (seconds) audible right now. */
+  /**
+   * Song position (seconds) audible right now.
+   *
+   * Re-anchoring every call would pin the anchor's performanceTime to ~now, so
+   * `songSecondsAtPerf(now)` would return the raw contextTime — the audio clock,
+   * which only advances per audio callback (a few ms). That makes `now` step at
+   * the audio cadence, so time-based animations look low-fps on a high-refresh
+   * display. Instead we hold the anchor and extrapolate with performance.now()
+   * (which advances every frame), re-anchoring only every ANCHOR_INTERVAL_MS to
+   * correct the small crystal drift between the two clocks — smooth at any Hz.
+   */
   songSecondsNow(): number {
-    this.refresh();
-    return this.sync.songSecondsAtPerf(performance.now());
+    const perf = performance.now();
+    if (perf - this.lastAnchorPerf >= ANCHOR_INTERVAL_MS) this.refresh();
+    return this.sync.songSecondsAtPerf(perf);
   }
 
   /** Song position (seconds) audible at an input's event.timeStamp (ms). */
