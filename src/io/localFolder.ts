@@ -269,6 +269,26 @@ export async function listSources(): Promise<SongSource[]> {
   );
 }
 
+/**
+ * One stored source's current state, for decisions that must not confuse "the
+ * user removed it" with "the list couldn't be read": 'removed' and 'disabled'
+ * are authoritative (the read succeeded), 'unknown' means the read failed and
+ * the caller should fail open. Cheaper than listSources — no permission query.
+ */
+export async function sourceState(
+  id: string,
+): Promise<'enabled' | 'disabled' | 'removed' | 'unknown'> {
+  let list: StoredSource[];
+  try {
+    list = await loadList();
+  } catch {
+    return 'unknown';
+  }
+  const s = list.find((x) => x.id === id);
+  if (!s) return 'removed';
+  return s.enabled ? 'enabled' : 'disabled';
+}
+
 export async function removeSource(id: string): Promise<void> {
   try {
     const list = await loadList();

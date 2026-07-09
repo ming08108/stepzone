@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSourceFromDrop, addSourceFromPicker } from '../src/io/localFolder';
+import { addSourceFromDrop, addSourceFromPicker, sourceState } from '../src/io/localFolder';
 import { loadLibraryFromFiles } from '../src/io/songFiles';
 
 /** Minimal mock File System Access handles (what showDirectoryPicker returns). */
@@ -93,6 +93,15 @@ describe('addSourceFromPicker directory walk', () => {
       },
     };
     expect(await addSourceFromPicker()).toBeNull();
+  });
+});
+
+describe('sourceState', () => {
+  it("reports 'unknown' — never 'removed' — when the stored list cannot be read", async () => {
+    // Node has no IndexedDB, the same shape as private mode / blocked site
+    // data. A session-only source id must fail open here: callers discard
+    // scan results on 'removed', which would silently lose the library.
+    expect(await sourceState('any-id')).toBe('unknown');
   });
 });
 
