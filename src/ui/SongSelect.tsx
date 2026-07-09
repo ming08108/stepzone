@@ -220,6 +220,29 @@ export function SongSelect({
     if (entries.some((e) => e.files.length > 0 || e.sourceId)) libraryCache = entries;
   }, [entries]);
 
+  // Free object URLs owned by content that leaves the library. Each catalog
+  // row's lazy parse mints a banner blob URL and every pack folder walk mints
+  // one for its art; without this they accrue for the page's life as you browse
+  // and rescan. Diff by identity AFTER commit — safe: a dropped entry/pack is no
+  // longer rendered, and an already-decoded <img> keeps its bitmap post-revoke.
+  // Not run on unmount, so URLs survive a remount that restores libraryCache.
+  const prevEntriesRef = useRef<LibraryEntry[]>(entries);
+  useEffect(() => {
+    const live = new Set(entries);
+    for (const e of prevEntriesRef.current) {
+      if (!live.has(e) && e.bannerUrl) URL.revokeObjectURL(e.bannerUrl);
+    }
+    prevEntriesRef.current = entries;
+    // Pack art whose pack is gone entirely (a source was removed or disabled).
+    const livePacks = new Set<string>();
+    for (const e of entries) if (e.pack) livePacks.add(e.pack);
+    for (const [pack, url] of packArtUrls) {
+      if (livePacks.has(pack)) continue;
+      if (url) URL.revokeObjectURL(url);
+      packArtUrls.delete(pack);
+    }
+  }, [entries]);
+
   // Parse a folder's files into entries. Entries from a remembered source are
   // tagged with its id, replace that source's previous songs (so rescans are
   // idempotent), and are summarized into a cached catalog so the next reload
@@ -404,6 +427,14 @@ export function SongSelect({
   };
 
   const rescanSource = async (s: SongSource) => {
+    // Drop this source's cached pack art up front so a changed banner file
+    // re-resolves (the pack stays "live", so the diff effect won't catch it).
+    for (const e of entries) {
+      if (e.sourceId !== s.id || !e.pack) continue;
+      const url = packArtUrls.get(e.pack);
+      if (url) URL.revokeObjectURL(url);
+      packArtUrls.delete(e.pack);
+    }
     await loadSource(s.id, true);
     setSources(await listSources());
   };
