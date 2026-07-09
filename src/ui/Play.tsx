@@ -74,6 +74,61 @@ const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.Miss, 'MISS', '#ff5d47'],
 ];
 
+/** Letter-grade tier colors (gold AAA → red D), matching the judgment palette. */
+const GRADE_COLORS: Record<string, string> = {
+  AAA: '#ffd23d',
+  AA: '#38f0ff',
+  A: '#59f07f',
+  B: '#5db4ff',
+  C: '#ff9d3d',
+  D: '#ff5d47',
+};
+const gradeColor = (g: string): string => GRADE_COLORS[g] ?? '#ececec';
+
+/** Results header: a big tier-colored letter grade beside the % and clear/fail. */
+function ResultHeader({ result }: { result: Result }) {
+  const gc = gradeColor(result.grade);
+  return (
+    <>
+      <div className="text-[15px] tracking-[0.3em] text-[#ececec]/70">RESULTS</div>
+      <div className="my-1 flex items-center gap-6">
+        <div
+          className="flex min-w-[132px] items-center justify-center border-2 px-5 py-2"
+          style={{
+            borderColor: gc,
+            background: `${gc}0d`,
+            boxShadow: `0 0 44px ${gc}40, inset 0 0 26px ${gc}1f`,
+          }}
+        >
+          <span
+            className="font-black leading-none"
+            style={{
+              color: gc,
+              fontSize: result.grade.length > 2 ? 62 : 84,
+              letterSpacing: '0.02em',
+              textShadow: `0 0 22px ${gc}99`,
+            }}
+          >
+            {result.grade}
+          </span>
+        </div>
+        <div className="flex flex-col items-start">
+          <div className="text-[54px] font-bold leading-none tabular-nums">
+            {(result.percent * 100).toFixed(2)}
+            <span className="text-[30px] text-[#ececec]/55">%</span>
+          </div>
+          <div
+            className="mt-1.5 text-[16px] font-bold tracking-[0.24em]"
+            style={{ color: result.failed ? AC : '#59f07f' }}
+          >
+            {result.failed ? 'FAILED' : 'CLEARED'}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 const CTL_BTN =
   'border border-white/15 bg-black/30 px-3 py-1.5 text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:border-[#ff5d47] hover:text-[#ececec]';
 
@@ -167,6 +222,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   onExitRef.current = onExit;
   useControls((e) => {
     if (phaseRef.current === 'playing') {
+      // Quit mid-song from the keyboard/gamepad (Escape / pad back) — no mouse.
+      if (e.role === 'back' && e.pressed && !e.repeat) {
+        e.nativeEvent?.preventDefault();
+        onExitRef.current();
+        return;
+      }
       if (e.repeat) return;
       const col = roleToColumn(e.role);
       if (col === undefined) return;
@@ -409,16 +470,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           )}
           {phase === 'done' && result && (
             <>
-              <div className="text-[15px] tracking-[0.3em] text-[#ececec]/70">RESULTS</div>
-              <div className="text-[64px] font-bold leading-none">
-                {(result.percent * 100).toFixed(2)}%
-              </div>
-              <div
-                className="text-[22px] font-bold tracking-[0.1em]"
-                style={{ color: result.failed ? AC : '#59f07f' }}
-              >
-                {result.failed ? 'FAILED' : 'CLEARED'} · {result.grade}
-              </div>
+              <ResultHeader result={result} />
               {result.isNewRecord && (
                 <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
                   ★ NEW RECORD
