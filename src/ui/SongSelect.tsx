@@ -35,6 +35,7 @@ import {
 } from '../io/localFolder';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
 import { loadFavorites, saveFavorites } from '../app/favorites';
+import { keyboardRole } from '../input/inputBus';
 import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
@@ -518,21 +519,27 @@ export function SongSelect({
         'f',
         'F',
       ];
-      if (!keys.includes(e.key)) return;
+      // Honor custom keybinds for select/back (e.g. Slash → confirm), not just
+      // the hard-coded Enter/Escape. Directional stays on the arrows so the
+      // default KeyD/F/J/K → column binds don't hijack menu nav / the F fave key.
+      const role = keyboardRole(e.code);
+      const isConfirm = e.key === 'Enter' || role === 'confirm';
+      const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
+      if (!keys.includes(e.key) && !isConfirm && !isBack) return;
       const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
       if (overlay) {
-        if (e.key === 'Escape' || e.key === 'Shift') {
+        if (isBack) {
           e.preventDefault();
           setOverlay(false);
           return;
         }
-        if (typing && e.key !== 'Enter') return;
+        if (typing && !isConfirm) return;
         e.preventDefault();
         if (e.key === 'ArrowLeft') setOsel((v) => Math.max(0, v - 1));
         else if (e.key === 'ArrowRight') setOsel((v) => Math.min(4, v + 1));
         else if (e.key === 'ArrowUp') adjust(osel, 1);
         else if (e.key === 'ArrowDown') adjust(osel, -1);
-        else if (e.key === 'Enter') osel === 4 ? reset() : setOverlay(false);
+        else if (isConfirm) osel === 4 ? reset() : setOverlay(false);
       } else {
         if (typing) return;
         e.preventDefault();
@@ -541,11 +548,11 @@ export function SongSelect({
         else if (e.key === 'ArrowDown') setSel((selClamped + 1) % n);
         else if (e.key === 'ArrowLeft') setDiff((v) => Math.max(0, v - 1));
         else if (e.key === 'ArrowRight') setDiff((v) => Math.min(4, v + 1));
-        else if (e.key === 'Enter') void start();
+        else if (isConfirm) void start();
         else if (e.key === 'f' || e.key === 'F') {
           const s = filtered[selClamped];
           if (s) toggleFav(s.key);
-        } else if (e.key === 'Escape' || e.key === 'Shift') {
+        } else if (isBack) {
           setOverlay(true);
           setOsel(0);
         }
