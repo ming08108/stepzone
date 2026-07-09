@@ -40,21 +40,30 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
   const start = async () => {
     stop();
     const clock = new WebAudioClock();
+    // Claim the ref (and show STOP) BEFORE the await, so a second START or a
+    // STOP/back during resume() can find and dispose this exact context — else
+    // the clock created here is orphaned (its AudioContext never released, its
+    // click track playing for the full DURATION) until the ~6-context cap is
+    // hit. Mirrors Play.tsx's sessionRef claim + generation guard.
+    clockRef.current = clock;
+    setRunning(true);
     await clock.resume();
+    if (clockRef.current !== clock) {
+      void clock.dispose(); // superseded or torn down while resuming
+      return;
+    }
     const clicks: Click[] = [];
     for (let b = 0; b * BEAT < DURATION; b++) clicks.push({ time: b * BEAT, accent: b % 4 === 0 });
     clock.setBuffer(makeClickTrack(clock.ctx, clicks, DURATION + 0.5));
     clock.sync.audioOffsetSeconds = 0; // measure raw
     clock.start(0, 0.3);
-    clockRef.current = clock;
     offsetsRef.current = [];
     setCount(0);
     setMeasured(null);
-    setRunning(true);
 
     const loop = () => {
-      if (!clockRef.current) return;
-      clockRef.current.refresh(); // keep the sync anchor fresh
+      if (clockRef.current !== clock) return; // a newer run (or stop) supersedes us
+      clock.refresh(); // keep the sync anchor fresh
       force((x) => x + 1);
       rafRef.current = requestAnimationFrame(loop);
     };
