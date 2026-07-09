@@ -28,6 +28,7 @@ import { songBpmRange } from '../io/songFiles';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { difficultyToString } from '../song/difficulty';
 import type { TimingData } from '../timing/timingData';
+import { keyboardRole } from '../input/inputBus';
 import { bestChartsPerSlot, difficultyColor } from './difficultyUi';
 import { NoteFieldPreview } from './NoteFieldPreview';
 import type { PlayRequest } from './playRequest';
@@ -362,14 +363,16 @@ export function PlayerOptions({
   const curRow = rows[Math.min(row, rows.length - 1)];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // confirm/back honor custom keybinds (e.g. Slash → confirm), not just Enter.
+      const role = keyboardRole(e.code);
       if (e.key === 'ArrowUp')
         setRow((v) => (Math.min(v, rows.length - 1) + rows.length - 1) % rows.length);
       else if (e.key === 'ArrowDown')
         setRow((v) => (Math.min(v, rows.length - 1) + 1) % rows.length);
       else if (e.key === 'ArrowLeft') curRow.adjust(-1);
       else if (e.key === 'ArrowRight') curRow.adjust(1);
-      else if (e.key === 'Enter') go();
-      else if (e.key === 'Escape' || e.key === 'Shift') onBack();
+      else if (e.key === 'Enter' || role === 'confirm') go();
+      else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') onBack();
       else return;
       e.preventDefault();
     };

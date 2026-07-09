@@ -138,6 +138,11 @@ export class InputBus {
     this.bindings = b;
   }
 
+  /** Role a keyboard code resolves to under the current bindings. */
+  keyRole(code: string): ControlRole | undefined {
+    return this.bindings.keyboard[code];
+  }
+
   /** While true (press-to-bind capture UI), events are swallowed. */
   setCaptureActive(active: boolean): void {
     this.captureActive = active;
@@ -334,4 +339,11 @@ export function setBindCaptureActive(active: boolean): void {
 /** True if any device currently holds the role. */
 export function isControlDown(role: ControlRole): boolean {
   return inputBus.isRoleDown(role);
+}
+
+/** Resolve a KeyboardEvent.code to its bound role (or undefined). For menus that
+ *  handle raw keydown but should still honor custom keybinds (e.g. Slash →
+ *  confirm) — not just the hard-coded Enter/Escape. */
+export function keyboardRole(code: string): ControlRole | undefined {
+  return inputBus.keyRole(code);
 }
