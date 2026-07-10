@@ -3,37 +3,22 @@
  * list) that fills any aspect ratio: a selected-song detail header with a
  * difficulty-chip stack, a filter strip, sortable columns, and a
  * keyboard-navigated centered list (virtualized for large libraries). The pure
- * row/filter/sort/window logic lives in songSelectModel.ts; this file owns
- * state, effects, and layout.
+ * row/filter/sort/window logic lives in songSelectModel.ts and the library
+ * itself (entries, sources, object-URL lifecycle) in libraryStore.ts; this
+ * file owns view state (filters, cursors, overlays) and layout.
  */
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { starterEntries } from '../starter';
 import {
-  filesFromDataTransfer,
-  loadLibraryFromFiles,
-  pickPackImage,
-  readSongAudio,
-  type LibraryEntry,
-} from '../io/songFiles';
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import { readSongAudio } from '../io/songFiles';
 import { resolveBackground, subscribeBgConvert, type BgConvertStatus } from '../io/bgVideo';
 import { clearVideoCache, videoCacheStats } from '../io/videoCache';
-import {
-  addSourceFromDrop,
-  addSourceFromPicker,
-  ensureSourcePermission,
-  grantPendingSources,
-  listSources,
-  loadCatalog,
-  readSongFolder,
-  readSource,
-  removeSource,
-  restoreSources,
-  saveCatalog,
-  setSourceEnabled,
-  sourceState,
-  supportsFolderPicker,
-  type SongSource,
-} from '../io/localFolder';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
 import { loadFavorites, saveFavorites } from '../app/favorites';
 import { keyboardRole } from '../input/inputBus';
@@ -43,11 +28,7 @@ import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficul
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 import {
-  bpmText,
   buildBestsBySong,
-  deriveLevels,
-  entryDir,
-  entryFromCatalog,
   filterSort,
   initials,
   SORTS,
@@ -56,6 +37,22 @@ import {
   type SongVM,
   type Sort,
 } from './songSelectModel';
+import {
+  addDropped,
+  addFiles,
+  addFolderFromPicker,
+  ensureLoaded,
+  finishRestore,
+  forgetSource,
+  initLibrary,
+  libraryState,
+  packArtUrl,
+  refreshSources,
+  requestPackArt,
+  rescanSource,
+  subscribeLibrary,
+  toggleSource,
+} from './libraryStore';
 
 const AC = '#ff5d47';
 const FAV_CLR = '#ffcf3d';
@@ -69,96 +66,6 @@ const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : 
 
 /** A row in the SELECT menu overlay (sort/filter, plus BACK inside a pack). */
 type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset';
-
-// The loaded library, kept across remounts like the filters below: returning
-// from a song reuses it instead of re-reading the folder and re-deriving every
-// row (parsed simfiles on the entries survive too). Session-scoped — a full
-// page reload restores the library from the remembered folder on disk.
-let libraryCache: LibraryEntry[] | null = null;
-
-// In-flight lazy loads keyed by the (identity-stable) catalog entry, so
-// concurrent callers — the preview effect plus Enter, or a fast A→B→A
-// highlight — share one parse instead of each minting a banner URL: the
-// loser's merged entry would never join `entries`, putting its URL beyond the
-// sweep's reach forever. Entries delete themselves on settle.
-const entryLoads = new Map<LibraryEntry, Promise<LibraryEntry>>();
-
-// Pack background art (todos3 #8): pack name -> object URL, null = known none.
-// Module-scoped like libraryCache so revisits don't re-read pack folders.
-const packArtUrls = new Map<string, string | null>();
-
-/**
- * Stash freshly-walked pack art (full scans carry the pack-root files). A full
- * scan is fresh ground truth for the packs it found images for, so it replaces
- * (and revokes) any cached URL — this is what makes a rescan pick up a changed
- * banner file, with no ad-hoc invalidation in the rescan path. Revoking a
- * still-rendered URL is safe: an already-decoded <img> keeps its bitmap, and
- * consumers re-read the cache when entries/packArtTick change right after. A
- * pack whose image was deleted on disk keeps its stale art (absent from
- * packImages, so untouched) — better than revoking art that may belong to a
- * same-named pack in another source.
- */
-function stashPackImages(packImages: Map<string, File>): void {
-  for (const [pack, file] of packImages) {
-    const old = packArtUrls.get(pack);
-    if (old) URL.revokeObjectURL(old);
-    packArtUrls.set(pack, URL.createObjectURL(file));
-  }
-  // Usually redundant (a setEntries lands right after and repaints), but a
-  // scan whose entries get discarded (source disabled mid-scan) can still
-  // have replaced a live same-named pack's art above.
-  if (packImages.size > 0) notifyPackArt();
-}
-
-// Pack names referenced by the current entries — mirrored from the sweep
-// effect below so resolvePackArt, whose walk may outlive its pack (source
-// removed mid-walk), can tell that minting a URL now would leak it: the sweep
-// only reclaims packs that are in the map at the time entries change.
-let livePackNames = new Set<string>();
-
-// Packs whose folder is being walked right now — so the detail-header backdrop
-// and the grid loader (or a fast A→B→A cursor) never walk the same pack twice
-// or leak the loser's object URL.
-const packArtPending = new Set<string>();
-
-// Pack-art arrival subscribers (the mounted screen's packArtTick bump). Walks
-// can outlive the effect that issued them — leave-and-return, or `filtered`
-// changing mid-walk — and a dedup'd second caller has no walk of its own; a
-// per-call callback would then be a dead closure and freshly-cached art would
-// sit unrendered until an unrelated repaint. Module-level like the cache.
-const packArtListeners = new Set<() => void>();
-function notifyPackArt(): void {
-  for (const l of packArtListeners) l();
-}
-
-/**
- * Resolve one pack's banner exactly once: list its folder, cache the object URL
- * (or null for "known none"), then notify subscribers. A no-op if already
- * cached or a walk is in flight — the in-flight walk's completion notifies
- * every consumer.
- */
-async function resolvePackArt(pack: string, sourceId: string, dir: string): Promise<void> {
-  if (packArtUrls.get(pack) !== undefined || packArtPending.has(pack)) return;
-  packArtPending.add(pack);
-  let files: File[] | null;
-  try {
-    files = await readSongFolder(sourceId, dir);
-  } finally {
-    packArtPending.delete(pack);
-  }
-  // A failed read (source removed or folder gone mid-walk) is not "known
-  // none": leave the slot empty so a later walk — say via a same-named pack's
-  // entry from a surviving source — can still resolve real art.
-  if (files === null) return;
-  // The library may have moved on during the walk: the pack may be gone
-  // entirely (minting now would leak past the sweep, which already ran), or a
-  // full scan may have stashed fresh art meanwhile (fresher than this walk's
-  // read — leave it).
-  if (!livePackNames.has(pack) || packArtUrls.get(pack) !== undefined) return;
-  const pick = pickPackImage(files);
-  packArtUrls.set(pack, pick ? URL.createObjectURL(pick) : null);
-  notifyPackArt();
-}
 
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
@@ -181,32 +88,22 @@ export function SongSelect({
   onPlay: (r: PlayRequest) => void;
   onOptions: () => void;
 }) {
-  const [entries, setEntries] = useState<LibraryEntry[]>(() => libraryCache ?? []);
+  // The library domain — entries, sources, load progress, pack art — lives in
+  // libraryStore (module-scoped, so scans and lazy loads land there even if
+  // this screen unmounts mid-flight); this component only renders it.
+  const { entries, sources, loading, packArtVersion } = useSyncExternalStore(
+    subscribeLibrary,
+    libraryState,
+  );
   const [viewH, setViewH] = useState(400);
   const [viewW, setViewW] = useState(1200);
   const gridRef = useRef<HTMLDivElement>(null);
   const selCardRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState(false);
-  // Load status shown as an overlay over the list ("SCANNING…", "LOADING m/n").
-  const [loading, setLoading] = useState<{ msg: string; frac?: number } | null>(null);
-  // The remembered folder sources (io/localFolder) and their management panel.
-  const [sources, setSources] = useState<SongSource[]>([]);
   const [showSources, setShowSources] = useState(false);
   const restoring = useRef(false);
   const folderRef = useRef<HTMLInputElement>(null);
-  // Long async parses (a rescan, a lazy entry load) can outlive the screen —
-  // the keydown handler stays live under the loading overlay, so Enter can
-  // start a song mid-scan. Their setEntries would then be silently dropped,
-  // orphaning every banner URL just minted; they check this flag and revoke
-  // instead. (Body re-arms it for StrictMode's mount→cleanup→mount replay.)
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
   // Legacy-background conversion activity + converted-video cache size.
   const [bgConvert, setBgConvert] = useState<BgConvertStatus | null>(null);
   const [videoCache, setVideoCache] = useState<{ bytes: number; count: number } | null>(null);
@@ -236,15 +133,6 @@ export function SongSelect({
   // `packSel` is the pack cursor, `sel` the song cursor within the open pack.
   const [openPack, setOpenPack] = useState<string | null>(savedFilters.openPack);
   const [packSel, setPackSel] = useState(0);
-  // Bumped as lazily-walked pack banners arrive, so the grid re-reads packArtUrls.
-  const [packArtTick, setPackArtTick] = useState(0);
-  useEffect(() => {
-    const listener = () => setPackArtTick((t) => t + 1);
-    packArtListeners.add(listener);
-    return () => {
-      packArtListeners.delete(listener);
-    };
-  }, []);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
   const [osel, setOsel] = useState(0);
@@ -279,239 +167,18 @@ export function SongSelect({
     return () => ro.disconnect();
   }, []);
 
-  // Keep the module cache current: once real library content is in (a loaded
-  // or catalog-cached song folder), leaving the screen must not lose it. Once
-  // the cache exists it tracks entries unconditionally — including a degrade
-  // to starter-only (last source disabled/removed), or a stale cache would
-  // resurrect the removed songs on remount, with banner URLs the sweep below
-  // has already revoked. Before that, starter-only must NOT populate the
-  // cache: it's the transient state while auto-load restores the real folder,
-  // and caching it would make a quick remount skip that restore.
+  // Seed the starter pack + auto-load remembered folders (once per session —
+  // the store serves later mounts instantly), and refresh the source list on
+  // every visit: permissions can change while the screen is away.
   useEffect(() => {
-    if (libraryCache || entries.some((e) => e.files.length > 0 || e.sourceId)) {
-      libraryCache = entries;
-    }
-  }, [entries]);
-
-  // Free object URLs owned by content that leaves the library. Each catalog
-  // row's lazy parse mints a banner blob URL and every pack folder walk mints
-  // one for its art; without this they accrue for the page's life as you browse
-  // and rescan. Diff by identity AFTER commit — safe: a dropped entry/pack is no
-  // longer rendered, and an already-decoded <img> keeps its bitmap post-revoke.
-  // Not run on unmount, so URLs survive a remount that restores libraryCache.
-  const prevEntriesRef = useRef<LibraryEntry[]>(entries);
-  useEffect(() => {
-    const live = new Set(entries);
-    for (const e of prevEntriesRef.current) {
-      if (!live.has(e) && e.bannerUrl) URL.revokeObjectURL(e.bannerUrl);
-    }
-    prevEntriesRef.current = entries;
-    // Pack art whose pack is gone entirely (a source was removed or disabled).
-    // The live set is also published for resolvePackArt's post-walk check.
-    const livePacks = new Set<string>();
-    for (const e of entries) if (e.pack) livePacks.add(e.pack);
-    livePackNames = livePacks;
-    for (const [pack, url] of packArtUrls) {
-      if (livePacks.has(pack)) continue;
-      if (url) URL.revokeObjectURL(url);
-      packArtUrls.delete(pack);
-    }
-  }, [entries]);
-
-  // Parse a folder's files into entries. Entries from a remembered source are
-  // tagged with its id, replace that source's previous songs (so rescans are
-  // idempotent), and are summarized into a cached catalog so the next reload
-  // skips the walk+parse entirely; untagged loads (multi-folder drops, the
-  // fallback input) simply append for this session. The starter pack stays.
-  const addSourceEntries = useCallback(
-    async (files: File[], sourceId?: string, persisted = false) => {
-      if (files.length === 0) return;
-      setLoading({ msg: 'LOADING SONGS…' });
-      try {
-        const { entries: loaded, packImages } = await loadLibraryFromFiles(files, (done, total) =>
-          setLoading({ msg: `LOADING SONGS… ${done} / ${total}`, frac: done / total }),
-        );
-        stashPackImages(packImages);
-        const tagged = sourceId ? loaded.map((e) => ({ ...e, sourceId })) : loaded;
-        // The walk+parse is long; re-check that the world still wants the
-        // result. A persisted source removed mid-scan forfeits everything (no
-        // resurrected songs, no orphan catalog); one merely disabled keeps its
-        // fresh catalog for re-enable but must not re-enter the library; and if
-        // the screen unmounted (Enter mid-scan) setEntries would be silently
-        // dropped. Any discarded entry's banner URL must be revoked here — it
-        // will never join `entries` where the sweep could reclaim it.
-        //
-        // Only `persisted` callers get the removed/disabled re-check: a fresh
-        // add's id may be session-only (IDB unavailable or write failed — the
-        // io layer still loads it this session) and so absent from the list
-        // without being removed; it also isn't in the FOLDERS panel yet, so it
-        // can't be removed mid-scan anyway. sourceState's 'unknown' (the list
-        // read failed) fails open — keep the result rather than misread a
-        // transient error as a removal.
-        const state = sourceId && persisted ? await sourceState(sourceId) : 'enabled';
-        const removed = state === 'removed';
-        if (!removed && state !== 'disabled' && mountedRef.current) {
-          if (tagged.length) {
-            setEntries((prev) => [
-              ...prev.filter((e) => !sourceId || e.sourceId !== sourceId),
-              ...tagged,
-            ]);
-          }
-        } else {
-          for (const e of tagged) if (e.bannerUrl) URL.revokeObjectURL(e.bannerUrl);
-        }
-        if (sourceId && !removed) {
-          void saveCatalog(
-            sourceId,
-            tagged.map((e) => {
-              const bpm = bpmText(e);
-              return {
-                dir: entryDir(e),
-                title: e.song.displayFullTitle || e.sourceName,
-                artist: e.song.artist,
-                pack: e.pack,
-                bpm: bpm.sort > 0 ? bpm.text : undefined,
-                levels: deriveLevels(e.song),
-              };
-            }),
-          );
-        }
-      } finally {
-        setLoading(null);
-      }
-    },
-    [],
-  );
-
-  // Bring one source into the library: from its cached catalog when available
-  // (instant — no disk walk), else a full scan that also writes the catalog.
-  const loadSource = useCallback(
-    async (id: string, forceScan = false) => {
-      if (!forceScan) {
-        const cached = await loadCatalog(id);
-        if (cached && cached.length > 0) {
-          setEntries((prev) => [
-            ...prev.filter((e) => e.sourceId !== id),
-            ...cached.map((c) => entryFromCatalog(id, c)),
-          ]);
-          return;
-        }
-      }
-      const folder = await readSource(id, (n) =>
-        setLoading({ msg: `SCANNING FOLDER… ${n} FILES` }),
-      );
-      // `persisted`: readSource only succeeds for a source in the stored
-      // list, so the removed/disabled re-check is meaningful here.
-      if (folder) await addSourceEntries(folder.files, id, true);
-      setLoading(null);
-    },
-    [addSourceEntries],
-  );
-
-  // A catalog row being opened: read its song folder (one directory listing)
-  // and parse the simfile, writing the result back onto the entry in place.
-  // Concurrent callers share one load via entryLoads (see its doc comment).
-  const ensureLoaded = useCallback(async (entry: LibraryEntry): Promise<LibraryEntry> => {
-    const { sourceId, lazyDir } = entry;
-    if (!lazyDir || !sourceId || entry.song.charts.length > 0) return entry;
-    const inflight = entryLoads.get(entry);
-    if (inflight) return inflight;
-    const load = (async () => {
-      const files = await readSongFolder(sourceId, lazyDir);
-      if (!files || files.length === 0) return entry;
-      const { entries: parsed } = await loadLibraryFromFiles(files);
-      const full = parsed[0];
-      if (!full) return entry;
-      if (!mountedRef.current) {
-        // Only a dead effect can still be awaiting this (preview/prefetch
-        // raced an unmount): the setEntries below would be dropped and the
-        // fresh banner URL orphaned.
-        if (full.bannerUrl) URL.revokeObjectURL(full.bannerUrl);
-        return entry;
-      }
-      const merged: LibraryEntry = {
-        ...entry,
-        song: full.song,
-        files: full.files,
-        bannerUrl: full.bannerUrl,
-      };
-      setEntries((prev) => prev.map((e) => (e === entry ? merged : e)));
-      return merged;
-    })();
-    entryLoads.set(entry, load);
-    try {
-      return await load;
-    } finally {
-      entryLoads.delete(entry);
-    }
-  }, []);
-
-  // Folder-walk progress ticks (the phase before any songs can be counted).
-  const scanTick = useCallback(
-    (n: number) => setLoading({ msg: `SCANNING FOLDER… ${n} FILES` }),
-    [],
-  );
-
-  // Auto-load the remembered song folder, once per session (on a remount the
-  // cache serves the list instantly). A remembered folder the browser won't
-  // silently re-open surfaces as a click-to-restore banner instead.
-  useEffect(() => {
-    if (libraryCache) return;
-    let cancelled = false;
-    // The bundled starter pack — synthesized originals, so a fresh install has
-    // real songs to play before any folder is picked. A loaded folder is
-    // appended after these (addSourceEntries keeps file-less entries).
-    setEntries(starterEntries());
-    void (async () => {
-      const { granted } = await restoreSources();
-      if (cancelled) return;
-      for (const g of granted) await loadSource(g.id);
-      setSources(await listSources());
-      setLoading(null);
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // The panel needs the source list even when the library came from the
-  // remount cache (the effect above returns early then).
-  useEffect(() => {
-    void listSources().then(setSources);
+    initLibrary();
+    void refreshSources();
   }, []);
 
   // "+ ADD FOLDER": native directory picker where supported (Chromium — the
   // choice is remembered across reloads), <input webkitdirectory> elsewhere.
   const chooseFolder = async () => {
-    if (supportsFolderPicker()) {
-      const added = await addSourceFromPicker(scanTick);
-      if (added) {
-        await addSourceEntries(added.folder.files, added.id);
-        setSources(await listSources());
-      }
-      setLoading(null);
-    } else {
-      folderRef.current?.click();
-    }
-  };
-
-  // Re-grant access to the pending sources and load them (cached catalogs make
-  // this near-instant). Sources still denied (dismissed prompt, no activation)
-  // stay in the banner for another try; dead folders are dropped by the layer.
-  const finishRestore = async () => {
-    const wasPending = new Set(
-      sources.filter((s) => s.enabled && s.permission === 'prompt').map((s) => s.id),
-    );
-    await grantPendingSources();
-    const after = await listSources();
-    for (const s of after) {
-      if (s.enabled && s.permission === 'granted' && wasPending.has(s.id)) {
-        await loadSource(s.id);
-      }
-    }
-    setSources(after);
-    setLoading(null);
+    if (!(await addFolderFromPicker())) folderRef.current?.click();
   };
 
   // While the banner is up, any real keypress doubles as the permission
@@ -530,36 +197,6 @@ export function SongSelect({
     return () => window.removeEventListener('keydown', onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingNames.length]);
-
-  // Source management (FOLDERS panel): toggle a source's songs in/out of the
-  // library, rescan one whose contents changed on disk, or forget it entirely.
-  // Enabling/rescanning may prompt for permission (the click is the gesture).
-  const toggleSource = async (s: SongSource) => {
-    if (s.enabled) {
-      await setSourceEnabled(s.id, false);
-      setEntries((prev) => prev.filter((e) => e.sourceId !== s.id));
-    } else {
-      await setSourceEnabled(s.id, true);
-      if (await ensureSourcePermission(s.id)) await loadSource(s.id);
-      setLoading(null);
-    }
-    setSources(await listSources());
-  };
-
-  // A changed banner file is picked up by stashPackImages replacing the stale
-  // URL when the scan lands — nothing is dropped up front, so a failed or
-  // empty rescan (dismissed permission prompt, transient error) leaves the
-  // currently-displayed art intact.
-  const rescanSource = async (s: SongSource) => {
-    await loadSource(s.id, true);
-    setSources(await listSources());
-  };
-
-  const removeSrc = async (s: SongSource) => {
-    await removeSource(s.id);
-    setEntries((prev) => prev.filter((e) => e.sourceId !== s.id));
-    setSources(await listSources());
-  };
 
   useEffect(() => {
     if (folderRef.current) folderRef.current.webkitdirectory = true;
@@ -650,7 +287,7 @@ export function SongSelect({
       Math.min(BANNER_RATIO, Math.max(1, bannerUrl ? (artRatio ?? BANNER_RATIO) : BANNER_RATIO)),
   );
   // Pack-wheel header: the highlighted pack's art (if scanned) + song count.
-  const packBannerUrl = inPacks && selPack ? (packArtUrls.get(selPack) ?? null) : null;
+  const packBannerUrl = inPacks && selPack ? (packArtUrl(selPack) ?? null) : null;
   const packCount = inPacks ? (packList[packClamped]?.count ?? 0) : 0;
 
   // Remember filters/selection so returning from a song restores the list (#2).
@@ -688,7 +325,7 @@ export function SongSelect({
     return () => {
       alive = false;
     };
-  }, [inPacks, song?.entry, ensureLoaded]);
+  }, [inPacks, song?.entry]);
   useEffect(() => () => stopPreview(), []);
 
   // Warm the preview cache for songs near the cursor (todos3 #4), so scrolling
@@ -712,20 +349,20 @@ export function SongSelect({
     };
     // shownSongs (not filtered) is what's indexed — it also changes when a pack
     // opens without filtered/selClamped moving, so prefetch the right neighbors.
-  }, [selClamped, shownSongs, ensureLoaded]);
+  }, [selClamped, shownSongs]);
 
   // The selected song's pack art, a dim backdrop behind the detail header (#8).
-  // Read straight from the module cache (recomputed as packArtTick advances);
+  // Read straight from the store cache (recomputed as packArtVersion bumps);
   // the effect below just kicks a one-time walk when it isn't cached yet.
-  const packArt = !inPacks && song?.pack ? (packArtUrls.get(song.pack) ?? null) : null;
+  const packArt = !inPacks && song?.pack ? (packArtUrl(song.pack) ?? null) : null;
   useEffect(() => {
     const pack = song?.pack;
     const e = song?.entry;
     if (inPacks || !pack || !e?.sourceId || !e.lazyDir || !e.lazyDir.includes('/')) return;
-    void resolvePackArt(pack, e.sourceId, e.lazyDir.slice(0, e.lazyDir.lastIndexOf('/')));
+    void requestPackArt(pack, e.sourceId, e.lazyDir.slice(0, e.lazyDir.lastIndexOf('/')));
   }, [inPacks, song?.pack, song?.entry]);
 
-  // Grid banners (#8): a catalog-restored library has an empty packArtUrls cache,
+  // Grid banners (#8): a catalog-restored library has an empty pack-art cache,
   // so nothing shows on first paint. When the pack grid is up, walk each shown
   // pack's folder once — sequentially (so a large library doesn't fire hundreds
   // of listings at once) and deduped against the detail walk above.
@@ -736,7 +373,7 @@ export function SongSelect({
     const jobs: { pack: string; sourceId: string; dir: string }[] = [];
     for (const s of filtered) {
       const pack = s.pack || '—';
-      if (queued.has(pack) || packArtUrls.get(pack) !== undefined) continue;
+      if (queued.has(pack) || packArtUrl(pack) !== undefined) continue;
       const e = s.entry;
       if (!e?.sourceId || !e.lazyDir || !e.lazyDir.includes('/')) continue;
       queued.add(pack);
@@ -749,10 +386,10 @@ export function SongSelect({
     if (jobs.length === 0) return;
     void (async () => {
       // `alive` only stops issuing further walks after cleanup — completions
-      // repaint whichever instance is mounted via the pack-art listeners.
+      // repaint via the store subscription regardless.
       for (const j of jobs) {
         if (!alive) return;
-        await resolvePackArt(j.pack, j.sourceId, j.dir);
+        await requestPackArt(j.pack, j.sourceId, j.dir);
       }
     })();
     return () => {
@@ -760,10 +397,10 @@ export function SongSelect({
     };
   }, [inPacks, filtered]);
 
-  // Banner per pack-grid card, recomputed as banners arrive (packArtTick).
+  // Banner per pack-grid card, recomputed as banners arrive (packArtVersion).
   const packArtByIndex = useMemo(
-    () => packList.map((p) => (p.pack === ALL_PACK ? null : (packArtUrls.get(p.pack) ?? null))),
-    [packList, packArtTick],
+    () => packList.map((p) => (p.pack === ALL_PACK ? null : (packArtUrl(p.pack) ?? null))),
+    [packList, packArtVersion],
   );
 
   const start = useCallback(async () => {
@@ -777,7 +414,7 @@ export function SongSelect({
     // (which also queues a background conversion for next time).
     const bg = await resolveBackground(entry);
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
-  }, [shownSongs, sel, diff, onPlay, ensureLoaded]);
+  }, [shownSongs, sel, diff, onPlay]);
 
   // RESET clears the FILTERS only — sort, search, level range, faves. It must
   // not touch navigation (which pack is open / the grid cursor); resetting your
@@ -907,23 +544,7 @@ export function SongSelect({
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDrag(false);
-    // A single dropped folder becomes a remembered source like a picker choice
-    // (Chromium); anything else loads one-off via entry traversal. Both
-    // decisions happen synchronously during dispatch.
-    const adopted = addSourceFromDrop(e.dataTransfer, scanTick);
-    try {
-      if (adopted) {
-        const { id, folder } = await adopted;
-        await addSourceEntries(folder.files, id || undefined);
-        setSources(await listSources());
-      } else {
-        setLoading({ msg: 'LOADING SONGS…' });
-        const files = await filesFromDataTransfer(e.dataTransfer);
-        await addSourceEntries(files);
-      }
-    } finally {
-      setLoading(null);
-    }
+    await addDropped(e.dataTransfer);
   };
 
   // Virtualized window: center the cursor (pack or song), clamp at the ends.
@@ -1035,7 +656,7 @@ export function SongSelect({
                   </button>
                 )}
                 <button
-                  onClick={() => void removeSrc(s)}
+                  onClick={() => void forgetSource(s)}
                   className="text-[#ececec]/40 hover:text-[#ff5d47]"
                   title="Forget this folder"
                 >
@@ -1089,7 +710,7 @@ export function SongSelect({
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
           e.target.value = '';
-          void addSourceEntries(files);
+          void addFiles(files);
         }}
       />
 
