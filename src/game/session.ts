@@ -74,6 +74,17 @@ export class GameSession {
   readonly ghostFrames: GhostFrame[] = [];
   private lastGhostAt = Number.NEGATIVE_INFINITY;
 
+  /** Rival field layout (live versus): a second view on the SAME canvas —
+   *  one render, one shared background. Set before/after start(). */
+  private rivalConfig: {
+    numTracks: number;
+    columnAngles: number[];
+    meta: NoteFieldConfig['meta'];
+  } | null = null;
+  /** The rival's mirror judge + feedback, maintained by the UI from the
+   *  streamed judgment feed; the loop just hands it to the field each frame. */
+  rivalSource: { judge: Judge; feedback: Feedback } | null = null;
+
   private dpr = 1;
   private raf = 0;
   private running = false;
@@ -179,6 +190,17 @@ export class GameSession {
     return this.clock.songSecondsNow();
   }
 
+  /** True when a rival view is being drawn (dev/testing hook). */
+  get hasRival(): boolean {
+    return this.rivalSource !== null && this.rivalConfig !== null;
+  }
+
+  /** Attach/detach the rival's side-by-side field view (live versus). */
+  setRivalField(cfg: typeof this.rivalConfig): void {
+    this.rivalConfig = cfg;
+    this.gpuField?.setRival(cfg);
+  }
+
   /** Set (or clear) the background video/image drawn behind the field. */
   setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
     this.bgMedia = media;
@@ -242,6 +264,7 @@ export class GameSession {
       };
       gpu.resize(this.logicalW, this.logicalH, this.dpr);
       gpu.setBeatTimes(this.beatLineTimes);
+      if (this.rivalConfig) gpu.setRival(this.rivalConfig);
       if (this.bgMedia) gpu.setBackground(this.bgMedia);
       freshField = true;
     }
@@ -391,7 +414,14 @@ export class GameSession {
       : now <= 0
         ? 0
         : Math.min(1, now / this.endSeconds);
-    this.gpuField?.draw(this.judge, visualNow, beat, progress, this.feedback);
+    this.gpuField?.draw(
+      this.judge,
+      visualNow,
+      beat,
+      progress,
+      this.feedback,
+      this.rivalSource ?? undefined,
+    );
 
     if (this.practice) {
       // Loop forever (until the player exits): past the section's post-roll —

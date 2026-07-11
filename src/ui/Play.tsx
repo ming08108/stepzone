@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
+import { Judge } from '../gameplay/judge';
+import { DEFAULT_WINDOWS } from '../gameplay/windows';
+import { columnAnglesFor } from '../render/columns';
+import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
 import { difficultyToString } from '../song/difficulty';
@@ -11,7 +15,6 @@ import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
 import type { VersusMatch } from '../net/versusMatch';
 import { GhostRace, type GhostInfo } from './GhostRace';
-import { OpponentField } from './OpponentField';
 import { VersusBar } from './VersusBar';
 import { addSongPlay, addSteps } from '../app/stats';
 import type { PlayRequest } from './playRequest';
@@ -276,6 +279,33 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         sent++;
       }
       m.sendNotes(fresh);
+      // Paint the rival mirror from their judged-note feed (display only —
+      // mirror the judge's own rule: consumed by input unless it was a Miss).
+      const rv = rivalRef.current;
+      if (rv) {
+        const feed = m.opponentNotes;
+        const nowS = s.songNow;
+        while (rv.cursor < feed.length) {
+          const { i, tns } = feed[rv.cursor++];
+          const n = rv.judge.notes[i];
+          if (!n) continue; // hostile/mismatched index — display feed, skip
+          n.tns = tns;
+          n.hidden = tns !== TapNoteScore.Miss;
+          if (n.isHold && n.hidden) n.holdInitiated = true; // assume they hold it
+          if (tns !== TapNoteScore.AvoidMine && tns !== TapNoteScore.Miss) {
+            rv.feedback.laneFlash[n.track] = nowS;
+            rv.feedback.laneHit[n.track] = { tns, atSeconds: nowS, white: false };
+          }
+          if (tns !== TapNoteScore.AvoidMine) {
+            rv.feedback.lastJudgment = { tns, atSeconds: nowS, white: false };
+          }
+        }
+        const snap = m.opponent.snap;
+        if (snap) {
+          rv.judge.combo = snap.combo;
+          rv.judge.life = snap.life;
+        }
+      }
       if (tick++ % 2 === 0) {
         m.sendSnap({
           atSong: s.songNow,
@@ -288,6 +318,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     }, 100);
     return () => window.clearInterval(timer);
   }, [phase, req.versus]);
+
+  // The rival's mirror judge/feedback (painted from the streamed feed above,
+  // drawn by the session as a second field view on the same canvas).
+  const rivalRef = useRef<{ judge: Judge; feedback: Feedback; cursor: number } | null>(null);
 
   // Race-the-ghost: the best stored timeline on this board (world best with a
   // ghost, which may be your own PB). Fetched once per song; absent offline.
@@ -456,6 +490,32 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       practice: req.practice ?? null,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
+    // Live versus: a mirror judge over the RIVAL'S chart renders as a second
+    // view on the session's own canvas. The 100 ms streamer below paints it
+    // from their judged-note feed; the session just draws what's there.
+    rivalRef.current = null;
+    if (req.versus?.opponentChart) {
+      const rc = req.versus.opponentChart;
+      const rnd = rc.getNoteData();
+      const rTiming = rc.getTimingData(req.song.timing);
+      const rivalJudge = new Judge(rnd, rTiming, DEFAULT_WINDOWS, effRate, null);
+      const rivalFeedback: Feedback = {
+        lastJudgment: null,
+        laneFlash: new Array<number>(rnd.numTracks).fill(-999),
+        laneHit: new Array<Feedback['laneHit'][number]>(rnd.numTracks).fill(null),
+      };
+      session.setRivalField({
+        numTracks: rnd.numTracks,
+        columnAngles: columnAnglesFor(rc.stepsType, rnd.numTracks),
+        meta: {
+          title: req.versus.opponentName,
+          subtitle: 'LIVE RIVAL',
+          difficulty: `${rc.stepsType}  ·  ${difficultyToString(rc.difficulty).toUpperCase()} ${rc.meter}`,
+        },
+      });
+      session.rivalSource = { judge: rivalJudge, feedback: rivalFeedback };
+      rivalRef.current = { judge: rivalJudge, feedback: rivalFeedback, cursor: 0 };
+    }
     setLoopNum(1);
     session.onLoop = setLoopNum;
     session.onError = () => {
@@ -625,21 +685,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       ref={wrapRef}
       className="fixed inset-0 overflow-hidden bg-[#050506] font-grotesk [font-variant-numeric:tabular-nums]"
     >
-      <div className="relative z-[1] flex h-full w-full">
-        <canvas ref={canvasRef} className="block h-full min-w-0 flex-1" />
-        {/* Arcade 2P: the rival's live field (their chart, our synced clock),
-            split 50/50 like a real cab — the note field is height-constrained,
-            so half-width costs the main field nothing on wide screens. The
-            panel reserves its space for the whole screen lifetime so the main
-            field's canvas never resizes mid-song. */}
-        {req.versus?.opponentChart && (
-          <div className="h-full min-w-0 flex-1 border-l border-white/10 bg-black/30">
-            {phase === 'playing' && sessionRef.current && (
-              <OpponentField session={sessionRef.current} versus={req.versus} song={req.song} />
-            )}
-          </div>
-        )}
-      </div>
+      {/* One canvas, one render: in versus the field draws BOTH players'
+          views side by side over a single shared background. */}
+      <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
       <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
         <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>

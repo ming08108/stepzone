@@ -211,8 +211,13 @@ export class QuadBatch {
     });
   }
 
+  /** Horizontal origin added to every pushed cx — lets one canvas host
+   *  side-by-side field views with unchanged skin/draw code. */
+  originX = 0;
+
   begin(viewW: number, viewH: number): void {
     this.count = 0;
+    this.originX = 0;
     this.segments.length = 0;
     const v = this.viewScratch;
     v[0] = viewW;
@@ -257,7 +262,7 @@ export class QuadBatch {
     const o = this.count * FLOATS_PER_INSTANCE;
     const d = this.data;
     const mask = opts?.mask;
-    d[o] = cx;
+    d[o] = cx + this.originX;
     d[o + 1] = cy;
     d[o + 2] = w / 2;
     d[o + 3] = h / 2;

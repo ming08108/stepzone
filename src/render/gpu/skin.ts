@@ -51,6 +51,10 @@ export interface SkinCtx {
   readonly height: number;
   readonly reverse: boolean;
   readonly meta: RenderMeta;
+  /** Which field view is drawing ('main' | 'rival') — namespace any atlas
+   *  SLOT (reusable rect) by this, or side-by-side views rebake it every
+   *  frame and both sample the loser. Content-keyed sprites are safe. */
+  readonly viewKey: string;
   laneX(track: number): number;
   angle(track: number): number;
   /** A shared 4×4 white sprite (solid fills / gradient-tinted quads). */

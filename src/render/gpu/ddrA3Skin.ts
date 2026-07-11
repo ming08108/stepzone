@@ -703,7 +703,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       PANEL_BG_COL,
     );
     const spr = ctx.atlas.slot(
-      'song',
+      `song:${ctx.viewKey}`,
       `${meta.title}|${meta.subtitle}|${Math.round(pw)}`,
       pw,
       ph,

@@ -62,12 +62,15 @@ frame (versusSession store + versusResolve helpers own the session/UI side).
 When both are ready the song starts on both machines together. Music rate is
 room-locked; practice is unavailable in versus; percent compares across
 difficulties (meters are labeled on the bar and standings). During play **the rival's
-playfield renders beside yours, arcade 2P style** (src/ui/OpponentField.tsx):
-a second GpuNoteField over THEIR chart (resolved locally by hash) on the
-local synced clock, driven by their judged-note stream (`notes` frames, a
-display feed — judging never crosses the wire), with combo/life riding the
-snap feed. When their exact chart revision isn't local the panel is absent
-and the race falls back to the bar. The top-left bar shows the rival's live
+playfield renders beside yours, arcade 2P style, in ONE render**: the
+session's GpuNoteField hosts a second field view on the same canvas/device
+(view-local layout placed by a batch originX — src/render/gpu), so the song
+background spans both fields uniformly. The rival view draws a mirror judge
+over THEIR chart (resolved locally by hash) on the local synced clock,
+painted from their judged-note stream (`notes` frames, a display feed —
+judging never crosses the wire), with combo/life riding the snap feed. When
+their exact chart revision isn't local the view is absent and the race falls
+back to the bar. The top-left bar shows the rival's live
 percent/combo and your lead/deficit;
 results show WIN/LOSE/DRAW once both finish. RETRY is hidden (a rematch is a
 fresh room). A mid-song disconnect marks the rival DISCONNECTED and the local

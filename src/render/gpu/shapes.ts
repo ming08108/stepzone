@@ -90,8 +90,13 @@ export class ShapeBatch {
     });
   }
 
+  /** Horizontal origin added to every stored vertex (see QuadBatch.originX);
+   *  color callbacks still see view-local coordinates. */
+  originX = 0;
+
   begin(viewW: number, viewH: number): void {
     this.count = 0;
+    this.originX = 0;
     this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([viewW, viewH, 0, 0]));
   }
 
@@ -108,7 +113,7 @@ export class ShapeBatch {
     }
     const o = this.count * FLOATS_PER_VERT;
     const [r, g, b, a] = color(x, y);
-    this.data[o] = x;
+    this.data[o] = x + this.originX;
     this.data[o + 1] = y;
     this.data[o + 2] = r * a; // premultiplied
     this.data[o + 3] = g * a;

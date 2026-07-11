@@ -54,7 +54,7 @@ import {
   yOf,
   type ScrollState,
 } from '../scroll';
-import { RECEPTOR_FLASH, type Feedback, type TapNoteStyle } from '../types';
+import { RECEPTOR_FLASH, type Feedback, type RenderMeta, type TapNoteStyle } from '../types';
 import type { NoteSkin } from '../../game/playOptions';
 import { GpuAtlas } from './atlas';
 import { GlyphBank } from './glyphs';
@@ -148,6 +148,19 @@ export class GpuNoteField {
   private firstVisibleIdx = 0;
   private lastCombo = 0;
   private comboPopAt = -10;
+  /** Logical width of one field view: full canvas, or half with a rival. */
+  private viewW = 0;
+  /** The second, side-by-side field (live versus rival) sharing this canvas,
+   *  device and background — one render, uniform backdrop. */
+  private rival: {
+    numTracks: number;
+    columnAngles: readonly number[];
+    meta: RenderMeta;
+    fieldLeft: number;
+    firstVisibleIdx: number;
+    lastCombo: number;
+    comboPopAt: number;
+  } | null = null;
   /** Per-beat elapsed times for the guide-line pass (null = no beat lines). */
   private beatLineTimes: Float64Array | null = null;
   private readonly scroll: ScrollState;
@@ -388,7 +401,15 @@ export class GpuNoteField {
     try {
       // Bake every sprite variant the active skin can draw, so nothing
       // rasterizes mid-song (the 4K DoEndRasterCHROMIUM hitch).
-      this.skin.prewarm(this.makeCtx());
+      this.skin.prewarm(
+        this.makeCtx({
+          viewKey: 'main',
+          fieldLeft: this.fieldLeft,
+          numTracks: this.numTracks,
+          columnAngles: this.cfg.columnAngles,
+          meta: this.cfg.meta,
+        }),
+      );
       // Two synthetic frames to compile both blend pipelines + the shape
       // pipelines and warm the submit path (danger then hot gauge/life). Fakes
       // are cast to Judge/ActiveNote — the render path only reads presentation
@@ -459,16 +480,26 @@ export class GpuNoteField {
   }
 
   private layout(): void {
+    this.viewW = this.rival ? this.width / 2 : this.width;
     const ds = Math.max(
       MIN_DESIGN_SCALE,
-      Math.min(this.height / DESIGN_SIZE, this.width / DESIGN_SIZE),
+      Math.min(this.height / DESIGN_SIZE, this.viewW / DESIGN_SIZE),
     );
     this.ds = ds;
     this.colW = LANE_W * ds;
     this.arrowS = ARROW_HALF * ds;
     const off = this.skin.receptorOffset * ds;
     this.receptorY = this.cfg.reverse ? this.height - off : off;
-    this.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.width, this.numTracks, this.colW, ds);
+    this.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.viewW, this.numTracks, this.colW, ds);
+    if (this.rival) {
+      this.rival.fieldLeft = this.skin.fieldLeft(
+        this.cfg.bare,
+        this.viewW,
+        this.rival.numTracks,
+        this.colW,
+        ds,
+      );
+    }
     const s = this.scroll;
     s.mode = this.cfg.scrollMode;
     s.value = this.cfg.scrollValue;
@@ -478,12 +509,13 @@ export class GpuNoteField {
     s.height = this.height;
   }
 
-  private laneX(track: number): number {
-    return this.fieldLeft + this.colW / 2 + track * this.colW;
-  }
-
-  private angle(track: number): number {
-    return this.cfg.columnAngles[track] ?? 0;
+  /** Attach/detach the rival's side-by-side field view (live versus). The
+   *  rival's judged state is passed per frame via draw()'s rival argument. */
+  setRival(rival: { numTracks: number; columnAngles: number[]; meta: RenderMeta } | null): void {
+    this.rival = rival
+      ? { ...rival, fieldLeft: 0, firstVisibleIdx: 0, lastCombo: 0, comboPopAt: -10 }
+      : null;
+    this.layout();
   }
 
   /** A shared 4×4 white sprite for solid fills / gradient-tinted quads. */
@@ -494,8 +526,16 @@ export class GpuNoteField {
     });
   }
 
-  /** Snapshot the field's rendering primitives + layout for the skin hooks. */
-  private makeCtx(): SkinCtx {
+  /** Snapshot the field's rendering primitives + one view's layout for the
+   *  skin hooks. Views are view-local: the batches' originX places them. */
+  private makeCtx(view: {
+    viewKey: string;
+    fieldLeft: number;
+    numTracks: number;
+    columnAngles: readonly number[];
+    meta: RenderMeta;
+  }): SkinCtx {
+    const laneX = (t: number) => view.fieldLeft + this.colW / 2 + t * this.colW;
     return {
       batch: this.batch,
       hud: this.hudBatch,
@@ -506,22 +546,30 @@ export class GpuNoteField {
       ds: this.ds,
       colW: this.colW,
       arrowS: this.arrowS,
-      fieldLeft: this.fieldLeft,
+      fieldLeft: view.fieldLeft,
       receptorY: this.receptorY,
-      numTracks: this.numTracks,
-      width: this.width,
+      numTracks: view.numTracks,
+      width: this.viewW,
       height: this.height,
       reverse: this.cfg.reverse,
-      meta: this.cfg.meta,
-      laneX: (t) => this.laneX(t),
-      angle: (t) => this.angle(t),
+      meta: view.meta,
+      viewKey: view.viewKey,
+      laneX,
+      angle: (t) => view.columnAngles[t] ?? 0,
       white: () => this.sprWhite(),
     };
   }
 
   // --- The frame ------------------------------------------------------------
 
-  draw(judge: Judge, now: number, beat: number, progress: number, fb: Feedback): void {
+  draw(
+    judge: Judge,
+    now: number,
+    beat: number,
+    progress: number,
+    fb: Feedback,
+    rival?: { judge: Judge; feedback: Feedback },
+  ): void {
     if (this.lost) return;
     const { width, height, ds } = this;
     // Display changes: dpr/size changes swap in a right-sized atlas; a design-
@@ -543,96 +591,58 @@ export class GpuNoteField {
     this.hudBatch.begin(width, height); // panel text, flushed over the panel shapes
     this.shapes.begin(width, height); // HUD backgrounds over the notes
     this.underShapes.begin(width, height); // chrome/density under the notes
-    const ctx = this.makeCtx();
     const white = this.sprWhite();
 
-    // 1. Dim over the song media (the field owns the background pass; the skin
-    // chrome draws over this).
+    // 1. Dim over the song media — the ONE shared background, spanning the
+    // full canvas even when two field views render on it (live versus).
     if (white && this.media.active && this.cfg.bgDim > 0) {
       b.push(width / 2, height / 2, width, height, white, 0, 0, 0, this.cfg.bgDim);
     }
 
-    // 2. Field chrome (lane filter, danger).
-    this.skin.chrome(ctx, judge, beatPulse);
-
-    // 3. HUD under the notes (SL side panel + density graph; A3 draws nothing).
-    if (!this.cfg.bare) this.skin.hudUnderlay(ctx, judge, progress, now, beatPulse);
-
-    // 4. Beat/measure guide lines — skin opt-in, under the notes.
-    if (white && this.beatLineTimes && this.skin.beatLines) this.pushBeatLines(white);
-
-    // 5. Receptors (under holds and notes — the corrected layering).
-    for (let t = 0; t < this.numTracks; t++) {
-      const flashAge = now - (fb.laneFlash[t] ?? -1);
-      const pressed = flashAge >= 0 && flashAge < RECEPTOR_FLASH;
-      this.skin.receptor(ctx, t, pressed, beatPulse);
-    }
-
-    // 6-7. Holds, then taps/heads/mines (same windowed loops as the 2D field).
-    const notes = judge.notes;
-    this.firstVisibleIdx = advanceCursor(s, notes, this.firstVisibleIdx);
-    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
-      const n = notes[i];
-      let headY = yOf(s, n.time, n.beat);
-      if (notYet(s, headY)) break;
-      if (!shouldDrawHoldBody(n)) continue;
-      const tailY = yOf(s, n.tailTime, noteRowToBeat(n.tailRow));
-      const held = holdIsHeld(n, now);
-      if (held) headY = this.receptorY;
-      this.skin.hold(
-        ctx,
-        n.track,
-        Math.min(headY, tailY),
-        Math.max(headY, tailY),
-        held,
-        holdIsAlive(n),
-        n.isRoll,
+    // 2-9. Each field view draws view-locally; the batches' originX places it.
+    const main = this.drawView(
+      {
+        viewKey: 'main',
+        fieldLeft: this.fieldLeft,
+        numTracks: this.numTracks,
+        columnAngles: this.cfg.columnAngles,
+        meta: this.cfg.meta,
+        firstVisibleIdx: this.firstVisibleIdx,
+        lastCombo: this.lastCombo,
+        comboPopAt: this.comboPopAt,
+      },
+      0,
+      judge,
+      fb,
+      now,
+      beat,
+      progress,
+      beatPulse,
+      white,
+    );
+    this.firstVisibleIdx = main.firstVisibleIdx;
+    this.lastCombo = main.lastCombo;
+    this.comboPopAt = main.comboPopAt;
+    if (this.rival && rival) {
+      const r = this.drawView(
+        { viewKey: 'rival', ...this.rival },
+        this.viewW,
+        rival.judge,
+        rival.feedback,
+        now,
+        beat,
+        progress,
         beatPulse,
+        white,
       );
+      this.rival.firstVisibleIdx = r.firstVisibleIdx;
+      this.rival.lastCombo = r.lastCombo;
+      this.rival.comboPopAt = r.comboPopAt;
     }
-
-    for (let i = this.firstVisibleIdx; i < notes.length; i++) {
-      const n = notes[i];
-      const isHoldHead = n.note.type === TapNoteType.HoldHead;
-      const headState = isHoldHead ? holdHeadState(n, now) : null;
-      if (headState === 'gone') continue;
-      const engaged = headState === 'engaged';
-      const y = engaged ? this.receptorY : yOf(s, n.time, n.beat);
-      if (!engaged) {
-        if (notYet(s, y)) break;
-        if (passed(s, y)) continue;
-      }
-      if (!isHoldHead && !shouldDrawNote(n)) continue;
-      if (n.note.type === TapNoteType.Mine) {
-        this.skin.mine(ctx, this.laneX(n.track), y, now, beatPulse);
-      } else {
-        const quant = getNoteType(n.row);
-        const style: TapNoteStyle = isHoldHead
-          ? headState === 'dropped'
-            ? 'deadHead'
-            : 'holdHead'
-          : 'tap';
-        this.skin.note(ctx, n.track, y, quant, style, now, beat, beatPulse);
-      }
-    }
-
-    // 8. Hit explosions (additive).
-    for (let t = 0; t < this.numTracks; t++) {
-      const hit = fb.laneHit[t];
-      if (!hit) continue;
-      const age = now - hit.atSeconds;
-      if (age < 0 || age >= this.skin.explosionSeconds) continue;
-      this.skin.explosion(ctx, t, hit.tns, age / this.skin.explosionSeconds);
-    }
-
-    // 9. Judgment + combo (both skins) + A3 gauge/panels, over the notes.
-    if (!this.cfg.bare) {
-      if (judge.combo !== this.lastCombo) {
-        if (judge.combo > this.lastCombo) this.comboPopAt = now;
-        this.lastCombo = judge.combo;
-      }
-      this.skin.hudOverlay(ctx, judge, progress, fb, now, beatPulse, this.comboPopAt);
-    }
+    b.originX = 0;
+    this.hudBatch.originX = 0;
+    this.shapes.originX = 0;
+    this.underShapes.originX = 0;
 
     // --- Encode ---------------------------------------------------------------
     try {
@@ -659,6 +669,123 @@ export class GpuNoteField {
     }
   }
 
+  /** Render one field view (chrome -> HUD -> notes -> explosions -> overlay)
+   *  view-locally; originX places it on the shared canvas. Returns the view's
+   *  advanced cursor/combo state (the caller persists it). */
+  private drawView(
+    view: {
+      viewKey: string;
+      fieldLeft: number;
+      numTracks: number;
+      columnAngles: readonly number[];
+      meta: RenderMeta;
+      firstVisibleIdx: number;
+      lastCombo: number;
+      comboPopAt: number;
+    },
+    originX: number,
+    judge: Judge,
+    fb: Feedback,
+    now: number,
+    beat: number,
+    progress: number,
+    beatPulse: number,
+    white: ReturnType<GpuNoteField['sprWhite']>,
+  ): { firstVisibleIdx: number; lastCombo: number; comboPopAt: number } {
+    this.batch.originX = originX;
+    this.hudBatch.originX = originX;
+    this.shapes.originX = originX;
+    this.underShapes.originX = originX;
+    const ctx = this.makeCtx(view);
+    const s = this.scroll;
+
+    // 2. Field chrome (lane filter, danger).
+    this.skin.chrome(ctx, judge, beatPulse);
+
+    // 3. HUD under the notes (SL side panel + density graph; A3 draws nothing).
+    if (!this.cfg.bare) this.skin.hudUnderlay(ctx, judge, progress, now, beatPulse);
+
+    // 4. Beat/measure guide lines — skin opt-in, under the notes.
+    if (white && this.beatLineTimes && this.skin.beatLines) {
+      this.pushBeatLines(white, view.fieldLeft, view.numTracks);
+    }
+
+    // 5. Receptors (under holds and notes — the corrected layering).
+    for (let t = 0; t < view.numTracks; t++) {
+      const flashAge = now - (fb.laneFlash[t] ?? -1);
+      const pressed = flashAge >= 0 && flashAge < RECEPTOR_FLASH;
+      this.skin.receptor(ctx, t, pressed, beatPulse);
+    }
+
+    // 6-7. Holds, then taps/heads/mines (same windowed loops as the 2D field).
+    const notes = judge.notes;
+    const firstVisibleIdx = advanceCursor(s, notes, view.firstVisibleIdx);
+    for (let i = firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
+      let headY = yOf(s, n.time, n.beat);
+      if (notYet(s, headY)) break;
+      if (!shouldDrawHoldBody(n)) continue;
+      const tailY = yOf(s, n.tailTime, noteRowToBeat(n.tailRow));
+      const held = holdIsHeld(n, now);
+      if (held) headY = this.receptorY;
+      this.skin.hold(
+        ctx,
+        n.track,
+        Math.min(headY, tailY),
+        Math.max(headY, tailY),
+        held,
+        holdIsAlive(n),
+        n.isRoll,
+        beatPulse,
+      );
+    }
+
+    for (let i = firstVisibleIdx; i < notes.length; i++) {
+      const n = notes[i];
+      const isHoldHead = n.note.type === TapNoteType.HoldHead;
+      const headState = isHoldHead ? holdHeadState(n, now) : null;
+      if (headState === 'gone') continue;
+      const engaged = headState === 'engaged';
+      const y = engaged ? this.receptorY : yOf(s, n.time, n.beat);
+      if (!engaged) {
+        if (notYet(s, y)) break;
+        if (passed(s, y)) continue;
+      }
+      if (!isHoldHead && !shouldDrawNote(n)) continue;
+      if (n.note.type === TapNoteType.Mine) {
+        this.skin.mine(ctx, ctx.laneX(n.track), y, now, beatPulse);
+      } else {
+        const quant = getNoteType(n.row);
+        const style: TapNoteStyle = isHoldHead
+          ? headState === 'dropped'
+            ? 'deadHead'
+            : 'holdHead'
+          : 'tap';
+        this.skin.note(ctx, n.track, y, quant, style, now, beat, beatPulse);
+      }
+    }
+
+    // 8. Hit explosions (additive).
+    for (let t = 0; t < view.numTracks; t++) {
+      const hit = fb.laneHit[t];
+      if (!hit) continue;
+      const age = now - hit.atSeconds;
+      if (age < 0 || age >= this.skin.explosionSeconds) continue;
+      this.skin.explosion(ctx, t, hit.tns, age / this.skin.explosionSeconds);
+    }
+
+    // 9. Judgment + combo (both skins) + A3 gauge/panels, over the notes.
+    let { lastCombo, comboPopAt } = view;
+    if (!this.cfg.bare) {
+      if (judge.combo !== lastCombo) {
+        if (judge.combo > lastCombo) comboPopAt = now;
+        lastCombo = judge.combo;
+      }
+      this.skin.hudOverlay(ctx, judge, progress, fb, now, beatPulse, comboPopAt);
+    }
+    return { firstVisibleIdx, lastCombo, comboPopAt };
+  }
+
   // --- Pass builders ----------------------------------------------------------
 
   /**
@@ -669,15 +796,19 @@ export class GpuNoteField {
    * with the final interval (only C-mod under a BPM change reads them; X/M
    * ignore time entirely).
    */
-  private pushBeatLines(white: NonNullable<ReturnType<GpuNoteField['sprWhite']>>): void {
+  private pushBeatLines(
+    white: NonNullable<ReturnType<GpuNoteField['sprWhite']>>,
+    fieldLeft: number,
+    numTracks: number,
+  ): void {
     const b = this.batch;
     const s = this.scroll;
     const { ds, height } = this;
     const times = this.beatLineTimes;
     if (!times) return;
     const nb = s.nowBeat;
-    const w = this.numTracks * this.colW + 28 * ds; // span the lane-cover width
-    const cx = this.fieldLeft + (this.numTracks * this.colW) / 2;
+    const w = numTracks * this.colW + 28 * ds; // span the lane-cover width
+    const cx = fieldLeft + (numTracks * this.colW) / 2;
     const cull = 40 * ds;
     const last = times.length - 1;
     const dLast = last >= 1 ? times[last] - times[last - 1] : 0.5;
