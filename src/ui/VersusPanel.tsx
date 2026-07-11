@@ -23,8 +23,7 @@ import { resolveBackground } from '../io/bgVideo';
 import type { LibraryEntry } from '../io/songFiles';
 import { readSongAudio } from '../io/songFiles';
 import { getIdentity } from '../net/identity';
-import type { ChartRef } from '../net/protocol';
-import { CODE_ARROWS, CODE_LENGTH, codeToArrows } from '../net/versus';
+import { CODE_ARROWS, CODE_LENGTH, codeToArrows, type VersusSongRef } from '../net/versus';
 import { VersusMatch } from '../net/versusMatch';
 import {
   createRoom,
@@ -166,17 +165,21 @@ export function VersusPanel({
       fail('NO CHART ON THIS DIFFICULTY');
       return;
     }
-    const chartRef: ChartRef = {
-      chartHash: chartKey(loaded.song, chart),
+    // The room advertises the whole song (every chart hash) so the joiner can
+    // resolve their copy by any-hash match and pick their own difficulty.
+    const songRef: VersusSongRef = {
       title: loaded.song.displayFullTitle || 'Untitled',
       artist: loaded.song.artist,
-      stepsType: chart.stepsType,
-      difficulty: chart.difficulty,
-      meter: chart.meter,
+      charts: loaded.song.charts.map((c) => ({
+        chartHash: chartKey(loaded.song, c),
+        stepsType: c.stepsType,
+        difficulty: c.difficulty,
+        meter: c.meter,
+      })),
     };
     const musicRate = settings.musicRate;
     playSourceRef.current = { entry: loaded, chart, musicRate };
-    const hosted = await createRoom(getIdentity().name, chartRef, musicRate);
+    const hosted = await createRoom(getIdentity().name, songRef, musicRate);
     if (!hosted) {
       fail('VERSUS UNAVAILABLE (SERVER OFFLINE?)');
       return;
@@ -198,9 +201,15 @@ export function VersusPanel({
       fail('ROOM NOT FOUND (OR EXPIRED)');
       return;
     }
-    const local = findChartByHash(room.chart.chartHash);
+    // Any-hash match: find the local copy of the host's song, then default to
+    // the local chart matching one of the advertised hashes.
+    let local: { entry: LibraryEntry; chart: Steps } | null = null;
+    for (const meta of room.song.charts) {
+      local = findChartByHash(meta.chartHash);
+      if (local) break;
+    }
     if (!local) {
-      fail(`CHART NOT IN YOUR LIBRARY — ${room.chart.title}`);
+      fail(`SONG NOT IN YOUR LIBRARY — ${room.song.title}`);
       return;
     }
     playSourceRef.current = { entry: local.entry, chart: local.chart, musicRate: room.musicRate };
@@ -248,7 +257,15 @@ export function VersusPanel({
   };
 
   const readyUp = () => {
-    matchRef.current?.ready();
+    const src = playSourceRef.current;
+    if (!src) return;
+    // Readying pins the chart pick in the same frame (no pick/ready race).
+    matchRef.current?.ready({
+      chartHash: chartKey(src.entry.song, src.chart),
+      stepsType: src.chart.stepsType,
+      difficulty: src.chart.difficulty,
+      meter: src.chart.meter,
+    });
     setTick((t) => t + 1);
   };
 

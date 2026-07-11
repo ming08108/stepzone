@@ -48,7 +48,7 @@ export function createSignalHandlers(
       }
       return json(200, {
         hostName: room.hostName,
-        chart: room.chart,
+        song: room.song,
         musicRate: room.musicRate,
         offer: room.offer,
       });
@@ -73,7 +73,7 @@ export function createSignalHandlers(
           const ok = await store.create({
             code,
             hostName: msg.hostName,
-            chart: msg.chart,
+            song: msg.song,
             musicRate: msg.musicRate,
             offer: msg.offer,
             answer: null,

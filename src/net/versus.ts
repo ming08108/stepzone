@@ -13,8 +13,8 @@
  * fake channels in Node tests.
  */
 
-import type { ChartRef, PlayResult } from './protocol';
-import { parseChartRef, parsePlayResult } from './protocol';
+import type { PlayResult } from './protocol';
+import { parsePlayResult } from './protocol';
 
 // ---- room codes ---------------------------------------------------------------
 
@@ -38,6 +38,61 @@ export function codeToArrows(code: string): string {
   return [...code].map((c) => glyph[c] ?? c).join(' ');
 }
 
+// ---- song / chart identity --------------------------------------------------------
+
+/** One chart's identity + display meta inside a room's song descriptor. */
+export interface VersusChartMeta {
+  /** chartContentHash — binds the pick to exact note/timing content. */
+  chartHash: string;
+  stepsType: string;
+  /** Difficulty enum value (song/difficulty). */
+  difficulty: number;
+  meter: number;
+}
+
+/**
+ * A room identifies a SONG, not one chart: every chart hash the host's copy
+ * has, so a joiner can resolve their local copy by ANY hash match and each
+ * player then picks their own difficulty (arcade style).
+ */
+export interface VersusSongRef {
+  title: string;
+  artist: string;
+  charts: VersusChartMeta[];
+}
+
+export const MAX_ROOM_CHARTS = 32;
+
+const str = (v: unknown, max: number): v is string =>
+  typeof v === 'string' && v.length > 0 && v.length <= max;
+
+export function parseVersusChartMeta(v: unknown): VersusChartMeta | null {
+  if (!isObj(v)) return null;
+  if (!str(v.chartHash, 64) || !str(v.stepsType, 64)) return null;
+  if (!num(v.difficulty) || !Number.isInteger(v.difficulty)) return null;
+  if (!num(v.meter) || !Number.isInteger(v.meter) || v.meter < 0 || v.meter > 100) return null;
+  return {
+    chartHash: v.chartHash,
+    stepsType: v.stepsType,
+    difficulty: v.difficulty,
+    meter: v.meter,
+  };
+}
+
+export function parseVersusSongRef(v: unknown): VersusSongRef | null {
+  if (!isObj(v)) return null;
+  if (!str(v.title, 256) || typeof v.artist !== 'string' || v.artist.length > 256) return null;
+  if (!Array.isArray(v.charts) || v.charts.length === 0 || v.charts.length > MAX_ROOM_CHARTS)
+    return null;
+  const charts: VersusChartMeta[] = [];
+  for (const c of v.charts) {
+    const meta = parseVersusChartMeta(c);
+    if (!meta) return null;
+    charts.push(meta);
+  }
+  return { title: v.title, artist: v.artist, charts };
+}
+
 // ---- data-channel messages ------------------------------------------------------
 
 /** Live scoreboard sample, sent both ways at a few Hz while playing. */
@@ -54,7 +109,8 @@ export interface VersusSnap {
 
 export type PeerMsg =
   | { t: 'hello'; name: string }
-  | { t: 'ready' }
+  | { t: 'pick'; pick: VersusChartMeta } // advisory — lobby display while browsing
+  | { t: 'ready'; pick: VersusChartMeta } // readying PINS the pick (same frame — no race)
   | { t: 'load' } // host -> joiner: both ready, prepare your session
   | { t: 'loaded' }
   | { t: 'ping'; at: number } // host RTT probe (echoed timestamps, host clock)
@@ -97,7 +153,11 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
       return typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 24
         ? { t: 'hello', name: v.name }
         : null;
-    case 'ready':
+    case 'pick':
+    case 'ready': {
+      const pick = parseVersusChartMeta(v.pick);
+      return pick ? { t: v.t, pick } : null;
+    }
     case 'load':
     case 'loaded':
     case 'bye':
@@ -128,7 +188,7 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
 export interface SignalRoom {
   code: string;
   hostName: string;
-  chart: ChartRef;
+  song: VersusSongRef;
   musicRate: number;
   offer: string; // complete (non-trickle) SDP
   answer: string | null;
@@ -144,7 +204,7 @@ export type SignalRequest =
   | {
       t: 'create';
       hostName: string;
-      chart: ChartRef;
+      song: VersusSongRef;
       musicRate: number;
       offer: string;
     }
@@ -156,10 +216,10 @@ export function parseSignalRequest(v: unknown): SignalRequest | null {
   const sdp = (s: unknown): s is string =>
     typeof s === 'string' && s.length > 0 && s.length <= MAX_SDP_LENGTH;
   if (v.t === 'create') {
-    const chart = parseChartRef(v.chart);
-    if (!chart || !name(v.hostName) || !sdp(v.offer)) return null;
+    const song = parseVersusSongRef(v.song);
+    if (!song || !name(v.hostName) || !sdp(v.offer)) return null;
     if (!num(v.musicRate) || v.musicRate < 0.5 || v.musicRate > 3) return null;
-    return { t: 'create', hostName: v.hostName, chart, musicRate: v.musicRate, offer: v.offer };
+    return { t: 'create', hostName: v.hostName, song, musicRate: v.musicRate, offer: v.offer };
   }
   if (v.t === 'answer') {
     if (!isRoomCode(v.code) || !name(v.joinerName) || !sdp(v.answer)) return null;

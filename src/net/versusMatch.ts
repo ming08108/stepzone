@@ -20,7 +20,7 @@
  */
 
 import type { PlayResult } from './protocol';
-import { parsePeerMsg, type PeerMsg, type VersusSnap } from './versus';
+import { parsePeerMsg, type PeerMsg, type VersusChartMeta, type VersusSnap } from './versus';
 
 /** Transport seam: the app passes an RTCDataChannel adapter, tests pass fakes. */
 export interface PeerChannel {
@@ -33,6 +33,8 @@ export type MatchPhase = 'connecting' | 'lobby' | 'loading' | 'playing' | 'done'
 export interface OpponentState {
   name: string | null;
   ready: boolean;
+  /** Their chart choice: advisory while browsing, PINNED by their ready frame. */
+  pick: VersusChartMeta | null;
   loaded: boolean;
   snap: VersusSnap | null;
   result: PlayResult | null;
@@ -48,6 +50,7 @@ export class VersusMatch {
   readonly opponent: OpponentState = {
     name: null,
     ready: false,
+    pick: null,
     loaded: false,
     snap: null,
     result: null,
@@ -64,6 +67,7 @@ export class VersusMatch {
   onGo?: (delayMs: number) => void;
 
   private selfReady = false;
+  private selfPickValue: VersusChartMeta | null = null;
   private selfLoaded = false;
   private selfResult: PlayResult | null = null;
   private snapSeq = 0;
@@ -104,8 +108,17 @@ export class VersusMatch {
         if (this.phase === 'connecting') this.phase = 'lobby';
         this.update();
         break;
+      case 'pick':
+        // Advisory while browsing; a repick after their ready frame is
+        // hostile/duplicate and must not unpin the committed choice.
+        if (!this.opponent.ready) {
+          this.opponent.pick = msg.pick;
+          this.update();
+        }
+        break;
       case 'ready':
         this.opponent.ready = true;
+        this.opponent.pick = msg.pick; // the frame that counts (ordered channel)
         this.maybeRequestLoad();
         this.update();
         break;
@@ -166,13 +179,25 @@ export class VersusMatch {
 
   // ---- local player actions ------------------------------------------------------
 
-  /** The local player confirmed on the ready screen. */
-  ready(): void {
+  /** Broadcast the chart being browsed (lobby display only; no-op once ready). */
+  sendPick(pick: VersusChartMeta): void {
+    if (this.selfReady || (this.phase !== 'lobby' && this.phase !== 'connecting')) return;
+    this.selfPickValue = pick;
+    this.send({ t: 'pick', pick });
+  }
+
+  /** The local player confirmed — pins their chart pick in the same frame. */
+  ready(pick: VersusChartMeta): void {
     if (this.selfReady || this.phase !== 'lobby') return;
     this.selfReady = true;
-    this.send({ t: 'ready' });
+    this.selfPickValue = pick;
+    this.send({ t: 'ready', pick });
     this.maybeRequestLoad();
     this.update();
+  }
+
+  get selfPick(): VersusChartMeta | null {
+    return this.selfPickValue;
   }
 
   /** The local session finished prepare() (audio decoded, GPU up). */

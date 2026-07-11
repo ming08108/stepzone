@@ -11,8 +11,7 @@
  * "could not connect" rather than hanging forever.
  */
 
-import type { ChartRef } from './protocol';
-import { parseChartRef } from './protocol';
+import { parseVersusSongRef, type VersusSongRef } from './versus';
 
 const API_URL = '/api/versus';
 const RTC_CONFIG: RTCConfiguration = {
@@ -31,7 +30,7 @@ export interface VersusConnection {
 
 export interface RoomInfo {
   hostName: string;
-  chart: ChartRef;
+  song: VersusSongRef;
   musicRate: number;
   offer: string;
 }
@@ -85,7 +84,7 @@ export interface HostedRoom {
 /** Create a room: returns the arrow code immediately, the peer later. */
 export async function createRoom(
   hostName: string,
-  chart: ChartRef,
+  song: VersusSongRef,
   musicRate: number,
 ): Promise<HostedRoom | null> {
   const pc = new RTCPeerConnection(RTC_CONFIG);
@@ -96,7 +95,7 @@ export async function createRoom(
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ t: 'create', hostName, chart, musicRate, offer }),
+      body: JSON.stringify({ t: 'create', hostName, song, musicRate, offer }),
     });
     if (!res.ok) throw new Error(`signaling ${res.status}`);
     const { code } = (await res.json()) as { code: string };
@@ -137,10 +136,10 @@ export async function fetchRoom(code: string): Promise<RoomInfo | null> {
     const res = await fetch(`${API_URL}?code=${code}`);
     if (!res.ok) return null;
     const body = (await res.json()) as Record<string, unknown>;
-    const chart = parseChartRef(body.chart);
-    if (!chart || typeof body.offer !== 'string' || typeof body.hostName !== 'string') return null;
+    const song = parseVersusSongRef(body.song);
+    if (!song || typeof body.offer !== 'string' || typeof body.hostName !== 'string') return null;
     const musicRate = typeof body.musicRate === 'number' ? body.musicRate : 1;
-    return { hostName: body.hostName, chart, musicRate, offer: body.offer };
+    return { hostName: body.hostName, song, musicRate, offer: body.offer };
   } catch {
     return null;
   }

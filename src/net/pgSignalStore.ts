@@ -12,10 +12,10 @@ import type { AnswerOutcome, SignalStore } from './signalStore';
 
 type Sql = ReturnType<typeof neon>;
 
-const SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms (
+const SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms2 (
   code        TEXT PRIMARY KEY,
   host_name   TEXT NOT NULL,
-  chart       JSONB NOT NULL,
+  song        JSONB NOT NULL,
   music_rate  DOUBLE PRECISION NOT NULL,
   offer       TEXT NOT NULL,
   answer      TEXT,
@@ -26,7 +26,7 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms (
 interface RoomRow {
   code: string;
   host_name: string;
-  chart: SignalRoom['chart'];
+  song: SignalRoom['song'];
   music_rate: number;
   offer: string;
   answer: string | null;
@@ -50,18 +50,18 @@ export class PgSignalStore implements SignalStore {
   async create(room: SignalRoom): Promise<boolean> {
     await this.ensureSchema();
     // Reap expired rows so codes recycle and the table stays tiny.
-    await this.sql.query(`DELETE FROM net_versus_rooms WHERE created_at < $1`, [
+    await this.sql.query(`DELETE FROM net_versus_rooms2 WHERE created_at < $1`, [
       room.createdAt - ROOM_TTL_MS,
     ]);
     const rows = (await this.sql.query(
-      `INSERT INTO net_versus_rooms (code, host_name, chart, music_rate, offer, created_at)
+      `INSERT INTO net_versus_rooms2 (code, host_name, song, music_rate, offer, created_at)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (code) DO NOTHING
        RETURNING code`,
       [
         room.code,
         room.hostName,
-        JSON.stringify(room.chart),
+        JSON.stringify(room.song),
         room.musicRate,
         room.offer,
         room.createdAt,
@@ -73,7 +73,7 @@ export class PgSignalStore implements SignalStore {
   async get(code: string, now: number): Promise<SignalRoom | null> {
     await this.ensureSchema();
     const rows = (await this.sql.query(
-      `SELECT * FROM net_versus_rooms WHERE code = $1 AND created_at > $2`,
+      `SELECT * FROM net_versus_rooms2 WHERE code = $1 AND created_at > $2`,
       [code, now - ROOM_TTL_MS],
     )) as RoomRow[];
     const r = rows[0];
@@ -81,7 +81,7 @@ export class PgSignalStore implements SignalStore {
     return {
       code: r.code,
       hostName: r.host_name,
-      chart: r.chart,
+      song: r.song,
       musicRate: r.music_rate,
       offer: r.offer,
       answer: r.answer,
@@ -98,7 +98,7 @@ export class PgSignalStore implements SignalStore {
   ): Promise<AnswerOutcome> {
     await this.ensureSchema();
     const claimed = (await this.sql.query(
-      `UPDATE net_versus_rooms SET answer = $2, joiner_name = $3
+      `UPDATE net_versus_rooms2 SET answer = $2, joiner_name = $3
        WHERE code = $1 AND answer IS NULL AND created_at > $4
        RETURNING code`,
       [code, answer, joinerName, now - ROOM_TTL_MS],

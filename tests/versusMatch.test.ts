@@ -5,7 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { PlayResult } from '../src/net/protocol';
-import { codeToArrows, isRoomCode, parsePeerMsg, randomRoomCode } from '../src/net/versus';
+import {
+  codeToArrows,
+  isRoomCode,
+  parsePeerMsg,
+  randomRoomCode,
+  type VersusChartMeta,
+} from '../src/net/versus';
 import { VersusMatch, type PeerChannel } from '../src/net/versusMatch';
 
 /** Two buffering channels that deliver to the opposite match once attached. */
@@ -39,6 +45,13 @@ function wire(opts?: { hostNow?: () => number }) {
   return { host, joiner };
 }
 
+const pick = (meter = 5, difficulty = 3): VersusChartMeta => ({
+  chartHash: 'hash-' + meter,
+  stepsType: 'dance-single',
+  difficulty,
+  meter,
+});
+
 const result = (percent: number): PlayResult => ({
   percent,
   grade: 'A',
@@ -53,8 +66,8 @@ function toPlaying(pair: ReturnType<typeof wire>) {
   const goDelays: number[] = [];
   pair.host.onGo = (d) => goDelays.push(d);
   pair.joiner.onGo = (d) => goDelays.push(d);
-  pair.host.ready();
-  pair.joiner.ready();
+  pair.host.ready(pick(5));
+  pair.joiner.ready(pick(8));
   pair.host.loaded();
   pair.joiner.loaded();
   return goDelays;
@@ -85,9 +98,9 @@ describe('VersusMatch flow', () => {
     let joinerLoad = 0;
     host.onLoadRequested = () => hostLoad++;
     joiner.onLoadRequested = () => joinerLoad++;
-    host.ready();
+    host.ready(pick());
     expect(hostLoad + joinerLoad).toBe(0); // waiting on the joiner
-    joiner.ready();
+    joiner.ready(pick());
     expect(hostLoad).toBe(1);
     expect(joinerLoad).toBe(1);
     expect(host.phase).toBe('loading');
@@ -149,6 +162,49 @@ describe('VersusMatch flow', () => {
     expect(pair.host.opponent.left).toBe(true);
     pair.host.finish(result(0.9));
     expect(pair.host.phase).toBe('done');
+  });
+
+  it('relays advisory picks into the lobby and the ready frame pins them', () => {
+    const { host, joiner } = wire();
+    joiner.sendPick(pick(4, 1));
+    expect(host.opponent.pick?.meter).toBe(4); // browsing shows live
+    joiner.sendPick(pick(6, 2));
+    expect(host.opponent.pick?.meter).toBe(6);
+    joiner.ready(pick(9, 4)); // the frame that counts
+    expect(host.opponent.pick?.meter).toBe(9);
+    // A (hostile/duplicate) repick after ready must not unpin the choice.
+    host.handleMessage(JSON.stringify({ t: 'pick', pick: pick(2, 0) }));
+    expect(host.opponent.pick?.meter).toBe(9);
+    // And the readied side refuses to send further picks.
+    joiner.sendPick(pick(2, 0));
+    expect(host.opponent.pick?.meter).toBe(9);
+    expect(joiner.selfPick?.meter).toBe(9);
+  });
+
+  it('different difficulties still reach a synced start', () => {
+    const pair = wire();
+    pair.host.sendPick(pick(5, 2));
+    pair.joiner.sendPick(pick(11, 4));
+    toPlaying(pair); // host readies meter 5, joiner meter 8 (helper defaults)
+    expect(pair.host.phase).toBe('playing');
+    expect(pair.joiner.phase).toBe('playing');
+    expect(pair.host.opponent.pick?.meter).toBe(8);
+    expect(pair.joiner.opponent.pick?.meter).toBe(5);
+  });
+
+  it('rejects malformed pick/ready frames', () => {
+    expect(parsePeerMsg(JSON.stringify({ t: 'ready' }))).toBeNull(); // pick is mandatory
+    expect(
+      parsePeerMsg(JSON.stringify({ t: 'pick', pick: { chartHash: '', meter: 5 } })),
+    ).toBeNull();
+    expect(
+      parsePeerMsg(
+        JSON.stringify({
+          t: 'pick',
+          pick: { chartHash: 'h', stepsType: 'dance-single', difficulty: 3, meter: 5.5 },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it('ignores garbage and unknown frames from the peer', () => {

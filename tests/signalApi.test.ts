@@ -5,8 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSignalHandlers, type SignalHandlers } from '../src/net/signalApi';
 import { MemorySignalStore } from '../src/net/signalStore';
-import { isRoomCode, ROOM_TTL_MS } from '../src/net/versus';
-import { validSubmit } from './netProtocol.test';
+import { isRoomCode, MAX_ROOM_CHARTS, ROOM_TTL_MS } from '../src/net/versus';
 
 const URL_BASE = 'http://test/api/versus';
 
@@ -21,11 +20,20 @@ beforeEach(() => {
 const post = (body: unknown) =>
   handlers.POST(new Request(URL_BASE, { method: 'POST', body: JSON.stringify(body) }));
 
+const songRef = () => ({
+  title: 'Song',
+  artist: 'Artist',
+  charts: [
+    { chartHash: 'aaa111', stepsType: 'dance-single', difficulty: 2, meter: 5 },
+    { chartHash: 'bbb222', stepsType: 'dance-single', difficulty: 4, meter: 9 },
+  ],
+});
+
 async function createRoom(): Promise<string> {
   const res = await post({
     t: 'create',
     hostName: 'HOST',
-    chart: validSubmit().chart,
+    song: songRef(),
     musicRate: 1,
     offer: 'v=0 fake-offer-sdp',
   });
@@ -43,7 +51,8 @@ describe('versus signaling', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.hostName).toBe('HOST');
     expect(body.offer).toBe('v=0 fake-offer-sdp');
-    expect((body.chart as { chartHash: string }).chartHash).toBe(validSubmit().chart.chartHash);
+    const song = body.song as { charts: { chartHash: string }[] };
+    expect(song.charts.map((c) => c.chartHash)).toEqual(['aaa111', 'bbb222']);
   });
 
   it('host poll sees nulls until the joiner answers, then the answer', async () => {
@@ -80,6 +89,29 @@ describe('versus signaling', () => {
 
   it('rejects malformed requests', async () => {
     expect((await post({ t: 'create', hostName: '' })).status).toBe(400);
+    expect(
+      (
+        await post({
+          t: 'create',
+          hostName: 'H',
+          song: { ...songRef(), charts: [] },
+          musicRate: 1,
+          offer: 's',
+        })
+      ).status,
+    ).toBe(400);
+    const tooMany = {
+      ...songRef(),
+      charts: Array.from({ length: MAX_ROOM_CHARTS + 1 }, (_, i) => ({
+        chartHash: 'h' + i,
+        stepsType: 'dance-single',
+        difficulty: 2,
+        meter: 5,
+      })),
+    };
+    expect(
+      (await post({ t: 'create', hostName: 'H', song: tooMany, musicRate: 1, offer: 's' })).status,
+    ).toBe(400);
     expect((await post({ t: 'answer', code: 'nope', joinerName: 'X', answer: 's' })).status).toBe(
       400,
     );
