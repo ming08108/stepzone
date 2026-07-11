@@ -7,8 +7,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createHandlers, type ScoresHandlers } from '../src/net/scoresApi';
 import { MemoryScoreStore } from '../src/net/scoreStore';
-import type { LeaderboardResponse, SubmitScoreRequest } from '../src/net/protocol';
-import { validSubmit } from './netProtocol.test';
+import type { LeaderboardResponse, ReplayEvent, SubmitScoreRequest } from '../src/net/protocol';
+import { sampleReplay, validSubmit } from './netProtocol.test';
 
 const URL_BASE = 'http://test/api/scores';
 
@@ -104,6 +104,63 @@ describe('POST /api/scores', () => {
     expect((await post(handlers, 'not json{{')).status).toBe(400);
     expect((await post(handlers, { nope: true })).status).toBe(400);
     expect((await post(handlers, { ...play({}), musicRate: 99 })).status).toBe(400);
+  });
+});
+
+describe('POST /api/scores — anti-cheat', () => {
+  it('rejects a keyboard device and a missing input', async () => {
+    const kb = { ...validSubmit(), input: { device: 'keyboard', padId: 'kb', padKnown: false } };
+    expect((await post(handlers, kb)).status).toBe(400);
+    const noInput = { ...validSubmit() } as Record<string, unknown>;
+    delete noInput.input;
+    expect((await post(handlers, noInput)).status).toBe(400);
+  });
+
+  it('rejects a malformed / missing replay', async () => {
+    const bad: ReplayEvent[] = [
+      { t: 1, track: 0, up: false },
+      { t: 0, track: 0, up: false }, // time goes backwards
+    ];
+    expect((await post(handlers, { ...validSubmit(), replay: bad })).status).toBe(400);
+    const noReplay = { ...validSubmit() } as Record<string, unknown>;
+    delete noReplay.replay;
+    expect((await post(handlers, noReplay)).status).toBe(400);
+  });
+
+  it('rejects a v1 submission outright', async () => {
+    expect((await post(handlers, { ...validSubmit(), protocol: 1 })).status).toBe(400);
+  });
+
+  it('rejects a replay with fewer presses than the combo', async () => {
+    // maxCombo 100 (allowed by the 100 judged taps), but only 50 presses logged.
+    const sub = { ...validSubmit(), replay: sampleReplay(50) };
+    expect((await post(handlers, sub)).status).toBe(400);
+  });
+
+  it('rejects a replay collapsed into an implausibly short span', async () => {
+    // 100 presses (covers the combo) but crammed into < 5 s with 95 judged taps.
+    const crammed: ReplayEvent[] = Array.from({ length: 100 }, (_, i) => ({
+      t: Math.round(i * 0.001 * 1e4) / 1e4,
+      track: i % 4,
+      up: false,
+    }));
+    expect((await post(handlers, { ...validSubmit(), replay: crammed })).status).toBe(400);
+  });
+
+  it('stores the replay on a personal best and serves it via replayOf', async () => {
+    const res = await post(handlers, play({ playerId: 'a', percent: 0.9 }));
+    expect(res.status).toBe(200);
+    expect((await board(handlers, 'abc123')).rows[0].hasReplay).toBe(true);
+
+    const got = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&replayOf=a`));
+    expect(got.status).toBe(200);
+    const body = (await got.json()) as { replay: ReplayEvent[] };
+    expect(body.replay).toEqual(validSubmit().replay);
+  });
+
+  it('404s a replay request for a player with none stored', async () => {
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&replayOf=z`));
+    expect(res.status).toBe(404);
   });
 });
 

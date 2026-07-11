@@ -44,8 +44,8 @@ function queued(): unknown[] {
 }
 
 function play(percent = 0.9): PendingPlay {
-  const { chart, musicRate, result } = validSubmit();
-  return { chart, musicRate, result: { ...result, percent } };
+  const { chart, musicRate, result, input, replay } = validSubmit();
+  return { chart, musicRate, result: { ...result, percent }, input, replay };
 }
 
 const okBody = { ok: true, rank: 1, isPersonalBest: true };
@@ -65,9 +65,11 @@ describe('submitScore', () => {
     expect(await submitScore(play())).toEqual(okBody);
     expect(queued()).toHaveLength(0);
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
-    expect(body.protocol).toBe(1);
+    expect(body.protocol).toBe(2);
     expect(typeof body.playerId).toBe('string');
     expect(body.result.percent).toBe(0.9);
+    expect(body.input.device).toBe('pad');
+    expect(Array.isArray(body.replay)).toBe(true);
   });
 
   it('parks the play when offline and flushQueue delivers it later', async () => {

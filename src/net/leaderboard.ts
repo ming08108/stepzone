@@ -17,15 +17,28 @@ import type {
   GhostFrame,
   LeaderboardResponse,
   PlayResult,
+  ReplayEvent,
+  SubmitInput,
   SubmitScoreRequest,
   SubmitScoreResponse,
 } from './protocol';
-import { parseChartRef, parseGhost, parsePlayResult, PROTOCOL_VERSION } from './protocol';
+import {
+  parseChartRef,
+  parseGhost,
+  parsePlayResult,
+  parseReplay,
+  parseSubmitInput,
+  PROTOCOL_VERSION,
+} from './protocol';
 
 export interface PendingPlay {
   chart: ChartRef;
   musicRate: number;
   result: PlayResult;
+  /** Device the play ran on — a pad (keyboard plays are never queued). */
+  input: SubmitInput;
+  /** Full input log of the play; the server checks + stores it on a PB. */
+  replay: ReplayEvent[];
   /** Scoreboard timeline for race-the-ghost; kept server-side on a PB. */
   ghost?: GhostFrame[];
 }
@@ -42,10 +55,14 @@ function loadQueue(): PendingPlay[] {
     if (!isRecord(v) || typeof v.musicRate !== 'number') continue;
     const chart = parseChartRef(v.chart);
     const result = parsePlayResult(v.result);
-    if (!chart || !result) continue;
+    // input + replay are required in v2 — a queued v1 play (no input/replay)
+    // fails here and is dropped rather than submitted without its evidence.
+    const input = parseSubmitInput(v.input);
+    const replay = parseReplay(v.replay);
+    if (!chart || !result || !input || !replay) continue;
     // A corrupt parked ghost drops the ghost, not the play.
     const ghost = v.ghost !== undefined ? parseGhost(v.ghost) : null;
-    out.push({ chart, musicRate: v.musicRate, result, ...(ghost ? { ghost } : {}) });
+    out.push({ chart, musicRate: v.musicRate, result, input, replay, ...(ghost ? { ghost } : {}) });
   }
   return out;
 }
@@ -67,6 +84,8 @@ function toRequest(play: PendingPlay): SubmitScoreRequest {
       ...play.result,
       percent: Math.max(0, Math.min(1, play.result.percent)),
     },
+    input: play.input,
+    replay: play.replay,
     ...(play.ghost && play.ghost.length > 0 ? { ghost: play.ghost } : {}),
   };
 }
@@ -155,6 +174,25 @@ export async function fetchGhost(
     if (!res.ok) return null;
     const body = (await res.json()) as { ghost?: unknown };
     return parseGhost(body.ghost);
+  } catch {
+    return null;
+  }
+}
+
+/** The stored replay of one player's best on a board; null when absent/offline. */
+export async function fetchReplay(
+  chartHash: string,
+  musicRate: number,
+  playerId: string,
+): Promise<ReplayEvent[] | null> {
+  try {
+    const url =
+      `${API_URL}?chartHash=${encodeURIComponent(chartHash)}` +
+      `&rate=${musicRate}&replayOf=${encodeURIComponent(playerId)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { replay?: unknown };
+    return parseReplay(body.replay);
   } catch {
     return null;
   }

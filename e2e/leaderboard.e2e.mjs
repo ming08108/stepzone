@@ -81,12 +81,24 @@ try {
   step('song select queries the board for the highlighted chart', !!chartHash, `hash ${chartHash}`);
 
   // 2. Seed two players through the real POST endpoint (RIVAL has a ghost).
+  // v2 anti-cheat: every submission declares a pad and carries a plausible
+  // replay (enough presses for the combo, spanning real play time).
+  const seedReplay = () => {
+    const events = [];
+    for (let i = 0; i < 60; i++) {
+      const t = 1 + i * 0.5;
+      events.push({ t, track: i % 4, up: false }, { t: t + 0.05, track: i % 4, up: true });
+    }
+    return events;
+  };
   const submit = (playerId, playerName, percent, ghost) =>
     fetch(`${base}api/scores`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        protocol: 1,
+        protocol: 2,
+        input: { device: 'pad', padId: 'E2E Virtual Dance Pad', padKnown: true },
+        replay: seedReplay(),
         playerId,
         secret: `secret-${playerId}`,
         playerName,

@@ -10,7 +10,7 @@
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
-import { MAX_GHOST_FRAMES, type GhostFrame } from '../net/protocol';
+import { MAX_GHOST_FRAMES, type GhostFrame, type ReplayEvent } from '../net/protocol';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation } from '../notes/transforms';
@@ -32,6 +32,9 @@ import type { TimingData } from '../timing/timingData';
 
 const LEAD_IN_SECONDS = 2;
 const TAIL_SECONDS = 2;
+/** Hard cap on the recorded input log — no real play comes close, but a stuck
+ *  key or hostile input can't grow it without bound. */
+const MAX_INPUT_LOG = 100_000;
 
 /**
  * Playback options applied to a session — the shared PlayOptions shape
@@ -73,6 +76,16 @@ export class GameSession {
    *  recorded in practice mode (looping timelines are meaningless). */
   readonly ghostFrames: GhostFrame[] = [];
   private lastGhostAt = Number.NEGATIVE_INFINITY;
+
+  /** Every judged-relevant input this play (song-seconds, 4dp), in time order —
+   *  the replay of the run (todo: REPLAYS). Not recorded in practice mode
+   *  (looping passes have no single coherent timeline) nor in a replay session
+   *  (it is being driven FROM a log, not producing one). */
+  readonly inputLog: ReplayEvent[] = [];
+  /** When set, this is a REPLAY session: live press()/release() are ignored and
+   *  the loop feeds these events on the judge's own time axis instead. */
+  private replayEvents: ReplayEvent[] | null = null;
+  private replayCursor = 0;
 
   /** Rival field layout (live versus): a second view on the SAME canvas —
    *  one render, one shared background. Set before/after start(). */
@@ -188,6 +201,22 @@ export class GameSession {
   /** Current audible song position in seconds (dev/testing hook). */
   get songNow(): number {
     return this.clock.songSecondsNow();
+  }
+
+  /** True when this session is replaying a recorded log rather than taking live
+   *  input — the UI ignores its own press/release and suppresses scoring. */
+  get isReplay(): boolean {
+    return this.replayEvents !== null;
+  }
+
+  /**
+   * Turn this into a replay session: the loop drives the judge from `events`
+   * (time-sorted; the same (track, t, up) triples press()/release() feed live)
+   * and live input is ignored. Set before start()/begin().
+   */
+  setReplay(events: ReplayEvent[]): void {
+    this.replayEvents = events;
+    this.replayCursor = 0;
   }
 
   /** True when a rival view is being drawn (dev/testing hook). */
@@ -334,10 +363,19 @@ export class GameSession {
     this.onLoop?.(this.loopCount);
   }
 
-  press(track: number, eventTimeStampMs: number): void {
+  /**
+   * The shared input path: judge one press/release on a column at song-time `t`
+   * and drive the same feedback (lane flash on a press, lane hit + timing
+   * offset on a scored tap). Both live input (press/release) and replay
+   * playback funnel through here so they are frame-for-frame identical.
+   */
+  private feed(track: number, t: number, up: boolean): void {
     if (track < 0 || track >= this.held.length) return;
-    this.held[track] = true;
-    const t = this.clock.songSecondsAtEvent(eventTimeStampMs);
+    this.held[track] = !up;
+    if (up) {
+      this.judge.step(track, t, true);
+      return;
+    }
     this.feedback.laneFlash[track] = t;
     const ev = this.judge.step(track, t, false);
     if (ev && ev.tns !== TapNoteScore.None) {
@@ -349,11 +387,24 @@ export class GameSession {
     }
   }
 
-  release(track: number, eventTimeStampMs: number): void {
-    if (track < 0 || track >= this.held.length) return;
-    this.held[track] = false;
+  /** Record one input into the replay log (skipped in practice/replay sessions). */
+  private recordInput(track: number, t: number, up: boolean): void {
+    if (this.practice || this.isReplay || this.inputLog.length >= MAX_INPUT_LOG) return;
+    this.inputLog.push({ t: Math.round(t * 1e4) / 1e4, track, up });
+  }
+
+  press(track: number, eventTimeStampMs: number): void {
+    if (this.isReplay || track < 0 || track >= this.held.length) return;
     const t = this.clock.songSecondsAtEvent(eventTimeStampMs);
-    this.judge.step(track, t, true);
+    this.recordInput(track, t, false);
+    this.feed(track, t, false);
+  }
+
+  release(track: number, eventTimeStampMs: number): void {
+    if (this.isReplay || track < 0 || track >= this.held.length) return;
+    const t = this.clock.songSecondsAtEvent(eventTimeStampMs);
+    this.recordInput(track, t, true);
+    this.feed(track, t, true);
   }
 
   private loop = (): void => {
@@ -368,6 +419,16 @@ export class GameSession {
         void v.play().catch(() => {});
       } else if (Math.abs(v.currentTime - now) > 0.35) {
         v.currentTime = Math.max(0, now);
+      }
+    }
+
+    // Replay playback: feed every recorded input due by `now` through the same
+    // path live presses take, before the judge ages misses this frame.
+    if (this.replayEvents) {
+      const evs = this.replayEvents;
+      while (this.replayCursor < evs.length && evs[this.replayCursor].t <= now) {
+        const e = evs[this.replayCursor++];
+        this.feed(e.track, e.t, e.up);
       }
     }
 

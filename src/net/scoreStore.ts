@@ -19,6 +19,7 @@ import type {
   GhostFrame,
   LeaderboardResponse,
   PlayResult,
+  ReplayEvent,
   SubmitScoreRequest,
 } from './protocol';
 import { rateKey } from './protocol';
@@ -32,6 +33,8 @@ export interface StoredBest {
   updatedAt: number;
   /** Timeline of the best play, when the client sent one (race the ghost). */
   ghost?: GhostFrame[];
+  /** Input log of the best play (watch the replay); kept only on the PB. */
+  replay?: ReplayEvent[];
 }
 
 export type SubmitOutcome =
@@ -44,6 +47,8 @@ export interface ScoreStore {
   top(chartHash: string, rate: number, limit: number): Promise<LeaderboardResponse>;
   /** The stored ghost of a player's best on one board, or null. */
   ghost(chartHash: string, rate: number, playerId: string): Promise<GhostFrame[] | null>;
+  /** The stored replay of a player's best on one board, or null. */
+  replay(chartHash: string, rate: number, playerId: string): Promise<ReplayEvent[] | null>;
 }
 
 /** The mergeBest policy applied to a stored row (pure; shared by stores). */
@@ -69,9 +74,11 @@ export function mergeStoredBest(
     plays: (prev?.plays ?? 0) + 1,
     updatedAt: isPersonalBest ? now : (prev?.updatedAt ?? now),
   };
-  // The ghost belongs to the play that owns the best percent.
+  // The ghost + replay belong to the play that owns the best percent.
   const ghost = isPersonalBest ? req.ghost : prev?.ghost;
   if (ghost) next.ghost = ghost;
+  const replay = isPersonalBest ? req.replay : prev?.replay;
+  if (replay && replay.length > 0) next.replay = replay;
   return { next, isPersonalBest };
 }
 
@@ -144,6 +151,7 @@ export class MemoryScoreStore implements ScoreStore {
         failed: row.result.failed,
         at: row.updatedAt,
         hasGhost: row.ghost !== undefined && row.ghost.length > 0,
+        hasReplay: row.replay !== undefined && row.replay.length > 0,
       };
     });
     return Promise.resolve({ rows, total: board.size });
@@ -152,5 +160,10 @@ export class MemoryScoreStore implements ScoreStore {
   ghost(chartHash: string, rate: number, playerId: string): Promise<GhostFrame[] | null> {
     const row = this.board(chartHash, rateKey(rate)).get(playerId);
     return Promise.resolve(row?.ghost && row.ghost.length > 0 ? row.ghost : null);
+  }
+
+  replay(chartHash: string, rate: number, playerId: string): Promise<ReplayEvent[] | null> {
+    const row = this.board(chartHash, rateKey(rate)).get(playerId);
+    return Promise.resolve(row?.replay && row.replay.length > 0 ? row.replay : null);
   }
 }

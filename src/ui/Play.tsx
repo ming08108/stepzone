@@ -6,14 +6,17 @@ import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
+import { connectedPadInfo } from '../input/gamepad';
+import { looksLikeDancePad } from '../input/padDetect';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
+import { saveReplay } from '../app/replays';
 import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
-import type { PlayResult } from '../net/protocol';
+import { rateKey, type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
 import { GhostRace, type GhostInfo } from './GhostRace';
 import { RivalBars, RoomStandings } from './RoomRace';
 import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
@@ -34,6 +37,10 @@ interface Result {
   best: ChartScore | null;
   isNewRecord: boolean;
   offsets: number[];
+  /** This run used a keyboard for notes, so it was held back from the board. */
+  keyboardBlocked: boolean;
+  /** These results are from watching a replay, not a fresh play. */
+  isReplay: boolean;
 }
 
 /** Early/late timing distribution of the just-played taps. */
@@ -181,7 +188,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const sessionRef = useRef<GameSession | null>(null);
   const ctaRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
-  // Results screen: ▲▼ chooses between CONTINUE (0) and RETRY (1) on the pad.
+  const watchReplayRef = useRef<HTMLButtonElement>(null);
+  // Results screen: ▲▼ moves through CONTINUE (0) / RETRY (1) / WATCH REPLAY (2)
+  // on the pad. RETRY + WATCH REPLAY exist for solo, non-replay plays only.
   const [doneSel, setDoneSel] = useState(0);
   const doneSelRef = useRef(0);
   doneSelRef.current = doneSel;
@@ -205,6 +214,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   // (which calls start() twice in dev) can't double-count; re-armed on the
   // results screen so RETRY counts as a fresh play.
   const playCountedRef = useRef(false);
+  // Which devices produced NOTE inputs this run (menu keys ignored). A keyboard
+  // note press holds the play back from the leaderboard; a pad-only run submits.
+  const noteInputRef = useRef({ keyboard: false, pad: false });
+  // The input log of the play just finished — replayed in place by WATCH REPLAY
+  // without a storage round-trip.
+  const lastReplayRef = useRef<ReplayEvent[]>([]);
 
   // Room race: re-render on room updates (rivals readying/snapping/finishing)
   // via the store subscription; the room itself outlives this screen.
@@ -395,15 +410,28 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       const col = roleToColumn(e.role);
       if (col === undefined) return;
       e.nativeEvent?.preventDefault();
-      if (e.pressed) sessionRef.current?.press(col, e.timeStampMs);
-      else sessionRef.current?.release(col, e.timeStampMs);
+      if (e.pressed) {
+        // Remember which device drove a NOTE column this run (submission gate).
+        if (e.device === 'keyboard') noteInputRef.current.keyboard = true;
+        else if (e.device === 'gamepad') noteInputRef.current.pad = true;
+        sessionRef.current?.press(col, e.timeStampMs);
+      } else sessionRef.current?.release(col, e.timeStampMs);
       return;
     }
     if (!e.pressed || e.repeat) return;
-    // Results screen: ▲▼ chooses CONTINUE vs RETRY (versus has no RETRY).
+    // Results screen: ▲▼ walks CONTINUE / RETRY / WATCH REPLAY (versus is
+    // CONTINUE-only; WATCH REPLAY only after a real, non-replay solo play).
     if (phaseRef.current === 'done' && (e.role === 'up' || e.role === 'down')) {
       e.nativeEvent?.preventDefault();
-      setDoneSel(versusRef.current ? 0 : e.role === 'up' ? 0 : 1);
+      if (versusRef.current) {
+        setDoneSel(0);
+        return;
+      }
+      const maxSel = result && !result.isReplay ? 2 : 1;
+      setDoneSel((prev) => {
+        const next = e.role === 'up' ? prev - 1 : prev + 1;
+        return Math.max(0, Math.min(maxSel, next));
+      });
       return;
     }
     if (e.role === 'confirm') {
@@ -422,7 +450,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // route to a button when nothing else will handle it.
       if (e.device === 'keyboard' && document.activeElement?.tagName === 'BUTTON') return;
       e.nativeEvent?.preventDefault();
-      (doneSelRef.current === 1 ? retryRef : ctaRef).current?.click();
+      const sel = doneSelRef.current;
+      (sel === 2 ? watchReplayRef : sel === 1 ? retryRef : ctaRef).current?.click();
     } else if (e.role === 'back') {
       e.nativeEvent?.preventDefault();
       onExitRef.current();
@@ -477,16 +506,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   // On the results screen, keep DOM focus on the ▲▼-selected button so a
   // keyboard Enter and a pad confirm both activate the same one.
   useEffect(() => {
-    if (phase === 'done') (doneSel === 1 ? retryRef : ctaRef).current?.focus();
+    if (phase === 'done')
+      (doneSel === 2 ? watchReplayRef : doneSel === 1 ? retryRef : ctaRef).current?.focus();
   }, [phase, doneSel]);
 
-  const start = async () => {
+  const start = async (replayEvents?: ReplayEvent[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const replaying = replayEvents != null;
     bankSteps(sessionRef.current);
     sessionRef.current?.stop();
     cleanupBg();
-    if (!playCountedRef.current) {
+    // Fresh per-run note-device tracking (drives the submission gate).
+    noteInputRef.current = { keyboard: false, pad: false };
+    // A replay run is inert: it counts no song play (and banks no steps below).
+    if (!replaying && !playCountedRef.current) {
       playCountedRef.current = true;
       addSongPlay(songKey(req.song.displayFullTitle, req.song.artist));
     }
@@ -504,6 +538,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       practice: req.practice ?? null,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
+    if (replaying) {
+      session.setReplay(replayEvents);
+      // A replay's re-simulated steps must never bank into lifetime stats —
+      // pre-mark it banked so every bankSteps() path (unmount, next start) skips it.
+      bankedRef.current.add(session);
+    }
     // Live versus: a mirror judge over the RIVAL'S chart renders as a second
     // view on the session's own canvas. The 100 ms streamer below paints it
     // from their judged-note feed; the session just draws what's there.
@@ -542,9 +582,29 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       if (sessionRef.current === session) setPhase('error');
     };
     session.onEnd = (judge) => {
+      const counts = { ...judge.tapCounts };
+      // Replay playback is inert: no scoring, no submission, no lifetime stats,
+      // no room finish — just show the re-simulated results with a REPLAY mark.
+      if (session.isReplay) {
+        setResult({
+          percent: judge.percentDancePoints,
+          grade: judge.grade,
+          maxCombo: judge.maxCombo,
+          failed: judge.failed,
+          counts,
+          best: null,
+          isNewRecord: false,
+          offsets: [...session.offsets],
+          keyboardBlocked: false,
+          isReplay: true,
+        });
+        setPhase('done');
+        return;
+      }
       bankSteps(session);
       playCountedRef.current = false; // a RETRY from here is a new play
-      const counts = { ...judge.tapCounts };
+      // Keep this run's log so WATCH REPLAY re-runs it without a storage trip.
+      lastReplayRef.current = [...session.inputLog];
       // Practice runs never reach here (they loop until exit), but make sure a
       // section-only score can never land in the real records. Rate-modded
       // plays aren't comparable to full-speed ones, so they don't count either.
@@ -557,10 +617,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             maxCombo: judge.maxCombo,
             counts,
           });
+      // Submission gate (anti-cheat): a keyboard note press this run holds the
+      // play off the leaderboard entirely — local records still stand. A
+      // pad-only run submits with its device tag + full replay.
+      const usedKeyboard = noteInputRef.current.keyboard;
+      const padId = connectedPadInfo()[0]?.id || 'Gamepad';
+      const input: SubmitInput = { device: 'pad', padId, padKnown: looksLikeDancePad(padId) };
       // Online leaderboard (fire-and-forget; queued offline). Practice
-      // sections never submit; rate-modded plays do — the server partitions
-      // boards by rate, so they land on their own board (never the 1.0x one).
-      if (req.practice == null) {
+      // sections never submit; keyboard plays never submit; rate-modded plays
+      // do — the server partitions boards by rate (never the 1.0x one).
+      if (req.practice == null && !usedKeyboard) {
         void submitScore({
           chart: {
             chartHash: chartKey(req.song, req.chart),
@@ -579,8 +645,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             counts,
             holdCounts: { ...judge.holdCounts },
           },
+          input,
+          replay: [...session.inputLog],
           ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
         });
+      }
+      // Persist the best-play replay locally on a solo ranked personal best.
+      if (!req.versus && req.practice == null && isNewRecord) {
+        saveReplay(chartKey(req.song, req.chart), rateKey(effRate), [...session.inputLog]);
       }
       // Lifetime stats: fold the finished play in (steps bank separately).
       recordPlayEnd({
@@ -608,6 +680,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         best,
         isNewRecord,
         offsets: [...session.offsets],
+        keyboardBlocked: req.practice == null && usedKeyboard,
+        isReplay: false,
       });
       setPhase('done');
     };
@@ -776,6 +850,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         </div>
       )}
 
+      {phase === 'playing' && sessionRef.current?.isReplay && (
+        <div
+          className="absolute right-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.18em] text-[#ececec]/85"
+          style={{ borderColor: AC }}
+        >
+          ▶ REPLAY
+        </div>
+      )}
+
       {phase !== 'playing' && (
         <div
           className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-3 p-6 text-center text-[#ececec] backdrop-blur-[2px]"
@@ -805,15 +888,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           )}
           {phase === 'error' && (
             <>
-              <div className="text-[19px] font-bold tracking-[0.22em]">WEBGPU REQUIRED</div>
+              <div className="text-[19px] font-bold tracking-[0.22em]">RENDERING FAILED</div>
               <div className="mt-2 max-w-[440px] text-[15px] leading-relaxed text-[#ececec]/70">
-                stepzone renders the note field on WebGPU, which this browser or device doesn&apos;t
-                provide. Try a recent Chrome or Edge, or enable hardware acceleration.
+                The note field needs WebGPU and couldn&apos;t start (or the GPU device was lost
+                mid-song). Try a recent Chrome or Edge with hardware acceleration enabled, then come
+                back in.
               </div>
               <button
                 onClick={onExit}
                 className="mt-4 border px-4 py-1.5 text-[14px] tracking-[0.18em]"
-                style={{ borderColor: AC }}
+                style={{ borderColor: AC, background: AC + '1a' }}
               >
                 ← SONGS
               </button>
@@ -837,6 +921,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               {effRate !== 1 && (
                 <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
                   RATE ×{effRate.toFixed(2)} — SCORE NOT SAVED
+                </div>
+              )}
+              {result.keyboardBlocked && (
+                <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
+                  KEYBOARD PLAY — NOT SENT TO THE LEADERBOARD
                 </div>
               )}
               {/* A race's results screen is the standings — the per-judgment
@@ -880,7 +969,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                 {!req.versus && (
                   <button
                     ref={retryRef}
-                    onClick={start}
+                    onClick={() => void start()}
                     className="text-[16px] tracking-[0.18em] outline-none"
                     style={{
                       color: doneSel === 1 ? AC : 'rgba(236,236,236,.45)',
@@ -890,7 +979,22 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                     RETRY
                   </button>
                 )}
-                <div className="mt-1 text-[11px] tracking-[0.16em] text-[#ececec]/35">
+                {/* Re-watch the play just finished (solo only; a replay's own
+                    results have no fresh log to re-run). */}
+                {!req.versus && !result.isReplay && (
+                  <button
+                    ref={watchReplayRef}
+                    onClick={() => void start(lastReplayRef.current)}
+                    className="text-[16px] tracking-[0.18em] outline-none"
+                    style={{
+                      color: doneSel === 2 ? AC : 'rgba(236,236,236,.45)',
+                      animation: doneSel === 2 ? 'blinkStart 1.4s infinite' : undefined,
+                    }}
+                  >
+                    WATCH REPLAY
+                  </button>
+                )}
+                <div className="mt-1 text-[11px] tracking-[0.16em] text-[#ececec]/55">
                   {req.versus ? 'START — CONTINUE' : '▲▼ SELECT · START — CONFIRM · SELECT — QUIT'}
                 </div>
               </div>

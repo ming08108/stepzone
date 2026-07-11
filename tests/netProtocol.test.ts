@@ -1,15 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_GHOST_FRAMES,
+  MAX_REPLAY_EVENTS,
   parseChartRef,
   parseGhost,
   parsePlayResult,
+  parseReplay,
+  parseSubmitInput,
   parseSubmitScoreRequest,
   rateKey,
   PROTOCOL_VERSION,
   type GhostFrame,
+  type ReplayEvent,
   type SubmitScoreRequest,
 } from '../src/net/protocol';
+
+/** A plausible pad replay: enough presses to cover any test combo, spanning
+ *  well past the server's minimum duration. */
+export function sampleReplay(n = 120): ReplayEvent[] {
+  return Array.from({ length: n }, (_, i) => ({
+    t: Math.round(i * 0.1 * 1e4) / 1e4,
+    track: i % 4,
+    up: false,
+  }));
+}
 
 /** A well-formed submission the tests then break one field at a time. */
 export function validSubmit(): SubmitScoreRequest {
@@ -35,6 +49,8 @@ export function validSubmit(): SubmitScoreRequest {
       counts: { 9: 80, 8: 15, 4: 5 },
       holdCounts: { 6: 10 },
     },
+    input: { device: 'pad', padId: 'pad-1', padKnown: false },
+    replay: sampleReplay(),
   };
 }
 
@@ -56,7 +72,27 @@ describe('parseSubmitScoreRequest', () => {
   it('rejects non-objects and wrong protocol versions', () => {
     expect(parseSubmitScoreRequest(null)).toBeNull();
     expect(parseSubmitScoreRequest('hi')).toBeNull();
-    expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 2 })).toBeNull();
+    // v1 submissions no longer parse — old queued plays are dropped on load.
+    expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 1 })).toBeNull();
+    expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 3 })).toBeNull();
+  });
+
+  it('requires a pad input and a replay (anti-cheat, v2)', () => {
+    const noInput = { ...validSubmit() } as Record<string, unknown>;
+    delete noInput.input;
+    expect(parseSubmitScoreRequest(noInput)).toBeNull();
+    const noReplay = { ...validSubmit() } as Record<string, unknown>;
+    delete noReplay.replay;
+    expect(parseSubmitScoreRequest(noReplay)).toBeNull();
+    // Only a pad is accepted — a keyboard device is rejected outright.
+    expect(
+      parseSubmitScoreRequest({
+        ...validSubmit(),
+        input: { device: 'keyboard', padId: 'kb', padKnown: false },
+      }),
+    ).toBeNull();
+    // A malformed replay rejects the whole submission.
+    expect(parseSubmitScoreRequest({ ...validSubmit(), replay: 'nope' })).toBeNull();
   });
 
   it('rejects missing/oversized identity fields', () => {
@@ -117,6 +153,39 @@ describe('parseGhost', () => {
 
   it('a malformed ghost rejects the whole submission', () => {
     expect(parseSubmitScoreRequest({ ...validSubmit(), ghost: [frame(1), frame(0)] })).toBeNull();
+  });
+});
+
+describe('parseReplay', () => {
+  const ev = (t: number, track = 0, up = false): ReplayEvent => ({ t, track, up });
+
+  it('accepts a time-ordered log and echoes it', () => {
+    const replay = [ev(0), ev(0.5, 1, true), ev(1, 2)];
+    expect(parseReplay(replay)).toEqual(replay);
+  });
+
+  it('rejects out-of-order, oversized, and out-of-range events', () => {
+    expect(parseReplay([ev(1), ev(0.5)])).toBeNull(); // t must not decrease
+    expect(parseReplay(Array.from({ length: MAX_REPLAY_EVENTS + 1 }, (_, i) => ev(i)))).toBeNull();
+    expect(parseReplay([ev(-100)])).toBeNull();
+    expect(parseReplay([{ t: 0, track: 16, up: false }])).toBeNull();
+    expect(parseReplay([{ t: 0, track: 1.5, up: false }])).toBeNull();
+    expect(parseReplay([{ t: 0, track: 0, up: 'no' }])).toBeNull();
+    expect(parseReplay('nope')).toBeNull();
+  });
+});
+
+describe('parseSubmitInput', () => {
+  it('accepts only a pad device', () => {
+    expect(parseSubmitInput({ device: 'pad', padId: 'x', padKnown: true })).toEqual({
+      device: 'pad',
+      padId: 'x',
+      padKnown: true,
+    });
+    expect(parseSubmitInput({ device: 'keyboard', padId: 'x', padKnown: false })).toBeNull();
+    expect(parseSubmitInput({ device: 'pad', padId: '', padKnown: false })).toBeNull();
+    expect(parseSubmitInput({ device: 'pad', padId: 'x'.repeat(129), padKnown: false })).toBeNull();
+    expect(parseSubmitInput({ device: 'pad', padId: 'x' })).toBeNull();
   });
 });
 
