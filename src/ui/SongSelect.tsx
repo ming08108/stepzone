@@ -27,6 +27,8 @@ import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import { GlobalBest } from './GlobalBest';
 import { LeaderboardPanel } from './LeaderboardPanel';
+import { NamePrompt } from './NamePrompt';
+import { shouldPromptForName } from '../net/identity';
 import { VersusPanel } from './VersusPanel';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
@@ -141,6 +143,8 @@ export function SongSelect({
   // RANKS / VERSUS overlays — each owns the keys while open.
   const [ranksOpen, setRanksOpen] = useState(false);
   const [versusOpen, setVersusOpen] = useState(false);
+  // First-visit name prompt (net/identity); asked once, skippable on the pad.
+  const [namePromptOpen, setNamePromptOpen] = useState(() => shouldPromptForName());
   const [osel, setOsel] = useState(0);
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
@@ -480,8 +484,8 @@ export function SongSelect({
       const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
       if (!keys.includes(e.key) && !isConfirm && !isBack) return;
       const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
-      // The RANKS/VERSUS panels own all keys while open (their own listeners).
-      if (ranksOpen || versusOpen) return;
+      // The RANKS/VERSUS/name overlays own all keys while open (own listeners).
+      if (ranksOpen || versusOpen || namePromptOpen) return;
       if (overlay) {
         if (isBack) {
           e.preventDefault();
@@ -540,6 +544,7 @@ export function SongSelect({
     overlay,
     ranksOpen,
     versusOpen,
+    namePromptOpen,
     osel,
     filtered,
     selClamped,
@@ -1212,6 +1217,8 @@ export function SongSelect({
           onPlay={onPlay}
         />
       )}
+
+      {namePromptOpen && <NamePrompt onDone={() => setNamePromptOpen(false)} />}
 
       {/* Hint bar — context-aware (pack grid vs song list). */}
       <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">

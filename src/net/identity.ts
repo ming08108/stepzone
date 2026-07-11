@@ -62,3 +62,15 @@ export function setPlayerName(name: string): NetIdentity {
   saveJson(STORAGE_KEY, cached);
   return cached;
 }
+
+const PROMPTED_KEY = 'notefield.net.namePrompted.v1';
+
+/** Ask for a name once, on the first visit, and only while it's the default
+ *  (an imported identity with a real name is never nagged). */
+export function shouldPromptForName(): boolean {
+  return loadJson<unknown>(PROMPTED_KEY) !== true && getIdentity().name === DEFAULT_NAME;
+}
+
+export function markNamePrompted(): void {
+  saveJson(PROMPTED_KEY, true);
+}

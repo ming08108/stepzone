@@ -47,10 +47,13 @@ async function playerPage(browser, base, name) {
   return page;
 }
 
-/** SELECT menu -> VERSUS row (BACK 0, RANKS 1, VERSUS 2) -> panel. */
+/** SELECT menu -> VERSUS row (BACK 0, RANKS 1, VERSUS 2) -> panel. The menu
+ *  rows are always-rendered filter-strip buttons, so wait on the hint text
+ *  that ONLY renders while the overlay is open — otherwise the arrow presses
+ *  can race the overlay and land on the song list instead. */
 async function openVersusPanel(page) {
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => document.body.innerText.includes('VERSUS'), null, {
+  await page.waitForFunction(() => document.body.innerText.includes('▲▼ ADJUST'), null, {
     timeout: 5_000,
   });
   await page.keyboard.press('ArrowRight');
@@ -154,14 +157,29 @@ try {
     });
     step('gameplay clock advances', advanced);
 
-    // 6. The live opponent bar streams on both screens.
-    await alpha.waitForFunction(() => /BRAVO .*%/.test(document.body.innerText), null, {
-      timeout: 10_000,
-    });
-    await bravo.waitForFunction(() => /ALPHA .*%/.test(document.body.innerText), null, {
-      timeout: 10_000,
-    });
-    step('opponent bars stream live on both machines', true);
+    // 6. The live opponent bar streams on both screens. Generous timeout —
+    // two headless WebGPU sessions can run single-digit FPS on CI-ish
+    // machines; dump the visible text on failure so a miss is diagnosable.
+    let barsOk = true;
+    let barDump = '';
+    for (const [page, rival] of [
+      [alpha, 'BRAVO'],
+      [bravo, 'ALPHA'],
+    ]) {
+      const ok = await page
+        .waitForFunction((r) => new RegExp(`${r} .*%`).test(document.body.innerText), rival, {
+          timeout: 30_000,
+        })
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!ok) {
+        barsOk = false;
+        barDump += ` | ${rival}'s screen: ${JSON.stringify((await bodyText(page)).slice(0, 200))}`;
+      }
+    }
+    step('opponent bars stream live on both machines', barsOk, barDump);
 
     // 7. BRAVO quits mid-song; ALPHA sees the disconnect and keeps playing.
     await bravo.keyboard.down('Escape');

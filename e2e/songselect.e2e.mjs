@@ -143,6 +143,9 @@ try {
     ],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // This suite is about the library/gameplay loop — skip the first-load name
+  // prompt (exercised by the leaderboard suite).
+  await context.addInitScript(() => localStorage.setItem('notefield.net.namePrompted.v1', 'true'));
   // Wrap the object-URL API before any app code runs, so minted/revoked URLs
   // are observable from the tests.
   await context.addInitScript(() => {

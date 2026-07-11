@@ -27,12 +27,26 @@ const step = (name, ok, extra = '') => {
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
-/** Boot to the pack grid and open ALL SONGS (first card, default highlight). */
+/** Boot to the pack grid and open ALL SONGS (first card, default highlight).
+ *  The very first boot gets the name prompt — type a name and confirm. */
 async function openAllSongs(page, base) {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 20_000,
   });
+  if ((await bodyText(page)).includes('WELCOME TO STEPZONE')) {
+    await page.keyboard.type('CHAMP');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(
+      () => !document.body.innerText.includes('WELCOME TO STEPZONE'),
+      null,
+      { timeout: 5_000 },
+    );
+    const savedName = await page.evaluate(
+      () => JSON.parse(localStorage.getItem('notefield.net.identity.v1') ?? '{}').name,
+    );
+    step('first-load prompt saves the player name', savedName === 'CHAMP', `name ${savedName}`);
+  }
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => /▲▼ SONG/.test(document.body.innerText), null, {
     timeout: 10_000,
@@ -112,8 +126,10 @@ try {
   step('WORLD best appears in the header', /WORLD\s*97\.00% RIVAL/.test(header));
 
   // 4. SELECT menu → RANKS (BACK is row 0, RANKS row 1) → panel lists rows.
+  // Wait on the overlay-only hint text — the row labels are always-rendered
+  // filter-strip buttons, so their presence doesn't mean the menu is open.
   await page.keyboard.press('Escape'); // SELECT — open the menu
-  await page.waitForFunction(() => document.body.innerText.includes('RANKS'), null, {
+  await page.waitForFunction(() => document.body.innerText.includes('▲▼ ADJUST'), null, {
     timeout: 5_000,
   });
   await page.keyboard.press('ArrowRight'); // BACK → RANKS
