@@ -1,16 +1,20 @@
 /**
- * Live-versus setup overlay — opened from the song list's SELECT menu
- * (VERSUS row). Everything is pad-operable (skill: pad-controls):
+ * Live-versus setup overlay. Opened two ways: from the song list's SELECT
+ * menu with the highlighted song (CREATE or JOIN), or from the pack grid /
+ * a ?join= share link with no song context (JOIN only — the room defines the
+ * chart, so a joiner never needs to pick one).
  *
- *   menu     ▲▼ CREATE/JOIN, START confirms, SELECT closes
- *   hosting  shows the 6-arrow room code; SELECT cancels
- *   enter    the joiner literally presses the 6 arrows; SELECT backs out
- *   lobby    both names + ready state; START readies up; SELECT leaves
+ * Everything is pad-operable (skill: pad-controls) AND mouse-clickable:
  *
- * Room codes ARE arrow sequences, so joining needs no keyboard. The panel
- * builds the WebRTC channel (net/versusSignal), runs the lobby over the match
- * controller (net/versusMatch), and when both players are ready hands a
- * versus PlayRequest to the app — gameplay itself lives in Play.tsx.
+ *   menu     ▲▼/click CREATE or JOIN, START confirms, SELECT closes
+ *   hosting  shows the 6-arrow room code; START/click copies a share link;
+ *            SELECT/✕ cancels
+ *   enter    press the 6 arrows (or click the arrow pad); SELECT backs out
+ *   lobby    both names + ready state; START/click readies; SELECT leaves
+ *
+ * The panel builds the WebRTC channel (net/versusSignal), runs the lobby over
+ * the match controller (net/versusMatch), and when both players are ready
+ * hands a versus PlayRequest to the app — gameplay itself lives in Play.tsx.
  */
 import { useEffect, useRef, useState } from 'react';
 import { chartKey } from '../app/scores';
@@ -20,7 +24,7 @@ import type { LibraryEntry } from '../io/songFiles';
 import { readSongAudio } from '../io/songFiles';
 import { getIdentity } from '../net/identity';
 import type { ChartRef } from '../net/protocol';
-import { CODE_LENGTH, codeToArrows } from '../net/versus';
+import { CODE_ARROWS, CODE_LENGTH, codeToArrows } from '../net/versus';
 import { VersusMatch } from '../net/versusMatch';
 import {
   createRoom,
@@ -36,11 +40,12 @@ import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 
 const AC = '#ff5d47';
+const ARROW_GLYPH: Record<string, string> = { L: '←', D: '↓', U: '↑', R: '→' };
 
 type Step =
   | { k: 'menu'; sel: 0 | 1 }
   | { k: 'busy'; message: string }
-  | { k: 'hosting'; code: string }
+  | { k: 'hosting'; code: string; copied: boolean }
   | { k: 'enter'; code: string }
   | { k: 'lobby' }
   | { k: 'error'; message: string };
@@ -59,16 +64,20 @@ function findChartByHash(hash: string): { entry: LibraryEntry; chart: Steps } | 
 export function VersusPanel({
   entry,
   diff,
+  initialCode,
   onClose,
   onPlay,
 }: {
-  entry: LibraryEntry;
+  /** The highlighted song (hosting context), or null = join-only mode. */
+  entry: LibraryEntry | null;
   diff: number;
+  /** Room code from a ?join= share link — auto-joins on open. */
+  initialCode?: string;
   onClose: () => void;
   onPlay: (r: PlayRequest) => void;
 }) {
   const { settings } = useSettings();
-  const [step, setStep] = useState<Step>({ k: 'menu', sel: 0 });
+  const [step, setStep] = useState<Step>(entry ? { k: 'menu', sel: 0 } : { k: 'enter', code: '' });
   // Re-render on match updates (the match mutates in place).
   const [, setTick] = useState(0);
 
@@ -149,6 +158,7 @@ export function VersusPanel({
   };
 
   const host = async () => {
+    if (!entry) return; // join-only mode has no chart to host
     setStep({ k: 'busy', message: 'CREATING ROOM…' });
     const loaded = await ensureLoaded(entry);
     const chart = bestChartsPerSlot(loaded.song)[diff];
@@ -172,7 +182,7 @@ export function VersusPanel({
       return;
     }
     hostedRef.current = hosted;
-    setStep({ k: 'hosting', code: hosted.code });
+    setStep({ k: 'hosting', code: hosted.code, copied: false });
     try {
       const connection = await hosted.waitForPeer();
       startMatch(connection, true);
@@ -203,6 +213,53 @@ export function VersusPanel({
     startMatch(connection, false);
   };
 
+  // A ?join= share link goes straight to connecting.
+  useEffect(() => {
+    if (initialCode) void join(initialCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- actions shared by keys and mouse -------------------------------------------
+
+  const goBack = () => {
+    const s = stepRef.current;
+    // One level up per press: sub-steps fall back to the menu (when there is
+    // one); the menu and the lobby (= leaving the match) close the panel.
+    if (s.k === 'menu' || s.k === 'lobby' || s.k === 'busy') onClose();
+    else if (s.k === 'hosting' || s.k === 'enter' || s.k === 'error') {
+      hostedRef.current?.cancel();
+      hostedRef.current = null;
+      if (entry) setStep({ k: 'menu', sel: 0 });
+      else onClose();
+    }
+  };
+
+  const chooseMenu = (sel: 0 | 1) => {
+    if (sel === 0) void host();
+    else setStep({ k: 'enter', code: '' });
+  };
+
+  const pressArrow = (a: string) => {
+    const s = stepRef.current;
+    if (s.k !== 'enter') return;
+    const code = s.code + a;
+    if (code.length >= CODE_LENGTH) void join(code);
+    else setStep({ k: 'enter', code });
+  };
+
+  const readyUp = () => {
+    matchRef.current?.ready();
+    setTick((t) => t + 1);
+  };
+
+  const copyShareLink = (code: string) => {
+    const url = `${location.origin}/?join=${code}`;
+    void navigator.clipboard?.writeText(url).then(
+      () => setStep((s) => (s.k === 'hosting' ? { ...s, copied: true } : s)),
+      () => {},
+    );
+  };
+
   // Pad-first keys — this panel owns the keyboard while open (SongSelect's
   // nav handler is gated off, same pattern as the RANKS panel).
   useEffect(() => {
@@ -221,31 +278,21 @@ export function VersusPanel({
       e.preventDefault();
       const s = stepRef.current;
       if (isBack) {
-        // One level up per press: sub-steps fall back to the menu; the menu
-        // (and the lobby, which means leaving the match) closes the panel.
-        if (s.k === 'menu' || s.k === 'lobby') onClose();
-        else if (s.k === 'hosting' || s.k === 'enter' || s.k === 'error') {
-          hostedRef.current?.cancel();
-          hostedRef.current = null;
-          setStep({ k: 'menu', sel: 0 });
-        }
+        goBack();
         return;
       }
       if (s.k === 'menu') {
         if (arrow === 'U' || arrow === 'D') setStep({ k: 'menu', sel: s.sel === 0 ? 1 : 0 });
-        else if (isConfirm) {
-          if (s.sel === 0) void host();
-          else setStep({ k: 'enter', code: '' });
-        }
+        else if (isConfirm) chooseMenu(s.sel);
       } else if (s.k === 'enter' && arrow) {
-        const code = s.code + arrow;
-        if (code.length >= CODE_LENGTH) void join(code);
-        else setStep({ k: 'enter', code });
+        pressArrow(arrow);
+      } else if (s.k === 'hosting' && isConfirm) {
+        copyShareLink(s.code);
       } else if (s.k === 'lobby' && isConfirm) {
-        matchRef.current?.ready();
-        setTick((t) => t + 1);
+        readyUp();
       } else if (s.k === 'error' && isConfirm) {
-        setStep({ k: 'menu', sel: 0 });
+        if (entry) setStep({ k: 'menu', sel: 0 });
+        else onClose();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -261,7 +308,7 @@ export function VersusPanel({
       case 'menu':
         return '▲▼ CHOOSE · START — GO · SELECT — CLOSE';
       case 'hosting':
-        return 'SELECT — CANCEL';
+        return 'START — COPY LINK · SELECT — CANCEL';
       case 'enter':
         return 'PRESS THE 6 ARROWS · SELECT — BACK';
       case 'lobby':
@@ -281,17 +328,25 @@ export function VersusPanel({
             VERSUS
           </span>
           <span className="min-w-0 flex-1 truncate text-[15px] font-bold">
-            {entry.song.displayFullTitle || 'Untitled'}
+            {entry ? entry.song.displayFullTitle || 'Untitled' : 'JOIN A ROOM'}
           </span>
+          <button
+            onClick={onClose}
+            title="Close"
+            className="flex-none px-1 text-[15px] text-[#ececec]/40 hover:text-[#ececec]"
+          >
+            ✕
+          </button>
         </div>
 
         <div className="min-h-[180px] px-6 py-5">
           {step.k === 'menu' && (
             <div className="flex flex-col gap-2">
               {(['CREATE ROOM', 'JOIN WITH CODE'] as const).map((label, i) => (
-                <div
+                <button
                   key={label}
-                  className="border px-4 py-3 text-[14px] tracking-[0.14em]"
+                  onClick={() => chooseMenu(i as 0 | 1)}
+                  className="border px-4 py-3 text-left text-[14px] tracking-[0.14em]"
                   style={{
                     borderColor: step.sel === i ? AC : 'rgba(255,255,255,.12)',
                     background: step.sel === i ? AC + '1a' : 'transparent',
@@ -299,11 +354,11 @@ export function VersusPanel({
                   }}
                 >
                   {label}
-                </div>
+                </button>
               ))}
               <p className="mt-2 text-[12px] leading-snug text-[#ececec]/40">
-                Race a friend live on this chart. One of you creates the room and reads out the
-                arrow code; the other joins by pressing those arrows.
+                Race a friend live on this chart. One of you creates the room and shares the arrow
+                code (or a link); the other joins.
               </p>
             </div>
           )}
@@ -323,11 +378,26 @@ export function VersusPanel({
               <div className="text-[13px] tracking-[0.14em] text-[#ececec]/60">
                 WAITING FOR A RIVAL TO JOIN…
               </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => copyShareLink(step.code)}
+                  className="border px-4 py-1.5 text-[12px] tracking-[0.14em]"
+                  style={{ borderColor: AC, color: step.copied ? '#59f07f' : '#ececec' }}
+                >
+                  {step.copied ? '✓ LINK COPIED' : 'COPY INVITE LINK'}
+                </button>
+                <button
+                  onClick={goBack}
+                  className="border border-white/15 px-4 py-1.5 text-[12px] tracking-[0.14em] text-[#ececec]/60 hover:text-[#ececec]"
+                >
+                  CANCEL
+                </button>
+              </div>
             </div>
           )}
 
           {step.k === 'enter' && (
-            <div className="flex flex-col items-center gap-3 py-4">
+            <div className="flex flex-col items-center gap-3 py-2">
               <div className="text-[12px] tracking-[0.2em] text-[#ececec]/45">ENTER ROOM CODE</div>
               <div className="text-[42px] font-bold tracking-[0.18em]">
                 {codeToArrows(step.code)}
@@ -335,23 +405,44 @@ export function VersusPanel({
                   {' · '.repeat(Math.max(0, CODE_LENGTH - step.code.length)).trimEnd()}
                 </span>
               </div>
+              <div className="flex gap-2">
+                {CODE_ARROWS.map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => pressArrow(a)}
+                    className="border border-white/15 px-4 py-2 text-[20px] leading-none text-[#ececec]/80 hover:border-[#ff5d47] hover:text-[#ececec]"
+                  >
+                    {ARROW_GLYPH[a]}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
           {step.k === 'lobby' && match && (
             <div className="flex flex-col gap-2 py-2">
               {[
-                { name: youName + ' (YOU)', ready: match.selfIsReady },
-                { name: match.opponent.name ?? '…', ready: match.opponent.ready },
+                { name: youName + ' (YOU)', ready: match.selfIsReady, you: true },
+                { name: match.opponent.name ?? '…', ready: match.opponent.ready, you: false },
               ].map((p, i) => (
                 <div
                   key={i}
                   className="flex items-center justify-between border border-white/10 px-4 py-3 text-[14px] tracking-[0.1em]"
                 >
                   <span>{p.name}</span>
-                  <span style={{ color: p.ready ? '#59f07f' : 'rgba(236,236,236,.35)' }}>
-                    {p.ready ? 'READY' : 'NOT READY'}
-                  </span>
+                  {p.you && !p.ready ? (
+                    <button
+                      onClick={readyUp}
+                      className="border px-3 py-1 text-[12px] font-bold tracking-[0.14em]"
+                      style={{ borderColor: AC, color: '#ececec' }}
+                    >
+                      READY UP
+                    </button>
+                  ) : (
+                    <span style={{ color: p.ready ? '#59f07f' : 'rgba(236,236,236,.35)' }}>
+                      {p.ready ? 'READY' : 'NOT READY'}
+                    </span>
+                  )}
                 </div>
               ))}
               <p className="mt-1 text-[12px] text-[#ececec]/40">
@@ -361,8 +452,17 @@ export function VersusPanel({
           )}
 
           {step.k === 'error' && (
-            <div className="py-8 text-center text-[13px] tracking-[0.14em] text-[#ffd94b]">
-              {step.message}
+            <div className="flex flex-col items-center gap-4 py-6">
+              <div className="text-center text-[13px] tracking-[0.14em] text-[#ffd94b]">
+                {step.message}
+              </div>
+              <button
+                onClick={() => (entry ? setStep({ k: 'menu', sel: 0 }) : onClose())}
+                className="border px-5 py-1.5 text-[12px] tracking-[0.16em]"
+                style={{ borderColor: AC }}
+              >
+                OK
+              </button>
             </div>
           )}
         </div>

@@ -100,6 +100,13 @@ export function LeaderboardPanel({
               {rate.toFixed(2)}x
             </span>
           )}
+          <button
+            onClick={onClose}
+            title="Close"
+            className="flex-none px-1 text-[15px] text-[#ececec]/40 hover:text-[#ececec]"
+          >
+            ✕
+          </button>
         </div>
 
         <div ref={listRef} className="min-h-[120px] flex-1 overflow-hidden px-5 py-3">

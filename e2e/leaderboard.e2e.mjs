@@ -129,7 +129,7 @@ try {
   // Wait on the overlay-only hint text — the row labels are always-rendered
   // filter-strip buttons, so their presence doesn't mean the menu is open.
   await page.keyboard.press('Escape'); // SELECT — open the menu
-  await page.waitForFunction(() => document.body.innerText.includes('▲▼ ADJUST'), null, {
+  await page.waitForFunction(() => document.body.innerText.includes('SELECT — CLOSE'), null, {
     timeout: 5_000,
   });
   await page.keyboard.press('ArrowRight'); // BACK → RANKS

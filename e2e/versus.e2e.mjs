@@ -53,7 +53,7 @@ async function playerPage(browser, base, name) {
  *  can race the overlay and land on the song list instead. */
 async function openVersusPanel(page) {
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => document.body.innerText.includes('▲▼ ADJUST'), null, {
+  await page.waitForFunction(() => document.body.innerText.includes('SELECT — CLOSE'), null, {
     timeout: 5_000,
   });
   await page.keyboard.press('ArrowRight');
