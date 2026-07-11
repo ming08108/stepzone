@@ -1,12 +1,14 @@
 import type { PracticeSection } from '../game/playOptions';
+import type { VersusChartMeta } from '../net/versus';
 import type { VersusMatch } from '../net/versusMatch';
 import type { VersusConnection } from '../net/versusSignal';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 
-/** A live P2P match riding along with the play (docs/VERSUS.md). The match
- *  was set up on the versus panel; Play drives loaded -> go -> snaps -> finish
- *  over it. App owns teardown (leave + close) when the play view exits. */
+/** A live P2P match riding along with the play (docs/VERSUS.md). The session
+ *  was set up on PLAYER OPTIONS (versusSession store); Play drives
+ *  loaded -> go -> snaps -> finish over it. App owns teardown
+ *  (abandonVersus) when the play view exits. */
 export interface VersusInfo {
   match: VersusMatch;
   connection: VersusConnection;
@@ -14,6 +16,11 @@ export interface VersusInfo {
   /** Room-locked music rate — overrides the local setting for this play. */
   musicRate: number;
   isHost: boolean;
+  /** The rival's chart choice, pinned by their ready frame. */
+  opponentPick: VersusChartMeta;
+  /** Their pick resolved in the LOCAL song copy — the seam for rendering the
+   *  rival's playfield; null when that exact revision isn't local (degrade). */
+  opponentChart: Steps | null;
 }
 
 /** Everything the Play view needs to run one chart. */

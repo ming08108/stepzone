@@ -12,6 +12,7 @@ import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
 import { flushQueue } from '../net/leaderboard';
 import { useMenuNav } from './useMenuNav';
+import { abandonVersus, takeVersusForPlay } from './versusSession';
 
 type View =
   'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
@@ -63,10 +64,20 @@ export function App() {
       <PlayerOptions
         req={req}
         onStart={(chart, practice) => {
-          setReq((r) => (r ? { ...r, chart: chart ?? r.chart, practice: practice ?? null } : r));
+          // A live versus session (versusSession store) rides into gameplay
+          // here — App is the single place that attaches it to the request.
+          setReq((r) => {
+            if (!r) return r;
+            const song = r.song;
+            const versus = takeVersusForPlay(song) ?? undefined;
+            return { ...r, chart: chart ?? r.chart, practice: practice ?? null, versus };
+          });
           setView('play');
         }}
-        onBack={() => setView('menu')}
+        onBack={() => {
+          abandonVersus(); // safety net — SELECT in-screen already left the room
+          setView('menu');
+        }}
       />
     );
   } else if (view === 'play' && req) {
@@ -78,8 +89,7 @@ export function App() {
           // peer and release the RTCPeerConnection here (not in Play's own
           // unmount, which StrictMode double-fires in dev).
           if (req.versus) {
-            req.versus.match.leave();
-            req.versus.connection.close();
+            abandonVersus();
             setReq((r) => (r ? { ...r, versus: undefined } : r));
           }
           setView('menu');
@@ -113,9 +123,9 @@ export function App() {
       <SongSelect
         onPlay={(r) => {
           setReq(r);
-          // Versus was configured on the versus panel (chart + rate locked by
-          // the room) — go straight to gameplay, no Player Options stop.
-          setView(r.versus ? 'play' : 'playoptions');
+          // Everyone goes through PLAYER OPTIONS — versus joiners included
+          // (they pick their own difficulty there before readying up).
+          setView('playoptions');
         }}
         onOptions={() => setView('options')}
       />

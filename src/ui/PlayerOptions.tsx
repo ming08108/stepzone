@@ -12,7 +12,7 @@
  * per-play practice section, if any) back to play. System-level settings
  * (sync/offset, display, controls) live on the Options screen instead.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { previewEncoded, previewPositionSeconds, stopPreview } from '../audio/songPreview';
 import {
   BG_MODES,
@@ -35,6 +35,9 @@ import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
+import { VersusLobby } from './VersusLobby';
+import { pickOf } from './versusResolve';
+import { abandonVersus, hostVersus, subscribeVersus, versusState } from './versusSession';
 
 /** Step to the next/previous entry of a const union array, wrapping. */
 function cycle<T>(list: readonly T[], cur: T, dir: number): T {
@@ -107,6 +110,14 @@ export function PlayerOptions({
   // Practice loop selection: 1-based inclusive measures, clamped to the chart.
   const [practice, setPractice] = useState({ on: false, start: 1, end: 8 });
   useGamepadKeys();
+
+  // Live versus session (versusSession store — survives screen transitions).
+  const vs = useSyncExternalStore(subscribeVersus, versusState);
+  const versusActive = vs.k !== 'idle';
+  const vsMatch = vs.k === 'connected' ? vs.session.match : null;
+  const selfReady = vsMatch?.selfIsReady ?? false;
+  // The room locks the rate: the host's setting at creation, the joiner's room value.
+  const effRate = vs.k === 'connected' ? vs.session.musicRate : settings.musicRate;
 
   // Charts available for this song, one per difficulty slot, ordered by slot (#8).
   const charts = useMemo(
@@ -182,11 +193,11 @@ export function PlayerOptions({
         req.song,
         250,
         win,
-        settings.musicRate,
+        effRate,
       );
     }
     return () => stopPreview();
-  }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds, settings.musicRate]);
+  }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds, effRate]);
   /** Set the loop endpoints (measures, already clamped by the caller). */
   const setLoop = (start: number, end: number) => setPractice((p) => ({ ...p, start, end }));
   /** Click on the song map: drag whichever loop edge is closer to that measure
@@ -205,7 +216,33 @@ export function PlayerOptions({
   const dcolor = difficultyColor(diffName);
 
   const isX = settings.scrollMode === 'X';
-  const go = () => onStart(chart, practiceSection);
+  const go = () => {
+    if (versusActive) {
+      // START = ready up (pins the difficulty pick in the same frame); the
+      // actual start comes from the match's load/go choreography below.
+      if (vsMatch && !selfReady) vsMatch.ready(pickOf(req.song, chart));
+      return;
+    }
+    onStart(chart, practiceSection);
+  };
+
+  // Browsing the DIFFICULTY row shows live in the rival's lobby (until ready).
+  useEffect(() => {
+    if (vsMatch && !selfReady) vsMatch.sendPick(pickOf(req.song, chart));
+  }, [vsMatch, selfReady, req.song, chart]);
+
+  // Both players ready -> the match asks for the session; hand the chosen
+  // chart up (App attaches the live session from the store). Attach/detach
+  // only — never create anything in an effect (StrictMode runs this twice).
+  const handoffRef = useRef<() => void>(() => {});
+  handoffRef.current = () => onStart(chart, null);
+  useEffect(() => {
+    if (!vsMatch) return;
+    vsMatch.onLoadRequested = () => handoffRef.current();
+    return () => {
+      vsMatch.onLoadRequested = undefined;
+    };
+  }, [vsMatch]);
 
   type OptionRow = {
     label: string;
@@ -288,10 +325,17 @@ export function PlayerOptions({
   const rows: OptionRow[] = [
     {
       label: 'DIFFICULTY',
-      value: `${diffName} ${chart.meter}`,
+      value: `${diffName} ${chart.meter}${selfReady ? ' · LOCKED' : ''}`,
       valueColor: dcolor,
-      help: `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
-      adjust: (dir) => setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir))),
+      help: selfReady
+        ? 'Locked — you already readied up with this chart. Leave the room to change it.'
+        : versusActive
+          ? 'Pick YOUR chart for the race — your rival picks their own. Scores compare by percent, arcade style.'
+          : `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
+      adjust: (dir) => {
+        if (selfReady) return; // readied = pick is pinned on the wire
+        setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
+      },
     },
     {
       label: 'SCROLL TYPE',
@@ -328,12 +372,38 @@ export function PlayerOptions({
     },
     {
       label: 'MUSIC RATE',
-      value: `${settings.musicRate.toFixed(2)}×`,
-      help: 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
-      adjust: (dir) =>
+      value: `${effRate.toFixed(2)}×${versusActive ? ' · LOCKED' : ''}`,
+      help: versusActive
+        ? 'Locked for versus — both machines must play the same audio speed (the rate the room was created with).'
+        : 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
+      adjust: (dir) => {
+        if (versusActive) return;
         update({
           musicRate: Math.max(0.5, Math.min(2, +(settings.musicRate + dir * 0.05).toFixed(2))),
-        }),
+        });
+      },
+    },
+    {
+      label: 'LIVE VERSUS',
+      tone: 'accent',
+      value:
+        vs.k === 'idle'
+          ? 'OFF'
+          : vs.k === 'busy'
+            ? '…'
+            : vs.k === 'hosting'
+              ? 'HOSTING…'
+              : vs.k === 'error'
+                ? 'ERROR'
+                : 'CONNECTED',
+      valueColor: vs.k === 'connected' ? '#59f07f' : versusActive ? AC : undefined,
+      help: versusActive
+        ? 'Turn OFF to leave the room (your rival is told). Everything else about the room shows in the LIVE VERSUS block below.'
+        : 'Race a friend live on this song: creates a room and shows a 6-arrow code (plus an invite link) they join with. You each pick your own difficulty.',
+      adjust: () => {
+        if (versusActive) abandonVersus();
+        else void hostVersus(req.song, settings.musicRate);
+      },
     },
     {
       label: 'ADVANCED',
@@ -356,7 +426,8 @@ export function PlayerOptions({
       adjust: () => setAdvanced((v) => !v),
     },
     ...(advanced ? advancedRows.map((ar) => ({ ...ar, sub: true })) : []),
-    ...practiceRows,
+    // Practice looping and a synchronized race are incompatible.
+    ...(versusActive ? [] : practiceRows),
   ];
 
   // The row list grows/shrinks (ADVANCED, practice), so clamp the cursor.
@@ -372,8 +443,12 @@ export function PlayerOptions({
       else if (e.key === 'ArrowLeft') curRow.adjust(-1);
       else if (e.key === 'ArrowRight') curRow.adjust(1);
       else if (e.key === 'Enter' || role === 'confirm') go();
-      else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') onBack();
-      else return;
+      else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') {
+        // One level per press: with a versus session live, SELECT leaves the
+        // room (back to solo options); otherwise it leaves the screen.
+        if (versusActive) abandonVersus();
+        else onBack();
+      } else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
@@ -404,9 +479,20 @@ export function PlayerOptions({
         <>
           <span>▲▼ OPTION</span>
           <span>◀▶ CHANGE</span>
-          <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — PLAY</span>
-          <button onClick={onBack} className="hover:text-[#ececec]">
-            SELECT — BACK TO SONGS
+          <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>
+            {vs.k === 'connected'
+              ? selfReady
+                ? 'WAITING FOR RIVAL…'
+                : 'START — READY'
+              : versusActive
+                ? 'WAITING FOR RIVAL…'
+                : 'START — PLAY'}
+          </span>
+          <button
+            onClick={() => (versusActive ? abandonVersus() : onBack())}
+            className="hover:text-[#ececec]"
+          >
+            {versusActive ? 'SELECT — LEAVE VERSUS' : 'SELECT — BACK TO SONGS'}
           </button>
         </>
       }
@@ -546,12 +632,27 @@ export function PlayerOptions({
             <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/45">
               {curRow.help}
             </div>
+            <VersusLobby
+              vs={vs}
+              selfPick={pickOf(req.song, chart)}
+              selfReady={selfReady}
+              onReady={go}
+            />
             <button
               onClick={go}
-              className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em]"
+              disabled={versusActive && (vs.k !== 'connected' || selfReady)}
+              className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em] disabled:opacity-40"
               style={{ background: AC, color: '#0b0c0e' }}
             >
-              {practice.on ? 'START PRACTICE ▸' : 'START ▸'}
+              {vs.k === 'connected'
+                ? selfReady
+                  ? 'WAITING FOR RIVAL…'
+                  : 'READY ▸'
+                : versusActive
+                  ? 'WAITING FOR RIVAL…'
+                  : practice.on
+                    ? 'START PRACTICE ▸'
+                    : 'START ▸'}
             </button>
           </div>
 
@@ -578,7 +679,7 @@ export function PlayerOptions({
                 }}
                 background={settings.bgMode === 'off' ? null : (req.backgroundFile ?? null)}
                 bgDim={settings.bgMode === 'full' ? 0.25 : 0.6}
-                mediaRate={settings.musicRate}
+                mediaRate={effRate}
               />
             </div>
           </div>

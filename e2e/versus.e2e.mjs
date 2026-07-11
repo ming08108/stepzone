@@ -1,11 +1,13 @@
 /**
- * End-to-end leg for live P2P versus (docs/VERSUS.md): two real browser
- * contexts (separate identities) race each other through the whole flow —
- * host creates a room from the SELECT menu, the joiner enters the 6-arrow
- * code BY PRESSING THE ARROWS (the pad path), WebRTC connects through the dev
- * signaling middleware, both ready up, and gameplay starts on BOTH machines
- * within a synced window. The opponent bar streams live, and a mid-song
- * disconnect shows up on the rival's screen.
+ * End-to-end leg for live P2P versus (docs/VERSUS.md), on the PLAYER OPTIONS
+ * flow: the host picks a song and turns on LIVE VERSUS from the options rows;
+ * the joiner starts at the PACK GRID (SELECT — no song needed, the room
+ * defines it), enters the 6-arrow code BY PRESSING THE ARROWS, resolves the
+ * song by hash, and lands on their own PLAYER OPTIONS with the lobby dock.
+ * Each player keeps their own difficulty (the picks relay live), both ready
+ * up, and gameplay starts on BOTH machines within a synced window. The
+ * opponent bar streams live, and a mid-song disconnect shows on the rival's
+ * screen.
  *
  * Needs WebGPU for gameplay (skips those legs where absent, like the other
  * suites). Run with `node e2e/versus.e2e.mjs`.
@@ -25,8 +27,8 @@ const skip = (name, why) => console.log(`SKIP ${name} — ${why}`);
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
-/** A context with a fixed online identity (so the two players have names). */
-async function playerPage(browser, base, name) {
+/** A context with a fixed online identity; joiners stay on the pack grid. */
+async function playerPage(browser, base, name, { stayOnGrid = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((n) => {
     localStorage.setItem(
@@ -40,27 +42,13 @@ async function playerPage(browser, base, name) {
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 20_000,
   });
-  await page.keyboard.press('Enter'); // open ALL SONGS
-  await page.waitForFunction(() => /▲▼ SONG/.test(document.body.innerText), null, {
-    timeout: 10_000,
-  });
+  if (!stayOnGrid) {
+    await page.keyboard.press('Enter'); // open ALL SONGS
+    await page.waitForFunction(() => /▲▼ SONG/.test(document.body.innerText), null, {
+      timeout: 10_000,
+    });
+  }
   return page;
-}
-
-/** SELECT menu -> VERSUS row (BACK 0, VERSUS 1) -> panel. The menu rows are
- *  always-rendered filter-strip buttons, so wait on the hint text that ONLY
- *  renders while the overlay is open — otherwise the arrow presses can race
- *  the overlay and land on the song list instead. */
-async function openVersusPanel(page) {
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => document.body.innerText.includes('SELECT — CLOSE'), null, {
-    timeout: 5_000,
-  });
-  await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.body.innerText.includes('CREATE ROOM'), null, {
-    timeout: 5_000,
-  });
 }
 
 const pageErrors = [];
@@ -89,23 +77,28 @@ try {
   if (!hasGpu) {
     skip('live versus flow', 'no WebGPU adapter in this environment');
   } else {
-    const bravo = await playerPage(browser, base, 'BRAVO');
+    const bravo = await playerPage(browser, base, 'BRAVO', { stayOnGrid: true });
 
-    // 1. ALPHA hosts a room on the highlighted starter chart.
-    await openVersusPanel(alpha);
-    await alpha.keyboard.press('Enter'); // CREATE ROOM
-    await alpha.waitForFunction(() => document.body.innerText.includes('ROOM CODE'), null, {
-      timeout: 15_000,
+    // 1. ALPHA: song -> PLAYER OPTIONS -> LIVE VERSUS row (4 below DIFFICULTY)
+    //    -> toggle ON -> the lobby dock shows the room code.
+    await alpha.keyboard.press('Enter');
+    await alpha.waitForFunction(() => /PLAYER OPTIONS/i.test(document.body.innerText), null, {
+      timeout: 10_000,
     });
+    for (let i = 0; i < 4; i++) await alpha.keyboard.press('ArrowDown');
+    await alpha.keyboard.press('ArrowRight'); // LIVE VERSUS: OFF -> hosting
+    await alpha.waitForFunction(
+      () => document.body.innerText.includes('WAITING FOR A RIVAL'),
+      null,
+      { timeout: 15_000 },
+    );
     const codeGlyphs = (await bodyText(alpha)).match(/([←↓↑→](?:\s[←↓↑→]){5})/)?.[1];
-    step('host shows a 6-arrow room code', !!codeGlyphs, codeGlyphs ?? 'none found');
+    step('host shows a 6-arrow room code on PLAYER OPTIONS', !!codeGlyphs, codeGlyphs ?? 'none');
 
-    // 2. BRAVO joins by pressing those arrows (the pad-only path).
-    await openVersusPanel(bravo);
-    await bravo.keyboard.press('ArrowDown'); // JOIN WITH CODE
-    await bravo.keyboard.press('Enter');
+    // 2. BRAVO joins from the PACK GRID — no song selection needed.
+    await bravo.keyboard.press('Escape'); // SELECT — JOIN VERSUS (root screen)
     await bravo.waitForFunction(() => document.body.innerText.includes('ENTER ROOM CODE'), null, {
-      timeout: 5_000,
+      timeout: 10_000,
     });
     const KEY = { '←': 'ArrowLeft', '↓': 'ArrowDown', '↑': 'ArrowUp', '→': 'ArrowRight' };
     for (const glyph of codeGlyphs.split(' ')) {
@@ -113,22 +106,39 @@ try {
       await bravo.waitForTimeout(80);
     }
 
-    // 3. WebRTC connects; both land in the lobby with both names.
+    // 3. The joiner resolves the song by hash and lands on PLAYER OPTIONS;
+    //    both lobbies show both names.
+    await bravo.waitForFunction(
+      () =>
+        /PLAYER OPTIONS/i.test(document.body.innerText) &&
+        document.body.innerText.includes('ALPHA'),
+      null,
+      { timeout: 30_000 },
+    );
+    step('joiner lands on PLAYER OPTIONS with the lobby', true);
     for (const [page, who] of [
       [alpha, 'host'],
       [bravo, 'joiner'],
     ]) {
       await page.waitForFunction(
         () =>
-          document.body.innerText.includes('READY') && document.body.innerText.includes('ALPHA'),
+          document.body.innerText.includes('ALPHA') && document.body.innerText.includes('BRAVO'),
         null,
-        { timeout: 30_000 },
+        { timeout: 15_000 },
       );
-      const txt = await bodyText(page);
-      step(`${who} lobby shows both players`, txt.includes('ALPHA') && txt.includes('BRAVO'));
+      step(`${who} lobby shows both players`, true);
     }
 
-    // 4. Both ready up -> load -> synced go -> gameplay on BOTH machines.
+    // 4. Per-player difficulty: the host is on the song-select default
+    //    (MEDIUM), the joiner defaults to the first hash match — the rival's
+    //    pick must show up in each lobby.
+    const alphaLobby = await bodyText(alpha);
+    step(
+      'per-player difficulty picks relay to the rival lobby',
+      /BEGINNER|EASY/.test(alphaLobby) && (await bodyText(bravo)).includes('MEDIUM'),
+    );
+
+    // 5. Both ready up (START pins each pick) -> load -> synced go.
     await alpha.keyboard.press('Enter');
     await bravo.keyboard.press('Enter');
     await alpha.waitForFunction(() => !!window.__nfSession, null, { timeout: 30_000 });
@@ -138,7 +148,7 @@ try {
     });
     step('both sessions exist after the synced start', true);
 
-    // 5. The clocks advance together (same wall instant, per-machine audio).
+    // 6. The clocks advance together (same wall instant, per-machine audio).
     await alpha.waitForTimeout(1_500);
     const [tA, tB] = await Promise.all([
       alpha.evaluate(() => window.__nfSession.songNow),
@@ -156,7 +166,7 @@ try {
     });
     step('gameplay clock advances', advanced);
 
-    // 6. The live opponent bar streams on both screens. Generous timeout —
+    // 7. The live opponent bar streams on both screens. Generous timeout —
     // two headless WebGPU sessions can run single-digit FPS on CI-ish
     // machines; dump the visible text on failure so a miss is diagnosable.
     let barsOk = true;
@@ -180,7 +190,7 @@ try {
     }
     step('opponent bars stream live on both machines', barsOk, barDump);
 
-    // 7. BRAVO quits mid-song; ALPHA sees the disconnect and keeps playing.
+    // 8. BRAVO quits mid-song; ALPHA sees the disconnect and keeps playing.
     await bravo.keyboard.down('Escape');
     await bravo.waitForTimeout(1_500);
     await bravo.keyboard.up('Escape');
@@ -190,7 +200,7 @@ try {
     const stillPlaying = await alpha.evaluate(() => window.__nfSession.songNow > 0);
     step('rival disconnect shows while the local game keeps running', stillPlaying);
 
-    // 8. ALPHA leaves too; both back on song select.
+    // 9. ALPHA leaves too; back on song select.
     await alpha.keyboard.down('Escape');
     await alpha.waitForTimeout(1_500);
     await alpha.keyboard.up('Escape');

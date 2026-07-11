@@ -30,7 +30,7 @@ import { LeaderboardSide } from './LeaderboardSide';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
 import { isRoomCode } from '../net/versus';
-import { VersusPanel } from './VersusPanel';
+import { VersusJoin } from './VersusJoin';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 import {
@@ -71,7 +71,20 @@ const ALL_PACK = '__ALL_SONGS__';
 const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
 
 /** A row in the SELECT menu overlay (sort/filter, plus BACK inside a pack). */
-type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset' | 'versus';
+type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset';
+
+// A ?join=CODE share link, consumed ONCE at module level: StrictMode's dev
+// double-mount re-runs state initializers after the URL param is stripped, so
+// the consumed value must outlive the component instance.
+let consumedJoinCode: string | null | undefined;
+function consumeJoinCode(): string | undefined {
+  if (consumedJoinCode === undefined) {
+    const code = new URLSearchParams(location.search).get('join');
+    consumedJoinCode = code && isRoomCode(code) ? code : null;
+    if (consumedJoinCode) history.replaceState(null, '', location.pathname);
+  }
+  return consumedJoinCode ?? undefined;
+}
 
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
@@ -144,12 +157,7 @@ export function SongSelect({
   // VERSUS overlay — owns the keys while open.
   // A ?join=CODE share link opens the versus panel mid-join on first mount
   // (consumed immediately so a later remount doesn't re-trigger it).
-  const [joinCode] = useState(() => {
-    const code = new URLSearchParams(location.search).get('join');
-    if (!code || !isRoomCode(code)) return undefined;
-    history.replaceState(null, '', location.pathname);
-    return code;
-  });
+  const [joinCode] = useState(consumeJoinCode);
   const [versusOpen, setVersusOpen] = useState(joinCode !== undefined);
   // First-visit name prompt (net/identity); asked once, skippable on the pad.
   // An invite link skips it — the guest came to join, not to fill in forms.
@@ -464,10 +472,7 @@ export function SongSelect({
       closePack();
       setOverlay(false);
     } else if (kind === 'reset') reset();
-    else if (kind === 'versus') {
-      setOverlay(false);
-      if (song) setVersusOpen(true);
-    } else setOverlay(false);
+    else setOverlay(false);
   };
 
   // Keyboard navigation (arcade model).
@@ -597,7 +602,6 @@ export function SongSelect({
   // single "menu" button (options + up-a-level) the whole pad flow needs.
   const overlayRows: { label: string; value: string; kind: OverlayKind }[] = [
     ...(inPack ? [{ label: 'BACK', value: '‹ PACKS', kind: 'back' as OverlayKind }] : []),
-    { label: 'VERSUS', value: '▸', kind: 'versus' },
     { label: 'SORT', value: sort.toUpperCase(), kind: 'sort' },
     { label: 'MIN LV', value: String(minLv), kind: 'min' },
     { label: 'MAX LV', value: String(effMaxLv), kind: 'max' },
@@ -912,10 +916,10 @@ export function SongSelect({
         {!inPacks &&
           overlayRows.map((o, i) => {
             const on = overlay && i === osel;
-            // Action rows (BACK/VERSUS/RESET) fire on START/click;
+            // Action rows (BACK/RESET) fire on START/click;
             // value rows tune with ▲▼ — style them apart so the difference
             // reads at a glance (buttons get the accent tint, options don't).
-            const isAction = o.kind === 'back' || o.kind === 'reset' || o.kind === 'versus';
+            const isAction = o.kind === 'back' || o.kind === 'reset';
             const cls =
               'flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap' +
               (isAction ? ' font-bold' : '');
@@ -982,7 +986,7 @@ export function SongSelect({
           <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
             {(() => {
               const k = overlayRows[Math.min(osel, overlayRows.length - 1)]?.kind;
-              const action = k === 'back' || k === 'reset' || k === 'versus';
+              const action = k === 'back' || k === 'reset';
               return action
                 ? '◀▶ MOVE · START — GO · SELECT — CLOSE'
                 : '◀▶ MOVE · ▲▼ ADJUST · SELECT — CLOSE';
@@ -1230,12 +1234,13 @@ export function SongSelect({
       </div>
 
       {versusOpen && (
-        <VersusPanel
-          entry={inPacks ? null : (song?.entry ?? null)}
-          diff={diff}
+        <VersusJoin
           initialCode={joinCode}
           onClose={() => setVersusOpen(false)}
-          onPlay={onPlay}
+          onJoined={(r) => {
+            setVersusOpen(false);
+            onPlay(r);
+          }}
         />
       )}
 

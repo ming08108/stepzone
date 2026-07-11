@@ -646,7 +646,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         <VersusBar
           session={sessionRef.current}
           match={req.versus.match}
-          name={req.versus.opponentName}
+          name={`${req.versus.opponentName} · LV${req.versus.opponentPick.meter}`}
         />
       )}
 
@@ -709,7 +709,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               {req.versus && (
                 <VersusOutcome
                   match={req.versus.match}
-                  name={req.versus.opponentName}
+                  name={`${req.versus.opponentName} (LV${req.versus.opponentPick.meter})`}
                   yourPercent={result.percent}
                 />
               )}

@@ -42,16 +42,25 @@ show arrow code                     │
 
 ## Player flow
 
-Song list → SELECT menu → VERSUS → CREATE ROOM (shows the arrow code) or JOIN
-WITH CODE (press the 6 arrows). The joiner needs the same chart, matched by
-content hash against the loaded library (open the pack first — lazy catalog
-entries aren't scanned). Both press START in the lobby; the song starts on
-both machines together. During play the top-left bar shows the rival's live
-percent/combo and your lead/deficit; results show WIN/LOSE/DRAW once both
-finish. Rate is locked to the host's music rate; RETRY is hidden (a rematch
-is a fresh room). A mid-song disconnect marks the rival DISCONNECTED and the
-local game plays out normally. Versus plays still submit to the async
-leaderboard like any play.
+**Hosting** lives on PLAYER OPTIONS: pick a song, turn the LIVE VERSUS row ON
+— the lobby dock shows a 6-arrow room code and a COPY INVITE LINK button
+(?join=CODE auto-joins). **Joining** needs no song: SELECT on the pack grid
+(or the link) opens code entry; the room advertises every chart hash of the
+host's song, the joiner's copy is resolved by any-hash match (open the pack
+first — lazy catalog entries aren't scanned), and the joiner lands on their
+own PLAYER OPTIONS.
+
+**Each player picks their own difficulty** (arcade style): the DIFFICULTY row
+relays live to the rival's lobby, and START pins the pick inside the ready
+frame (versusSession store + versusResolve helpers own the session/UI side).
+When both are ready the song starts on both machines together. Music rate is
+room-locked; practice is unavailable in versus; percent compares across
+difficulties (meters are labeled on the bar and standings). During play the
+top-left bar shows the rival's live percent/combo and your lead/deficit;
+results show WIN/LOSE/DRAW once both finish. RETRY is hidden (a rematch is a
+fresh room). A mid-song disconnect marks the rival DISCONNECTED and the local
+game plays out normally. Versus plays still submit to the async leaderboard
+like any play.
 
 ## Limits & follow-ups
 
@@ -60,6 +69,8 @@ leaderboard like any play.
   relay is the known fix if this bites real users. P2P also means the two
   players' IPs are visible to each other.
 - **2 players.** More would mean a mesh or a relay; out of scope for now.
+- Different chart revisions of the same song: the rival's exact pick may not
+  exist locally (opponentChart is null) — labels/standings still work.
 - Signaling on prod requires `DATABASE_URL` (the same Neon database as the
   leaderboards); without it /api/versus reports unavailable and the panel
   says so.
