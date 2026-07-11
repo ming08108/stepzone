@@ -10,9 +10,11 @@
  * takeVersusForPlay() hands the live session to gameplay; abandonVersus()
  * tears down whatever exists (explicit user action or App's play-exit hook).
  */
+import { findAudioFile, findSimfile, type LibraryEntry } from '../io/songFiles';
 import { getIdentity } from '../net/identity';
-import type { VersusSongRef } from '../net/versus';
+import { MAX_AUDIO_BYTES, MAX_SIMFILE_CHARS, type VersusSongRef } from '../net/versus';
 import { VersusMatch } from '../net/versusMatch';
+import { ChunkSink, sendAudioChunks } from '../net/versusTransfer';
 import {
   createRoom,
   joinRoom,
@@ -47,6 +49,10 @@ let hosted: HostedRoom | null = null;
 let live: VersusSession | null = null;
 /** True between takeVersusForPlay() and the post-play abandonVersus(). */
 let handedOff = false;
+/** The host's library entry (simfile + audio files) for serving transfers. */
+let hostEntry: LibraryEntry | null = null;
+/** Reassembles an in-flight incoming audio transfer (joiner side). */
+let binarySink: ChunkSink | null = null;
 const listeners = new Set<() => void>();
 
 function setPhase(next: VersusPhase): void {
@@ -67,6 +73,8 @@ export function subscribeVersus(cb: () => void): () => void {
 export function abandonVersus(): void {
   hosted?.cancel();
   hosted = null;
+  hostEntry = null;
+  binarySink = null;
   if (live) {
     live.match.leave(); // sends bye + closes the channel
     live.connection.close();
@@ -90,8 +98,18 @@ function startMatch(
     },
     { isHost, name: getIdentity().name },
   );
-  connection.channel.addEventListener('message', (e) => match.handleMessage(String(e.data)));
+  // JSON frames drive the match; binary frames are audio-transfer chunks.
+  connection.channel.binaryType = 'arraybuffer';
+  connection.channel.addEventListener('message', (e) => {
+    if (typeof e.data === 'string') match.handleMessage(e.data);
+    else if (e.data instanceof ArrayBuffer) binarySink?.push(e.data);
+  });
   connection.channel.addEventListener('close', () => match.handleClose());
+  // The host serves song transfers from its library entry (joiner without
+  // the song asks over the channel; no server ever touches the files).
+  if (isHost) {
+    match.onFileReq = () => void serveSongTransfer(match, connection);
+  }
   match.onUpdate = () => {
     // A rival vanishing before the handoff ends the lobby; after the handoff
     // Play owns the presentation (DNF bar / standings).
@@ -109,9 +127,97 @@ function startMatch(
   setPhase({ k: 'connected', session: live });
 }
 
-/** Host, from PLAYER OPTIONS: advertise the whole song and wait for a rival. */
-export async function hostVersus(song: Song, musicRate: number): Promise<void> {
+/** Host side of the song transfer: original simfile text + audio bytes. */
+async function serveSongTransfer(match: VersusMatch, connection: VersusConnection): Promise<void> {
+  const entry = hostEntry;
+  const simFile = entry ? findSimfile(entry.files) : undefined;
+  const audioFile = entry ? findAudioFile(entry.files, entry.song) : undefined;
+  if (!entry || !simFile || !audioFile) {
+    match.sendFileErr('HOST CANNOT SHARE THIS SONG');
+    return;
+  }
+  try {
+    const [simfile, audio] = await Promise.all([simFile.text(), audioFile.arrayBuffer()]);
+    if (simfile.length > MAX_SIMFILE_CHARS || audio.byteLength > MAX_AUDIO_BYTES) {
+      match.sendFileErr('SONG TOO LARGE TO SHARE');
+      return;
+    }
+    match.sendFileMeta({
+      simfileName: simFile.name,
+      simfile,
+      audioName: audioFile.name,
+      audioBytes: audio.byteLength,
+    });
+    await sendAudioChunks(connection.channel, audio);
+    match.sendFileDone();
+  } catch {
+    match.sendFileErr('TRANSFER FAILED ON THE HOST');
+  }
+}
+
+export interface TransferredSong {
+  simfileName: string;
+  simfile: string;
+  audioName: string;
+  audio: Uint8Array<ArrayBuffer>;
+}
+
+/** Joiner side: ask the connected host for the song and reassemble it.
+ *  Resolves null on refusal/timeout/disconnect. */
+export function requestSongTransfer(
+  onProgress: (fraction: number) => void,
+): Promise<TransferredSong | null> {
+  if (phase.k !== 'connected' || !live) return Promise.resolve(null);
+  const match = live.match;
+  return new Promise((resolve) => {
+    let meta: Parameters<NonNullable<VersusMatch['onFileMeta']>>[0] | null = null;
+    let settled = false;
+    const finish = (result: TransferredSong | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      match.onFileMeta = undefined;
+      match.onFileDone = undefined;
+      match.onFileErr = undefined;
+      binarySink = null;
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), 120_000);
+    match.onFileMeta = (m) => {
+      meta = m;
+      binarySink = new ChunkSink(m.audioBytes, (received) =>
+        onProgress(m.audioBytes > 0 ? received / m.audioBytes : 1),
+      );
+    };
+    // Ordered channel: 'done' arrives after every chunk, so the sink is
+    // complete (or the transfer went wrong and null is the honest answer).
+    match.onFileDone = () => {
+      if (meta && binarySink?.complete) {
+        finish({
+          simfileName: meta.simfileName,
+          simfile: meta.simfile,
+          audioName: meta.audioName,
+          audio: binarySink.bytes(),
+        });
+      } else {
+        finish(null);
+      }
+    };
+    match.onFileErr = () => finish(null);
+    match.requestFile();
+  });
+}
+
+/** Host, from PLAYER OPTIONS: advertise the whole song and wait for a rival.
+ *  The entry (when known) lets the host serve the song to a rival who lacks
+ *  it — original simfile + audio bytes, straight over the data channel. */
+export async function hostVersus(
+  song: Song,
+  musicRate: number,
+  entry?: LibraryEntry,
+): Promise<void> {
   if (phase.k !== 'idle' && phase.k !== 'error') return;
+  hostEntry = entry ?? null;
   setPhase({ k: 'busy', message: 'CREATING ROOM…' });
   const songRef: VersusSongRef = {
     title: song.displayFullTitle || 'Untitled',

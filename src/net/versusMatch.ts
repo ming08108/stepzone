@@ -76,6 +76,18 @@ export class VersusMatch {
   onLoadRequested?: () => void;
   /** Begin gameplay in `delayMs` (already latency-compensated). */
   onGo?: (delayMs: number) => void;
+  /** Song transfer (lobby only): the host serves fileReq; the joiner consumes
+   *  meta/done/err. The audio itself travels as binary frames OUTSIDE the
+   *  match (net/versusTransfer + the session's channel wiring). */
+  onFileReq?: () => void;
+  onFileMeta?: (meta: {
+    simfileName: string;
+    simfile: string;
+    audioName: string;
+    audioBytes: number;
+  }) => void;
+  onFileDone?: () => void;
+  onFileErr?: (message: string) => void;
 
   private selfReady = false;
   private selfPickValue: VersusChartMeta | null = null;
@@ -167,6 +179,23 @@ export class VersusMatch {
       case 'notes':
         if (this.opponentNotes.length < 100_000) this.opponentNotes.push(...msg.notes);
         break; // no update(): the field polls on its own frame loop
+      case 'fileReq':
+        if (this.phase === 'lobby' || this.phase === 'connecting') this.onFileReq?.();
+        break;
+      case 'fileMeta':
+        this.onFileMeta?.({
+          simfileName: msg.simfileName,
+          simfile: msg.simfile,
+          audioName: msg.audioName,
+          audioBytes: msg.audioBytes,
+        });
+        break;
+      case 'fileDone':
+        this.onFileDone?.();
+        break;
+      case 'fileErr':
+        this.onFileErr?.(msg.message);
+        break;
       case 'finish':
         this.opponent.result = msg.result;
         this.maybeDone();
@@ -226,6 +255,30 @@ export class VersusMatch {
   sendSnap(snap: Omit<VersusSnap, 'seq'>): void {
     if (this.phase !== 'playing') return;
     this.send({ t: 'snap', snap: { ...snap, seq: ++this.snapSeq } });
+  }
+
+  /** Ask the host for the song (joiner without a local copy; lobby only). */
+  requestFile(): void {
+    if (this.phase !== 'lobby' && this.phase !== 'connecting') return;
+    this.send({ t: 'fileReq' });
+  }
+
+  /** Host: announce the transfer payload (audio bytes follow as binary). */
+  sendFileMeta(meta: {
+    simfileName: string;
+    simfile: string;
+    audioName: string;
+    audioBytes: number;
+  }): void {
+    this.send({ t: 'fileMeta', ...meta });
+  }
+
+  sendFileDone(): void {
+    this.send({ t: 'fileDone' });
+  }
+
+  sendFileErr(message: string): void {
+    this.send({ t: 'fileErr', message });
   }
 
   /** Stream freshly-judged notes (display feed for the rival's playfield). */

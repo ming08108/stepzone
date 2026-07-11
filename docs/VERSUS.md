@@ -46,9 +46,15 @@ show arrow code                     │
 — the lobby dock shows a 6-arrow room code and a COPY INVITE LINK button
 (?join=CODE auto-joins). **Joining** needs no song: SELECT on the pack grid
 (or the link) opens code entry; the room advertises every chart hash of the
-host's song, the joiner's copy is resolved by any-hash match (open the pack
-first — lazy catalog entries aren't scanned), and the joiner lands on their
-own PLAYER OPTIONS.
+host's song and the joiner's copy is resolved by any-hash match (open the
+pack first — lazy catalog entries aren't scanned). **A joiner who lacks the
+song gets it from the host, peer to peer**: the original simfile text plus
+the audio bytes stream over the already-open data channel (fileReq/fileMeta
+JSON control + chunked binary with bufferedamountlow backpressure,
+net/versusTransfer.ts) and land in the joiner's library through the normal
+drop path — hash-identical to the host's copy, kept for the session, and no
+server ever touches the files. Either way the joiner lands on their own
+PLAYER OPTIONS.
 
 **Each player picks their own difficulty** (arcade style): the DIFFICULTY row
 relays live to the rival's lobby, and START pins the pick inside the ready
@@ -77,6 +83,10 @@ like any play.
 - **2 players.** More would mean a mesh or a relay; out of scope for now.
 - Different chart revisions of the same song: the rival's exact pick may not
   exist locally (opponentChart is null) — labels/standings still work.
+- Song transfer caps: simfile ≤ 2 MB of text, audio ≤ 64 MB; hosts without
+  original files (synth starter entries) reply CANNOT SHARE. Transferred
+  songs live for the session only (like drag-dropped packs). Sharing is
+  between the two players directly — the host should own what they share.
 - Signaling on prod requires `DATABASE_URL` (the same Neon database as the
   leaderboards); without it /api/versus reports unavailable and the panel
   says so.

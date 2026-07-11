@@ -30,7 +30,8 @@ function dirOf(f: File): string {
   return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
 }
 
-function findSimfile(files: File[]): File | undefined {
+/** The simfile a song was parsed from (exported for the versus song transfer). */
+export function findSimfile(files: File[]): File | undefined {
   return (
     files.find((f) => ext(f.name) === '.ssc') ??
     files.find((f) => ext(f.name) === '.sma') ??
@@ -38,7 +39,8 @@ function findSimfile(files: File[]): File | undefined {
   );
 }
 
-function findAudioFile(files: File[], song: Song): File | undefined {
+/** The audio file a song plays (exported for the versus song transfer). */
+export function findAudioFile(files: File[], song: Song): File | undefined {
   if (song.musicFile) {
     const want = basename(song.musicFile);
     const m = files.find((f) => basename(f.name) === want);

@@ -1,4 +1,5 @@
 import type { PracticeSection } from '../game/playOptions';
+import type { LibraryEntry } from '../io/songFiles';
 import type { VersusChartMeta } from '../net/versus';
 import type { VersusMatch } from '../net/versusMatch';
 import type { VersusConnection } from '../net/versusSignal';
@@ -33,6 +34,9 @@ export interface PlayRequest {
   backgroundFile: File | null;
   /** Practice-loop section (in beats), or null/absent to play the song through. */
   practice?: PracticeSection | null;
+  /** The library entry this play came from — lets a versus host serve the
+   *  song's original files to a rival who lacks it (docs/VERSUS.md). */
+  entry?: LibraryEntry;
   /** Live versus match; goes straight to gameplay (no Player Options stop). */
   versus?: VersusInfo;
 }

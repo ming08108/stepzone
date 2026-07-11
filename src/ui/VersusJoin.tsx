@@ -12,10 +12,10 @@ import { resolveBackground } from '../io/bgVideo';
 import { readSongAudio } from '../io/songFiles';
 import { CODE_ARROWS, CODE_LENGTH, codeToArrows } from '../net/versus';
 import { fetchRoom } from '../net/versusSignal';
-import { ensureLoaded, libraryState } from './libraryStore';
+import { addFiles, ensureLoaded, libraryState } from './libraryStore';
 import type { PlayRequest } from './playRequest';
 import { findSongByAnyHash } from './versusResolve';
-import { abandonVersus, joinVersus, versusState } from './versusSession';
+import { abandonVersus, joinVersus, requestSongTransfer, versusState } from './versusSession';
 
 const AC = '#ff5d47';
 const ARROW_GLYPH: Record<string, string> = { L: '←', D: '↓', U: '↑', R: '→' };
@@ -59,25 +59,55 @@ export function VersusJoin({
       setStep({ k: 'error', message: 'ROOM NOT FOUND (OR EXPIRED)' });
       return;
     }
-    const local = findSongByAnyHash(libraryState().entries, room.song.charts);
-    if (!local) {
-      setStep({
-        k: 'error',
-        message: `SONG NOT IN YOUR LIBRARY — ${room.song.title} (OPEN ITS PACK FIRST)`,
-      });
-      return;
-    }
     setStep({ k: 'busy', message: `CONNECTING TO ${room.hostName}…` });
     if (!(await joinVersus(code, room))) {
       setStep({ k: 'error', message: 'COULD NOT CONNECT (ROOM TAKEN, OR NAT BLOCKED)' });
       return;
+    }
+    let local = findSongByAnyHash(libraryState().entries, room.song.charts);
+    if (!local) {
+      // No local copy — the song travels P2P from the host over the already
+      // open data channel (original simfile + audio; no server involved).
+      const got = await requestSongTransfer((f) =>
+        setStep({
+          k: 'busy',
+          message: `GETTING THE SONG FROM ${room.hostName}… ${Math.round(f * 100)}%`,
+        }),
+      );
+      if (!got) {
+        abandonVersus();
+        setStep({ k: 'error', message: 'SONG TRANSFER FAILED (HOST CANNOT SHARE IT)' });
+        return;
+      }
+      // Feed the received files through the normal drop path: the song
+      // becomes a real library entry (kept for this session — race again free).
+      setStep({ k: 'busy', message: 'ADDING THE SONG TO YOUR LIBRARY…' });
+      const dir = `Versus Received/${room.song.title.replace(/[/\\]/g, '-')}`;
+      const at = (name: string, content: BlobPart) => {
+        const f = new File([content], name);
+        Object.defineProperty(f, 'webkitRelativePath', { value: `${dir}/${name}` });
+        return f;
+      };
+      await addFiles([at(got.simfileName, got.simfile), at(got.audioName, got.audio)]);
+      local = findSongByAnyHash(libraryState().entries, room.song.charts);
+      if (!local) {
+        abandonVersus();
+        setStep({ k: 'error', message: 'TRANSFERRED SONG DID NOT MATCH (DIFFERENT REVISION?)' });
+        return;
+      }
     }
     setStep({ k: 'busy', message: 'LOADING SONG…' });
     const entry = await ensureLoaded(local.entry);
     const audio = await readSongAudio(entry);
     const bg = await resolveBackground(entry);
     joinedRef.current = true;
-    onJoined({ song: entry.song, chart: local.chart, encodedAudio: audio, backgroundFile: bg });
+    onJoined({
+      song: entry.song,
+      chart: local.chart,
+      encodedAudio: audio,
+      backgroundFile: bg,
+      entry,
+    });
   };
 
   // A ?join= share link goes straight to connecting (once — see autoJoined).

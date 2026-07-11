@@ -213,6 +213,34 @@ describe('VersusMatch flow', () => {
     expect(pair.joiner.opponentNotes).toHaveLength(3);
   });
 
+  it('routes the song-transfer handshake, serving only in the lobby', () => {
+    const { host, joiner } = wire();
+    let served = 0;
+    host.onFileReq = () => served++;
+    const metas: object[] = [];
+    let done = 0;
+    joiner.onFileMeta = (m) => metas.push(m);
+    joiner.onFileDone = () => done++;
+    joiner.requestFile();
+    expect(served).toBe(1);
+    host.sendFileMeta({
+      simfileName: 'song.ssc',
+      simfile: '#TITLE:x;',
+      audioName: 'song.ogg',
+      audioBytes: 1234,
+    });
+    host.sendFileDone();
+    expect(metas).toEqual([
+      { simfileName: 'song.ssc', simfile: '#TITLE:x;', audioName: 'song.ogg', audioBytes: 1234 },
+    ]);
+    expect(done).toBe(1);
+    // Requests outside the lobby are refused on both ends.
+    toPlaying({ host, joiner });
+    joiner.requestFile();
+    host.handleMessage(JSON.stringify({ t: 'fileReq' }));
+    expect(served).toBe(1);
+  });
+
   it('rejects malformed pick/ready frames', () => {
     expect(parsePeerMsg(JSON.stringify({ t: 'ready' }))).toBeNull(); // pick is mandatory
     expect(

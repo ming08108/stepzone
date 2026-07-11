@@ -402,7 +402,7 @@ export function PlayerOptions({
         : 'Race a friend live on this song: creates a room and shows a 6-arrow code (plus an invite link) they join with. You each pick your own difficulty.',
       adjust: () => {
         if (versusActive) abandonVersus();
-        else void hostVersus(req.song, settings.musicRate);
+        else void hostVersus(req.song, settings.musicRate, req.entry);
       },
     },
     {

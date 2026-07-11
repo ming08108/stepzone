@@ -442,7 +442,7 @@ export function SongSelect({
     // Playable background, cached conversion of a legacy .avi/.mpg, or null
     // (which also queues a background conversion for next time).
     const bg = await resolveBackground(entry);
-    onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg });
+    onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg, entry });
   }, [shownSongs, sel, diff, onPlay]);
 
   // RESET clears the FILTERS only — sort, search, level range, faves. It must

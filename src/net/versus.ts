@@ -127,8 +127,18 @@ export type PeerMsg =
   | { t: 'go'; delayMs: number } // begin after delayMs (half-RTT compensated)
   | { t: 'snap'; snap: VersusSnap }
   | { t: 'notes'; notes: VersusNote[] } // judged since the last batch (display only)
+  // P2P song transfer (joiner lacks the song): request -> meta (simfile text
+  // inline; audio follows as binary chunks on the same channel) -> done.
+  | { t: 'fileReq' }
+  | { t: 'fileMeta'; simfileName: string; simfile: string; audioName: string; audioBytes: number }
+  | { t: 'fileDone' }
+  | { t: 'fileErr'; message: string }
   | { t: 'finish'; result: PlayResult }
   | { t: 'bye' };
+
+/** Caps for the transfer payload — anything past these is not a simfile. */
+export const MAX_SIMFILE_CHARS = 2_000_000;
+export const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -170,8 +180,29 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
     }
     case 'load':
     case 'loaded':
+    case 'fileReq':
+    case 'fileDone':
     case 'bye':
       return { t: v.t };
+    case 'fileErr':
+      return typeof v.message === 'string' && v.message.length <= 200
+        ? { t: 'fileErr', message: v.message }
+        : null;
+    case 'fileMeta': {
+      const name = (n: unknown): n is string =>
+        typeof n === 'string' && n.length > 0 && n.length <= 128 && !n.includes('/');
+      if (!name(v.simfileName) || !name(v.audioName)) return null;
+      if (typeof v.simfile !== 'string' || v.simfile.length > MAX_SIMFILE_CHARS) return null;
+      if (!num(v.audioBytes) || !Number.isInteger(v.audioBytes)) return null;
+      if (v.audioBytes < 0 || v.audioBytes > MAX_AUDIO_BYTES) return null;
+      return {
+        t: 'fileMeta',
+        simfileName: v.simfileName,
+        simfile: v.simfile,
+        audioName: v.audioName,
+        audioBytes: v.audioBytes,
+      };
+    }
     case 'ping':
     case 'pong':
       return num(v.at) ? { t: v.t, at: v.at } : null;

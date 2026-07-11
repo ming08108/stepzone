@@ -219,6 +219,120 @@ try {
       timeout: 15_000,
     });
     step('host exits cleanly to song select', true);
+
+    // ---- Scenario 2: the joiner doesn't have the song — P2P transfer. ----
+    // ALPHA drops a pack BRAVO lacks and hosts it; the original simfile +
+    // audio travel over the data channel, land in BRAVO's library by the
+    // normal drop path, and the (short) match plays out to the standings.
+    await alpha.evaluate(() => {
+      const ssc = [
+        '#TITLE:Transfer Test;',
+        '#ARTIST:E2E;',
+        '#MUSIC:song.wav;',
+        '#OFFSET:0;',
+        '#BPMS:0.000=120.000;',
+        '#NOTEDATA:;',
+        '#STEPSTYPE:dance-single;',
+        '#DIFFICULTY:Hard;',
+        '#METER:6;',
+        '#NOTES:',
+        '1000',
+        '0100',
+        '0010',
+        '0001',
+        ';',
+      ].join('\n');
+      // Small valid silent WAV (8 kHz mono 16-bit, 2 s).
+      const rate = 8000;
+      const samples = rate * 2;
+      const b = new ArrayBuffer(44 + samples * 2);
+      const v = new DataView(b);
+      const w = (o, s2) => [...s2].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+      w(0, 'RIFF');
+      v.setUint32(4, 36 + samples * 2, true);
+      w(8, 'WAVEfmt ');
+      v.setUint32(16, 16, true);
+      v.setUint16(20, 1, true);
+      v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true);
+      v.setUint32(28, rate * 2, true);
+      v.setUint16(32, 2, true);
+      v.setUint16(34, 16, true);
+      w(36, 'data');
+      v.setUint32(40, samples * 2, true);
+      const fileAt = (path, content, type) => {
+        const f = new File([content], path.split('/').pop(), { type });
+        Object.defineProperty(f, 'webkitRelativePath', { value: path });
+        return f;
+      };
+      const dt = new DataTransfer();
+      dt.items.add(fileAt('Transfer Pack/Transfer Test/song.ssc', ssc, 'text/plain'));
+      dt.items.add(fileAt('Transfer Pack/Transfer Test/song.wav', new Uint8Array(b), 'audio/wav'));
+      const root = document.querySelector('#root')?.firstElementChild;
+      root.dispatchEvent(
+        new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }),
+      );
+    });
+    await alpha.waitForFunction(() => document.body.innerText.includes('Transfer Test'), null, {
+      timeout: 15_000,
+    });
+    // Walk the list until the dropped song is highlighted (BPM 120 is unique).
+    for (let i = 0; i < 12; i++) {
+      if (await alpha.evaluate(() => document.body.innerText.includes('BPM 120'))) break;
+      await alpha.keyboard.press('ArrowDown');
+      await alpha.waitForTimeout(150);
+    }
+    step(
+      'host highlights the dropped song',
+      await alpha.evaluate(() => document.body.innerText.includes('BPM 120')),
+    );
+    await alpha.keyboard.press('ArrowRight'); // the chart is HARD-only; move the diff cursor
+    await alpha.waitForTimeout(200);
+    await alpha.keyboard.press('Enter');
+    await alpha.waitForFunction(() => /PLAYER OPTIONS/i.test(document.body.innerText), null, {
+      timeout: 10_000,
+    });
+    for (let i = 0; i < 4; i++) await alpha.keyboard.press('ArrowDown');
+    await alpha.keyboard.press('ArrowRight');
+    await alpha.waitForFunction(
+      () => document.body.innerText.includes('WAITING FOR A RIVAL'),
+      null,
+      { timeout: 15_000 },
+    );
+    const code2 = (await bodyText(alpha)).match(/([←↓↑→](?:\s[←↓↑→]){5})/)?.[1];
+    step('host reopens a room on the un-shared song', !!code2, code2 ?? 'none');
+
+    await bravo.keyboard.press('Escape'); // pack grid -> JOIN VERSUS
+    await bravo.waitForFunction(() => document.body.innerText.includes('ENTER ROOM CODE'), null, {
+      timeout: 10_000,
+    });
+    for (const glyph of code2.split(' ')) {
+      await bravo.keyboard.press(KEY[glyph]);
+      await bravo.waitForTimeout(80);
+    }
+    // The join detects the missing song, pulls it from the host over the
+    // channel, adds it to the library, and lands on PLAYER OPTIONS.
+    await bravo.waitForFunction(
+      () =>
+        /PLAYER OPTIONS/i.test(document.body.innerText) &&
+        document.body.innerText.includes('Transfer Test'),
+      null,
+      { timeout: 45_000 },
+    );
+    step('joiner receives the song over P2P and reaches the lobby', true);
+
+    // Both ready; the 2 s song plays out to results with standings.
+    await alpha.keyboard.press('Enter');
+    await bravo.keyboard.press('Enter');
+    for (const [page, who] of [
+      [alpha, 'host'],
+      [bravo, 'joiner'],
+    ]) {
+      await page.waitForFunction(() => /YOU WIN|WINS|DRAW/.test(document.body.innerText), null, {
+        timeout: 60_000,
+      });
+      step(`${who} reaches the standings on the transferred song`, true);
+    }
   }
 
   step('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
