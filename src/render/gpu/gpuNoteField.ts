@@ -97,6 +97,24 @@ function makeSkin(noteSkin: NoteSkin): GpuSkin {
   return noteSkin === 'itg' ? new SimplyLoveGpuSkin() : new DdrA3GpuSkin();
 }
 
+/** Per-view layout derived from that view's own column width — so the main
+ *  field keeps its (wider) design scale while rival columns shrink everything
+ *  (arrows, lanes, receptor, beat spacing) rather than just clipping. */
+interface ViewMetrics {
+  /** This view's column width in css px. */
+  viewW: number;
+  /** Design scale from viewW (drives colW/arrowS/receptorY). */
+  ds: number;
+  colW: number;
+  arrowS: number;
+  fieldLeft: number;
+  receptorY: number;
+  /** Scroll-speed factor vs the main view (= ds / mainDs), so a narrower rival
+   *  shows proportionally tighter beat spacing — a true smaller field, not a
+   *  clipped one. Main is always 1, so the solo / 2-player layout is unchanged. */
+  scrollScale: number;
+}
+
 /** One side-by-side rival field view (live versus). Its chrome/notes/HUD draw
  *  view-locally; the batch originX places it. Cursor/combo state persists across
  *  frames here, one instance per rival, so views don't share a cursor. */
@@ -104,7 +122,7 @@ interface RivalView {
   numTracks: number;
   columnAngles: readonly number[];
   meta: RenderMeta;
-  fieldLeft: number;
+  metrics: ViewMetrics;
   firstVisibleIdx: number;
   lastCombo: number;
   comboPopAt: number;
@@ -169,11 +187,15 @@ export class GpuNoteField {
   private firstVisibleIdx = 0;
   private lastCombo = 0;
   private comboPopAt = -10;
-  /** Logical width of one field view: full canvas, or canvasW / viewCount when
-   *  rivals share it (main + N rivals laid out side by side). */
+  /** Active view width (the currently-drawing view's slice of the canvas);
+   *  makeCtx reads it. Set per view by drawView, defaults to the main view. */
   private viewW = 0;
+  /** The main field's layout: full canvas solo, or the fixed left W/2 half once
+   *  any rival is present (so the main never shrinks with the player count). */
+  private mainMetrics!: ViewMetrics;
   /** The side-by-side rival field views (live versus) sharing this canvas,
-   *  device and background — one render, uniform backdrop. Empty for solo. */
+   *  device and background — one render, uniform backdrop. Empty for solo. Each
+   *  carries its own (smaller) metrics packed into the right W/2 half. */
   private rivals: RivalView[] = [];
   /** Per-beat elapsed times for the guide-line pass (null = no beat lines). */
   private beatLineTimes: Float64Array | null = null;
@@ -418,7 +440,6 @@ export class GpuNoteField {
       this.skin.prewarm(
         this.makeCtx({
           viewKey: 'main',
-          fieldLeft: this.fieldLeft,
           numTracks: this.numTracks,
           columnAngles: this.cfg.columnAngles,
           meta: this.cfg.meta,
@@ -493,41 +514,77 @@ export class GpuNoteField {
     }
   }
 
-  private layout(): void {
-    // Main + one column per rival, each an equal slice of the canvas. A narrower
-    // slice shrinks the design scale, so extra views cost the field only width,
-    // not height (fieldLeft re-centres each view's lanes within its column).
-    const viewCount = 1 + this.rivals.length;
-    this.viewW = this.width / viewCount;
-    const ds = Math.max(
-      MIN_DESIGN_SCALE,
-      Math.min(this.height / DESIGN_SIZE, this.viewW / DESIGN_SIZE),
-    );
-    this.ds = ds;
-    this.colW = LANE_W * ds;
-    this.arrowS = ARROW_HALF * ds;
+  /** Metrics for a view of `viewW` css px hosting `numTracks` lanes, at a design
+   *  scale from its own width. `mainDs` normalises the scroll speed so a smaller
+   *  rival scrolls proportionally slower (tighter beat spacing). */
+  private computeMetrics(viewW: number, numTracks: number, mainDs: number): ViewMetrics {
+    const ds = Math.max(MIN_DESIGN_SCALE, Math.min(this.height / DESIGN_SIZE, viewW / DESIGN_SIZE));
+    const colW = LANE_W * ds;
+    const arrowS = ARROW_HALF * ds;
     const off = this.skin.receptorOffset * ds;
-    this.receptorY = this.cfg.reverse ? this.height - off : off;
-    this.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.viewW, this.numTracks, this.colW, ds);
+    const receptorY = this.cfg.reverse ? this.height - off : off;
+    const fieldLeft = this.skin.fieldLeft(this.cfg.bare, viewW, numTracks, colW, ds);
+    return { viewW, ds, colW, arrowS, fieldLeft, receptorY, scrollScale: ds / mainDs };
+  }
+
+  /** Make `m` the active view — the singletons makeCtx / the scroll math read.
+   *  Called by drawView before each view so its chrome/notes size to that view. */
+  private applyMetrics(m: ViewMetrics): void {
+    this.viewW = m.viewW;
+    this.ds = m.ds;
+    this.colW = m.colW;
+    this.arrowS = m.arrowS;
+    this.fieldLeft = m.fieldLeft;
+    this.receptorY = m.receptorY;
+    const s = this.scroll;
+    s.receptorY = m.receptorY;
+    // Scale the scroll speed by this view's design scale so beat spacing shrinks
+    // with the arrows (main scrollScale is 1 — solo / 2-player are unchanged).
+    s.value = this.cfg.scrollValue * m.scrollScale;
+  }
+
+  private layout(): void {
+    // The main field stays a fixed size regardless of player count: full canvas
+    // solo, the left W/2 half once any rival joins. The rivals share the OTHER
+    // W/2 equally, so each rival is (W/2)/rivals.length wide and shrinks
+    // everything (its own ds), while the main keeps the 2-player half-cab scale.
+    const hasRivals = this.rivals.length > 0;
+    const mainW = hasRivals ? this.width / 2 : this.width;
+    // Provisional ds from mainW to normalise scroll speeds (main → scrollScale 1).
+    const mainDs = Math.max(
+      MIN_DESIGN_SCALE,
+      Math.min(this.height / DESIGN_SIZE, mainW / DESIGN_SIZE),
+    );
+    this.mainMetrics = this.computeMetrics(mainW, this.numTracks, mainDs);
+    const rivalW = hasRivals ? this.width / 2 / this.rivals.length : 0;
     for (const rv of this.rivals) {
-      rv.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.viewW, rv.numTracks, this.colW, ds);
+      rv.metrics = this.computeMetrics(rivalW, rv.numTracks, mainDs);
     }
     const s = this.scroll;
     s.mode = this.cfg.scrollMode;
-    s.value = this.cfg.scrollValue;
     s.songMaxBpm = this.cfg.songMaxBpm;
     s.reverse = this.cfg.reverse;
-    s.receptorY = this.receptorY;
     s.height = this.height;
+    // Activate the main view as the default (solo draw + prewarm read these).
+    this.applyMetrics(this.mainMetrics);
   }
 
   /** Set the side-by-side rival field views (live versus); pass [] for solo.
    *  Each rival's judged state is passed per frame via draw()'s rivals argument,
    *  matched by index. Layout re-slices the canvas into 1 + rivals.length views. */
   setRivals(cfgs: RivalConfig[]): void {
+    const zero: ViewMetrics = {
+      viewW: 0,
+      ds: 1,
+      colW: 0,
+      arrowS: 0,
+      fieldLeft: 0,
+      receptorY: 0,
+      scrollScale: 1,
+    };
     this.rivals = cfgs.map((c) => ({
       ...c,
-      fieldLeft: 0,
+      metrics: zero, // real metrics filled by layout() below
       firstVisibleIdx: 0,
       lastCombo: 0,
       comboPopAt: -10,
@@ -552,12 +609,13 @@ export class GpuNoteField {
    *  skin hooks. Views are view-local: the batches' originX places them. */
   private makeCtx(view: {
     viewKey: string;
-    fieldLeft: number;
     numTracks: number;
     columnAngles: readonly number[];
     meta: RenderMeta;
   }): SkinCtx {
-    const laneX = (t: number) => view.fieldLeft + this.colW / 2 + t * this.colW;
+    // fieldLeft / colW / ds / receptorY / viewW are the ACTIVE view's (set by
+    // drawView via applyMetrics) so each view sizes to its own column.
+    const laneX = (t: number) => this.fieldLeft + this.colW / 2 + t * this.colW;
     return {
       batch: this.batch,
       hud: this.hudBatch,
@@ -568,7 +626,7 @@ export class GpuNoteField {
       ds: this.ds,
       colW: this.colW,
       arrowS: this.arrowS,
-      fieldLeft: view.fieldLeft,
+      fieldLeft: this.fieldLeft,
       receptorY: this.receptorY,
       numTracks: view.numTracks,
       width: this.viewW,
@@ -593,9 +651,12 @@ export class GpuNoteField {
     rivals?: { judge: Judge; feedback: Feedback }[],
   ): void {
     if (this.lost) return;
-    const { width, height, ds } = this;
+    const { width, height } = this;
     // Display changes: dpr/size changes swap in a right-sized atlas; a design-
     // scale change on the same atlas just rebakes (sprites are ds-dependent).
+    // Keyed on the MAIN view's ds — sprites bake at that (largest) scale and the
+    // smaller rival views just sample them down, so per-view ds never rebakes.
+    const ds = this.mainMetrics.ds;
     this.ensureAtlas();
     if (ds !== this.lastDs) {
       this.lastDs = ds;
@@ -621,11 +682,12 @@ export class GpuNoteField {
       b.push(width / 2, height / 2, width, height, white, 0, 0, 0, this.cfg.bgDim);
     }
 
-    // 2-9. Each field view draws view-locally; the batches' originX places it.
+    // 2-9. Each field view draws view-locally; the batches' originX places it,
+    // and its own metrics (applied inside drawView) size it. The main sits at
+    // x=0 with the fixed main width; rivals tile the right half after it.
     const main = this.drawView(
       {
         viewKey: 'main',
-        fieldLeft: this.fieldLeft,
         numTracks: this.numTracks,
         columnAngles: this.cfg.columnAngles,
         meta: this.cfg.meta,
@@ -633,6 +695,7 @@ export class GpuNoteField {
         lastCombo: this.lastCombo,
         comboPopAt: this.comboPopAt,
       },
+      this.mainMetrics,
       0,
       judge,
       fb,
@@ -645,17 +708,27 @@ export class GpuNoteField {
     this.firstVisibleIdx = main.firstVisibleIdx;
     this.lastCombo = main.lastCombo;
     this.comboPopAt = main.comboPopAt;
-    // Each rival view is one canvas slice to the right of main, drawn from its
-    // own judged state (rivals[i]) and its own persisted cursor (this.rivals[i]).
+    // Each rival view is one slice of the right half, drawn from its own judged
+    // state (rivals[i]) and its own persisted cursor/metrics (this.rivals[i]).
     if (rivals) {
       const count = Math.min(this.rivals.length, rivals.length);
+      const mainW = this.mainMetrics.viewW;
       for (let i = 0; i < count; i++) {
         const view = this.rivals[i];
         const src = rivals[i];
         if (!src) continue;
         const r = this.drawView(
-          { viewKey: `rival${i}`, ...view },
-          (i + 1) * this.viewW,
+          {
+            viewKey: `rival${i}`,
+            numTracks: view.numTracks,
+            columnAngles: view.columnAngles,
+            meta: view.meta,
+            firstVisibleIdx: view.firstVisibleIdx,
+            lastCombo: view.lastCombo,
+            comboPopAt: view.comboPopAt,
+          },
+          view.metrics,
+          mainW + i * view.metrics.viewW,
           src.judge,
           src.feedback,
           now,
@@ -705,7 +778,6 @@ export class GpuNoteField {
   private drawView(
     view: {
       viewKey: string;
-      fieldLeft: number;
       numTracks: number;
       columnAngles: readonly number[];
       meta: RenderMeta;
@@ -713,6 +785,7 @@ export class GpuNoteField {
       lastCombo: number;
       comboPopAt: number;
     },
+    metrics: ViewMetrics,
     originX: number,
     judge: Judge,
     fb: Feedback,
@@ -722,6 +795,9 @@ export class GpuNoteField {
     beatPulse: number,
     white: ReturnType<GpuNoteField['sprWhite']>,
   ): { firstVisibleIdx: number; lastCombo: number; comboPopAt: number } {
+    // Size the field to THIS view (arrows/lanes/receptor/scroll speed) before
+    // any skin call reads the singletons via makeCtx.
+    this.applyMetrics(metrics);
     this.batch.originX = originX;
     this.hudBatch.originX = originX;
     this.shapes.originX = originX;
@@ -737,7 +813,7 @@ export class GpuNoteField {
 
     // 4. Beat/measure guide lines — skin opt-in, under the notes.
     if (white && this.beatLineTimes && this.skin.beatLines) {
-      this.pushBeatLines(white, view.fieldLeft, view.numTracks);
+      this.pushBeatLines(white, this.fieldLeft, view.numTracks);
     }
 
     // 5. Receptors (under holds and notes — the corrected layering).

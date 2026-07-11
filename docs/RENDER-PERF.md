@@ -38,11 +38,21 @@ stress chart (200BPM 16ths + jumps + overlapping freezes/rolls + mines at X1 ≈
 backends and with a background image composited. The `gpu-versus-2p/3p/4p`
 scenarios render 2, 3 and 4 stress fields side by side on the one canvas (each
 an extra autoplayed mirror judge) — the live room-race path with up to 3
-rivals, so versus regressions show up here, not in production. Extra views cost
-the field only width: each is `canvasW / viewCount` wide, so the design scale
-shrinks and each column shows a narrower lane cluster (`fieldLeft` re-centres
-its lanes) — never height, and everything shares one full-canvas background/dim
-in a single render pass.
+rivals, so versus regressions show up here, not in production.
+
+**Layout — the main field is a fixed size regardless of player count.** Solo it
+is the full canvas; the moment any rival joins the main takes the left `W/2`
+(the 2-player "half-cab" size) and never shrinks further. The rivals share the
+other `W/2` equally, so with `n` rivals each rival column is `(W/2) / n` wide
+(1 rival → `W/2`, 2 → `W/4`, 3 → `W/6`). Every view derives its OWN design
+scale from its own width, so a rival column shrinks _everything_ — arrows,
+lanes, receptor line and beat spacing (its scroll speed scales by `ds / mainDs`)
+— a true smaller field, not a clipped one. `fieldLeft` re-centres each view's
+lanes in its column, and all views share one full-canvas background/dim in a
+single render pass. Sprites bake once at the main (largest) `ds` and the smaller
+rival views sample them down, so per-view scales never rebake the atlas. The
+2-player case is byte-identical to the old fixed 50/50 split (main and its one
+rival both land on `W/2`, `scrollScale` = 1).
 
 ## Numbers (2026-07-11, worktree, 1920×1080 headless, vsync off)
 
@@ -65,26 +75,30 @@ p99.
 
 ## Multi-player versus (2026-07-11, RTX 3080, 1920×1080@1dpr headless, vsync off)
 
-Up to 3 rivals share one canvas beside the main field (4 players max rendered;
-extra rivals ride the RivalBars overlay). Every view is the beyond-worst-case
-stress chart (200 BPM 16ths + jumps + freezes/rolls + mines) autoplayed, so all
-N fields animate at full note density at once. Uncapped,
+The main field is fixed at `W/2` once any rival joins; rivals split the other
+`W/2` (see the layout note above). 4 players max rendered — extra rivals ride
+the RivalBars overlay. Every view runs the beyond-worst-case stress chart (200
+BPM 16ths + jumps + freezes/rolls + mines) autoplayed, so all N fields animate
+at full note density at once. Uncapped,
 `--disable-gpu-vsync --disable-frame-rate-limit`:
 
 | scenario         | fps  | missed | draw CPU avg | draw CPU p99 | GPU avg  | frame p99 |
 | ---------------- | ---- | ------ | ------------ | ------------ | -------- | --------- |
-| versus 2 players | 3248 | 0%     | 0.18 ms      | 0.40 ms      | 0.087 ms | 0.70 ms   |
-| versus 3 players | 1901 | 0%     | 0.29 ms      | 0.50 ms      | 0.071 ms | 0.90 ms   |
-| versus 4 players | 1618 | 0%     | 0.37 ms      | 0.60 ms      | 0.062 ms | 1.10 ms   |
+| versus 2 players | 3306 | 0%     | 0.18 ms      | 0.40 ms      | 0.086 ms | 0.70 ms   |
+| versus 3 players | 2260 | 0%     | 0.32 ms      | 0.60 ms      | 0.088 ms | 0.90 ms   |
+| versus 4 players | 1643 | 0%     | 0.47 ms      | 0.90 ms      | 0.097 ms | 1.10 ms   |
 
-CPU scales with view count (more instances to build per frame), but GPU time
-per frame actually _drops_ as players are added: extra views shrink the design
-scale, so each column rasterizes fewer/smaller pixels and total fill stays flat.
-The 4-field worst case binds at ~0.37 ms CPU / frame — ~45 frames of headroom
-inside one 60 Hz refresh (16.7 ms), frame p99 ~1.1 ms, and **0% missed frames**
-across 2/3/4 players. There is huge headroom; a full 4-player race never drops a
-frame at 60 Hz. (One-time atlas bake shows as `bakes=1` at the measure-window
-boundary; no mid-run bakes or buffer regrows.)
+CPU scales with view count — more instances to build per frame, and each rival's
+tighter beat spacing (its scroll speed scales with its `ds`) puts a few more
+notes on screen per column. GPU/frame stays roughly flat now that the main field
+holds a fixed `W/2` in every scenario. The 4-field worst case binds at ~0.47 ms
+CPU / frame — ~35 frames of headroom inside one 60 Hz refresh (16.7 ms), frame
+p99 ~1.1 ms, and **0% missed frames** across 2/3/4 players. There is huge
+headroom; a full 4-player race never drops a frame at 60 Hz. Per-view design
+scales do NOT thrash the atlas (`bakes` ≤ 2 in the window — the rival-scale
+sprite variants bake once during warm-up; no mid-run bakes or buffer regrows).
+The 2-player numbers match the pre-refactor fixed-50/50 split within run-to-run
+noise, as the layout is byte-identical there.
 
 ## Numbers (RTX 3080, 238Hz display, 1600×900@1dpr, Chrome 149)
 
