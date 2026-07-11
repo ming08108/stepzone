@@ -11,39 +11,10 @@ import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
 import { flushQueue } from '../net/leaderboard';
-import { useMenuNav } from './useMenuNav';
 import { consumeFollow, roomState, subscribeRoom, takeRoomForPlay } from './roomStore';
 
 type View =
   'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
-
-function Chrome({
-  title,
-  onBack,
-  children,
-}: {
-  title: string;
-  onBack: () => void;
-  children: ReactNode;
-}) {
-  useMenuNav(onBack);
-  return (
-    <div className="mx-auto max-w-[1000px] px-6 pb-16 pt-8">
-      <header className="mb-6 flex items-center justify-between">
-        <div className="text-xl font-bold">
-          stepzone <span className="pill">{title}</span>
-        </div>
-        <button
-          onClick={onBack}
-          className="rounded-lg border border-line px-4 py-2 text-muted hover:border-accent hover:text-ink"
-        >
-          ← Menu
-        </button>
-      </header>
-      {children}
-    </div>
-  );
-}
 
 export function App() {
   // ?bench / ?bench=auto deep-links straight into the render benchmark
@@ -124,11 +95,7 @@ export function App() {
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else if (view === 'inspect') {
-    body = (
-      <Chrome title="engine inspector" onBack={() => setView('options')}>
-        <Inspector />
-      </Chrome>
-    );
+    body = <Inspector onBack={() => setView('options')} />;
   } else {
     body = (
       <SongSelect

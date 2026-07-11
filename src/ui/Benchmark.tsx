@@ -181,7 +181,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
           <div className={`max-h-full w-[860px] max-w-full overflow-y-auto p-6 ${PANEL}`}>
             <div className="mb-1 flex items-baseline gap-3">
               <span className="text-[19px] font-bold tracking-[0.22em]">RENDER BENCHMARK</span>
-              <span className="text-[12px] tracking-[0.14em] text-[#ececec]/45">
+              <span className="text-[12px] tracking-[0.14em] text-[#ececec]/55">
                 ~30s · full-screen synthetic gameplay
               </span>
             </div>
@@ -203,7 +203,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
 
             {phase === 'done' && result && (
               <>
-                <div className="mb-3 mt-2 text-[11px] leading-relaxed text-[#ececec]/45">
+                <div className="mb-3 mt-2 text-[11px] leading-relaxed text-[#ececec]/55">
                   {result.device.webglRenderer ?? 'unknown GPU'} · {fmt(result.refreshHz, 0)} Hz
                   display · {result.view.width}×{result.view.height} @dpr {result.view.dpr} ·{' '}
                   {result.device.webgpu
@@ -211,7 +211,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
                     : 'WebGPU unavailable'}
                 </div>
                 <ResultsTable result={result} />
-                <p className="mt-3 text-[11px] leading-relaxed text-[#ececec]/40">
+                <p className="mt-3 text-[11px] leading-relaxed text-[#ececec]/55">
                   FPS + frame p95/missed = what the player sees, normally capped at this
                   display&apos;s refresh ({fmt(result.refreshHz, 0)} Hz). GPU/FRAME = the real GPU
                   time of each presented frame (WebGPU timestamp query) — the honest per-frame cost.
@@ -223,7 +223,11 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
             )}
 
             <div className="mt-5 flex items-center gap-3">
-              <button onClick={() => void run()} className={BTN} style={{ borderColor: AC }}>
+              <button
+                onClick={() => void run()}
+                className={BTN}
+                style={{ borderColor: AC, background: AC + '1a' }}
+              >
                 {phase === 'done' ? 'RUN AGAIN' : 'START'}
               </button>
               {phase === 'done' && (
@@ -237,7 +241,7 @@ export function Benchmark({ onBack }: { onBack: () => void }) {
               )}
               <span className="flex-1" />
               <button onClick={onBack} className={`${BTN} border-white/15`}>
-                ← OPTIONS
+                SELECT — BACK TO OPTIONS
               </button>
             </div>
           </div>

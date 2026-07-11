@@ -633,10 +633,10 @@ export function SongSelect({
         <div className="flex items-baseline gap-3">
           <span className="text-[19px] font-bold tracking-[0.22em]">STEPZONE</span>
           <span className="text-[13px] tracking-[0.18em]" style={{ color: AC }}>
-            MUSIC SELECT
+            SONG SELECT
           </span>
         </div>
-        <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/50">
+        <div className="flex items-center gap-4 text-[13px] tracking-[0.08em] text-[#ececec]/62">
           <span title="Lifetime steps hit">{stats.steps.toLocaleString()} STEPS</span>
           <span>{filtered.length} SONGS</span>
           <button
@@ -826,11 +826,11 @@ export function SongSelect({
         <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
           {inPacks ? (
             <>
-              <div className="text-[13px] tracking-[0.24em] text-[#ececec]/45">PACK</div>
+              <div className="text-[13px] tracking-[0.24em] text-[#ececec]/62">PACK</div>
               <div className="truncate text-[34px] font-bold leading-[1.15]">
                 {packLabel(selPack)}
               </div>
-              <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
+              <div className="mt-2 flex gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/62">
                 <span>
                   {packCount} SONG{packCount === 1 ? '' : 'S'}
                 </span>
@@ -846,7 +846,7 @@ export function SongSelect({
                   onClick={() => song && toggleFav(song.key)}
                   title="Favorite (F)"
                   className="flex-none text-[26px] leading-none"
-                  style={{ color: song && favs.has(song.key) ? FAV_CLR : 'rgba(236,236,236,.25)' }}
+                  style={{ color: song && favs.has(song.key) ? FAV_CLR : 'rgba(236,236,236,.4)' }}
                 >
                   {song && favs.has(song.key) ? '★' : '☆'}
                 </button>
@@ -855,7 +855,7 @@ export function SongSelect({
                 </div>
               </div>
               <div className="text-[17px] text-[#ececec]/60">{song?.artist ?? ''}</div>
-              <div className="mt-2 flex items-center gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/45">
+              <div className="mt-2 flex items-center gap-4 text-[14px] tracking-[0.06em] text-[#ececec]/62">
                 <span>BPM {song?.bpm ?? '—'}</span>
                 {inPack ? (
                   <button
@@ -1172,21 +1172,35 @@ export function SongSelect({
                           title="Favorite (F)"
                           aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
                           className="flex-none text-[15px] leading-none"
-                          style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.28)' }}
+                          style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.4)' }}
                         >
                           {favs.has(s.key) ? '★' : '☆'}
                         </button>
                         <span className="overflow-hidden text-ellipsis">{s.title}</span>
                       </span>
-                      <span className="overflow-hidden text-ellipsis opacity-55">{s.artist}</span>
-                      <span className="overflow-hidden text-ellipsis text-[14px] opacity-40">
+                      <span
+                        className="overflow-hidden text-ellipsis"
+                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.62)' }}
+                      >
+                        {s.artist}
+                      </span>
+                      <span
+                        className="overflow-hidden text-ellipsis text-[14px]"
+                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
+                      >
                         {s.pack || '—'}
                       </span>
                       <span className="justify-self-end opacity-60">{s.bpm}</span>
-                      <span className="justify-self-end text-[13px] opacity-70">
+                      <span
+                        className="justify-self-end text-[13px]"
+                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.7)' }}
+                      >
                         {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
                       </span>
-                      <span className="justify-self-end text-[13px] opacity-45">
+                      <span
+                        className="justify-self-end text-[13px]"
+                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
+                      >
                         {s.plays > 0 ? s.plays : ''}
                       </span>
                       <span
@@ -1273,19 +1287,21 @@ export function SongSelect({
       {namePromptOpen && <NamePrompt onDone={() => setNamePromptOpen(false)} />}
 
       {/* Hint bar — context-aware (pack grid vs song list). */}
-      <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">
+      <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/62">
         {inPacks ? (
           <>
             <span>◀▶▲▼ PACK</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — OPEN</span>
-            <button onClick={() => setVersusOpen(true)}>SELECT — MULTIPLAYER</button>
+            <button onClick={() => setVersusOpen(true)} className="hover:text-[#ececec]">
+              SELECT — MULTIPLAYER
+            </button>
           </>
         ) : (
           <>
             <span>▲▼ SONG</span>
             <span>◀▶ DIFFICULTY</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — PLAY</span>
-            <button onClick={() => setOverlay((v) => !v)}>
+            <button onClick={() => setOverlay((v) => !v)} className="hover:text-[#ececec]">
               {inPack ? 'SELECT — MENU' : 'SELECT — SORT / FILTER'}
             </button>
             <span>F — FAVORITE</span>

@@ -41,7 +41,7 @@ function RosterRow({ p, you }: { p: PlayerState; you: boolean }) {
       <span
         className="w-[86px] text-right text-[11px] tracking-[0.12em]"
         style={{
-          color: p.left ? 'rgba(236,236,236,.45)' : p.ready ? '#59f07f' : 'rgba(236,236,236,.45)',
+          color: p.left ? 'rgba(236,236,236,.5)' : p.ready ? '#59f07f' : 'rgba(236,236,236,.6)',
         }}
       >
         {p.left ? 'LEFT' : p.done ? 'FINISHED' : p.ready ? 'READY' : 'NOT READY'}
@@ -86,7 +86,7 @@ export function RoomDock({
   return (
     <div
       className="flex-none border border-l-[3px] px-4 py-3"
-      style={{ borderColor: AC + '46', borderLeftColor: AC + '90', background: '#101113f2' }}
+      style={{ borderColor: AC + '46', borderLeftColor: AC + '90', background: '#101114f2' }}
     >
       <div className="mb-2 flex items-center gap-3">
         <span className="text-[11px] font-bold tracking-[0.22em]" style={{ color: AC }}>
@@ -114,7 +114,7 @@ export function RoomDock({
       )}
 
       {vs.k === 'error' && (
-        <div className="py-1 text-[12px] tracking-[0.1em] text-[#ffd94b]">{vs.message}</div>
+        <div className="py-1 text-[12px] tracking-[0.1em] text-[#ff5d47]">{vs.message}</div>
       )}
 
       {vs.k === 'in-room' && (
@@ -123,7 +123,7 @@ export function RoomDock({
             <RosterRow key={p.id} p={p} you={p.id === vs.room.selfId} />
           ))}
           <div className="mt-1 flex items-center gap-3">
-            <span className="min-w-0 flex-1 text-[11px] tracking-[0.08em] text-[#ececec]/55">
+            <span className="min-w-0 flex-1 text-[11px] tracking-[0.08em] text-[#ececec]/60">
               {status ?? ''}
             </span>
             {action}

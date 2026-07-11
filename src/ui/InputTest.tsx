@@ -148,7 +148,7 @@ function PhaseChart({ phase }: { phase: number[] }) {
         <span>½ period</span>
         <span>1 period</span>
       </div>
-      <div className="mt-1 text-[10px] leading-relaxed text-[#ececec]/35">
+      <div className="mt-1 text-[10px] leading-relaxed text-[#ececec]/55">
         Where each report&apos;s timestamp lands inside one period of the detected rate. One tall
         bar = every report is on the same clock grid (a real, fixed poll rate). A flat spread = no
         single rate, or not enough samples yet.
@@ -301,13 +301,13 @@ export function InputTest({ onBack }: { onBack: () => void }) {
                     <span className="ml-1 text-[13px] font-normal text-[#ececec]/50">{unit}</span>
                   )}
                 </div>
-                <div className="mt-1 text-[11px] text-[#ececec]/40">{sub}</div>
+                <div className="mt-1 text-[11px] text-[#ececec]/55">{sub}</div>
               </div>
             ))}
           </div>
 
           {rawEvents === 0 && (
-            <p className="mb-6 -mt-3 text-[11px] text-[#ececec]/40">
+            <p className="mb-6 -mt-3 text-[11px] text-[#ececec]/55">
               Event-driven input is behind a flag: enable{' '}
               <code className="text-[#ececec]/70">
                 chrome://flags/#gamepad-raw-input-change-event
@@ -386,7 +386,7 @@ export function InputTest({ onBack }: { onBack: () => void }) {
               <span className="w-[120px] text-right">Δ PREV (ms)</span>
             </div>
             {taps.length === 0 ? (
-              <div className="px-4 py-4 text-[12px] text-[#ececec]/45">
+              <div className="px-4 py-4 text-[12px] text-[#ececec]/55">
                 Press panels / keys — each shows the time the bus stamped it (from Gamepad.timestamp
                 for pads) and the gap to the previous tap.
               </div>

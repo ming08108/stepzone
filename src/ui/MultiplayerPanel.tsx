@@ -142,13 +142,13 @@ export function MultiplayerPanel({
 
           {vs.k === 'error' && (
             <div className="flex flex-col items-center gap-4 py-6">
-              <div className="text-center text-[13px] tracking-[0.14em] text-[#ffd94b]">
+              <div className="text-center text-[13px] tracking-[0.14em] text-[#ff5d47]">
                 {vs.message}
               </div>
               <button
                 onClick={dismissRoomError}
                 className="border px-5 py-1.5 text-[12px] tracking-[0.16em]"
-                style={{ borderColor: AC }}
+                style={{ borderColor: AC, background: AC + '1a' }}
               >
                 TRY AGAIN
               </button>

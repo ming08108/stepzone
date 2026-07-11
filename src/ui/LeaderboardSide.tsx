@@ -28,9 +28,9 @@ export function LeaderboardSide({ entry, diff }: { entry: LibraryEntry | null; d
         )}
       </div>
       {board === 'loading' ? (
-        <div className="py-4 text-center text-[12px] text-[#ececec]/25">…</div>
+        <div className="py-4 text-center text-[12px] text-[#ececec]/45">…</div>
       ) : board.rows.length === 0 ? (
-        <div className="py-4 text-center text-[11px] leading-relaxed tracking-[0.12em] text-[#ececec]/30">
+        <div className="py-4 text-center text-[11px] leading-relaxed tracking-[0.12em] text-[#ececec]/55">
           NO SCORES YET
           <br />
           SET THE FIRST ONE
@@ -69,7 +69,7 @@ export function LeaderboardSide({ entry, diff }: { entry: LibraryEntry | null; d
             );
           })}
           {board.total > board.rows.length && (
-            <div className="pt-2 text-center text-[10px] tracking-[0.14em] text-[#ececec]/30">
+            <div className="pt-2 text-center text-[10px] tracking-[0.14em] text-[#ececec]/55">
               {board.total} PLAYERS
             </div>
           )}

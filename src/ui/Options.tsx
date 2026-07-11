@@ -46,7 +46,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mb-8">
       <div className="mb-3 flex items-center gap-4">
-        <span className="text-[11px] tracking-[0.2em] text-[#ececec]/40">{title}</span>
+        <span className="text-[11px] tracking-[0.2em] text-[#ececec]/55">{title}</span>
         <span className="h-px flex-1 bg-white/[0.09]" />
       </div>
       {children}
@@ -284,7 +284,7 @@ export function Options({
                   <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
                     {holdsHeld.toLocaleString()}
                   </span>
-                  <span className="text-[#ececec]/30">/{holdsDropped.toLocaleString()}</span>
+                  <span className="text-[#ececec]/50">/{holdsDropped.toLocaleString()}</span>
                 </span>
               </div>
             </Row>
@@ -323,7 +323,7 @@ export function Options({
                 onBlur={() => setPlayerNameState(getIdentity().name)}
                 className="w-[220px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[14px] tracking-[0.04em] text-[#ececec] outline-none focus:border-[#ff5d47]"
               />
-              <span className="text-[12px] text-[#ececec]/40">
+              <span className="text-[12px] text-[#ececec]/55">
                 shown on online leaderboards; renames apply from your next play
               </span>
             </Row>
@@ -372,7 +372,7 @@ export function Options({
               >
                 Run render benchmark ▸
               </button>
-              <span className="text-[12px] text-[#ececec]/40">
+              <span className="text-[12px] text-[#ececec]/55">
                 ~40s; measures note-field FPS on this device
               </span>
             </Row>
@@ -384,7 +384,7 @@ export function Options({
               >
                 Test input quantization ▸
               </button>
-              <span className="text-[12px] text-[#ececec]/40">
+              <span className="text-[12px] text-[#ececec]/55">
                 controller update rate + timing granularity
               </span>
             </Row>
@@ -396,7 +396,7 @@ export function Options({
               >
                 Open engine inspector ▸
               </button>
-              <span className="text-[12px] text-[#ececec]/40">live render/session internals</span>
+              <span className="text-[12px] text-[#ececec]/55">live render/session internals</span>
             </Row>
           </Section>
 
@@ -408,7 +408,7 @@ export function Options({
                 <>
                   {pads.map((p) => (
                     <div key={p.index} className="flex items-baseline gap-3">
-                      <span className="flex-none text-[#ececec]/35">#{p.index + 1}</span>
+                      <span className="flex-none text-[#ececec]/50">#{p.index + 1}</span>
                       <span className="min-w-0 flex-1 truncate text-[#ececec]/80">
                         {p.id}
                         {p.mapping !== 'standard' && (
@@ -430,7 +430,7 @@ export function Options({
                       </span>
                     </div>
                   ))}
-                  <div className="mt-1.5 text-[11px] leading-snug text-[#ececec]/40">
+                  <div className="mt-1.5 text-[11px] leading-snug text-[#ececec]/55">
                     Input is read from every pad listed — press a button on each to test. If a
                     plugged-in pad is missing here, the browser hasn't exposed it yet: press a
                     button on it, and check it works on the OS side.
@@ -447,7 +447,7 @@ export function Options({
                   <div key={role} className="border border-white/10 p-3">
                     <div className="text-[12px] tracking-[0.1em] text-[#ececec]/60">{label}</div>
                     <div className="mt-2 flex flex-wrap items-center gap-1">
-                      <span className="w-[34px] flex-none text-[10px] tracking-[0.14em] text-[#ececec]/35">
+                      <span className="w-[34px] flex-none text-[10px] tracking-[0.14em] text-[#ececec]/50">
                         KEYS
                       </span>
                       {keysFor(role).map((code) => (
@@ -471,7 +471,7 @@ export function Options({
                       </button>
                     </div>
                     <div className="mt-2 flex items-center gap-1">
-                      <span className="w-[34px] flex-none text-[10px] tracking-[0.14em] text-[#ececec]/35">
+                      <span className="w-[34px] flex-none text-[10px] tracking-[0.14em] text-[#ececec]/50">
                         PAD
                       </span>
                       <span className="text-[12px] text-[#ececec]/80 [font-variant-numeric:tabular-nums]">

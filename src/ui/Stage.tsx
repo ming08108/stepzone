@@ -31,7 +31,7 @@ export function Stage({
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       {footer && (
-        <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">
+        <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/62">
           {footer}
         </div>
       )}

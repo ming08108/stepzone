@@ -38,7 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
           justifyContent: 'center',
           gap: '1rem',
           padding: '1.5rem',
-          background: '#050505',
+          background: '#050506',
           color: '#ddd',
           fontFamily: 'monospace',
           textAlign: 'center',

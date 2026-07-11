@@ -135,15 +135,15 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     >
       <div className="flex h-full flex-col items-center justify-center gap-6 px-6 text-center">
         <p className="max-w-[460px] text-[14px] tracking-[0.06em] text-[#ececec]/60">
-          Tap a panel (arrow / D F J K / dance pad) exactly on each metronome beat. After ~16 taps,
-          hit Apply.
+          Tap a panel (arrow / D F J K / dance pad) exactly on each metronome beat. After a handful
+          of taps (6+), hit Apply.
         </p>
 
         <div
           className="h-28 w-28 rounded-full border-4"
           style={{
             borderColor: flash ? AC : 'rgba(255,255,255,0.15)',
-            background: flash ? 'rgba(255,77,61,0.3)' : 'transparent',
+            background: flash ? 'rgba(255,93,71,0.3)' : 'transparent',
             transform: `scale(${flash ? 1.1 : 1})`,
           }}
         />
@@ -185,7 +185,7 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
           </button>
         </div>
 
-        <p className="text-[12px] tracking-[0.12em] text-[#ececec]/45">
+        <p className="text-[12px] tracking-[0.12em] text-[#ececec]/62">
           CURRENT OFFSET {settings.audioOffsetMs > 0 ? '+' : ''}
           {settings.audioOffsetMs} MS
         </p>

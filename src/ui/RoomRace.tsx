@@ -234,7 +234,7 @@ export function RoomStandings({
         })}
       </div>
       {!final && (
-        <div className="mt-2 text-center text-[11px] tracking-[0.2em] text-[#ececec]/35">
+        <div className="mt-2 text-center text-[11px] tracking-[0.2em] text-[#ececec]/55">
           START — SKIP
         </div>
       )}

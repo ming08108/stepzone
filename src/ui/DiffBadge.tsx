@@ -1,7 +1,8 @@
 /**
- * The ahead/behind diff readout shared by GhostRace and VersusBar — same
- * absolute-positioned bordered badge, ahead/behind color, and percent
- * formatting; each caller supplies its own label content and diff source.
+ * The ahead/behind diff readout for GhostRace (RoomRace's rival bars share
+ * only diffColor — they stack, so they position themselves): a bordered
+ * badge, ahead/behind color, and percent formatting; the caller supplies the
+ * label content and diff source.
  */
 import type { ReactNode } from 'react';
 
@@ -20,7 +21,7 @@ export function DiffBadge({
   /** Leading content before the +/-diff readout (e.g. "VS RIVAL"). */
   children: ReactNode;
   diff: number;
-  /** Override the badge border (VersusBar dims it on disconnect); defaults to the diff color. */
+  /** Override the badge border; defaults to the diff color. */
   borderColor?: string;
 }) {
   const ahead = diff >= 0;

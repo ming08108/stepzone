@@ -573,12 +573,12 @@ export function PlayerOptions({
                       </span>
                       <span className="h-px min-w-4 flex-1 bg-white/[0.08]" />
                       {!advanced && r2.value && (
-                        <span className="max-w-[50%] truncate text-[11px] tracking-[0.1em] text-[#ececec]/40">
+                        <span className="max-w-[50%] truncate text-[11px] tracking-[0.1em] text-[#ececec]/55">
                           {r2.value}
                         </span>
                       )}
                       {!advanced && (
-                        <span className="text-[11px] tracking-[0.14em] text-[#ececec]/30">
+                        <span className="text-[11px] tracking-[0.14em] text-[#ececec]/60">
                           {r2.value ? '· ' : ''}SHOW
                         </span>
                       )}
@@ -703,7 +703,7 @@ export function PlayerOptions({
               </div>
             )}
 
-            <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/45">
+            <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/62">
               {curRow.help}
             </div>
             {versusActive && (
@@ -724,7 +724,7 @@ export function PlayerOptions({
                       <button
                         onClick={go}
                         className="border px-3 py-[3px] text-[11px] font-bold tracking-[0.14em]"
-                        style={{ borderColor: AC }}
+                        style={{ borderColor: AC, background: AC + '1a' }}
                       >
                         READY UP
                       </button>
@@ -752,7 +752,7 @@ export function PlayerOptions({
           </div>
 
           <div className="flex min-w-0 flex-1 flex-col border-l border-white/[0.09]">
-            <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/45">
+            <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/62">
               PREVIEW
             </div>
             <div className="min-h-0 flex-1">
