@@ -9,7 +9,8 @@
  */
 import { useState } from 'react';
 import type { PlayerState } from '../net/roomPeer';
-import { codeToArrows, type VersusChartMeta } from '../net/versus';
+import { type VersusChartMeta } from '../net/versus';
+import { CodeArrows } from './PadArrow';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { STEP_AC as AC } from './Stage';
@@ -93,8 +94,8 @@ export function RoomDock({
           MULTIPLAYER
         </span>
         {vs.k === 'in-room' && (
-          <span className="text-[13px] font-bold tracking-[0.14em] text-[#ececec]/85">
-            {codeToArrows(vs.room.code)}
+          <span className="text-[#ececec]/85">
+            <CodeArrows code={vs.room.code} size={13} gap={5} />
           </span>
         )}
         <span className="h-px flex-1 bg-white/[0.1]" />

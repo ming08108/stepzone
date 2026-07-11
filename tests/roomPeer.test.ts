@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest';
 import type { PlayResult } from '../src/net/protocol';
 import { RoomGuest, RoomHost, type PeerChannel } from '../src/net/roomPeer';
 import {
-  codeToArrows,
   isRoomCode,
   MAX_PLAYERS,
   parseGuestMsg,
@@ -124,10 +123,10 @@ function toPlaying(r: ReturnType<typeof room>) {
 }
 
 describe('room codes', () => {
-  it('generates valid 6-arrow codes and renders them as glyphs', () => {
+  it('generates valid 6-arrow codes', () => {
     const code = randomRoomCode();
     expect(isRoomCode(code)).toBe(true);
-    expect(codeToArrows('LDUR' + code.slice(4)).startsWith('← ↓ ↑ →')).toBe(true);
+    expect(code).toMatch(/^[LDUR]{6}$/);
     expect(isRoomCode('LDURL')).toBe(false); // too short
     expect(isRoomCode('LDURLX')).toBe(false); // bad symbol
   });

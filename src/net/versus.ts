@@ -46,12 +46,6 @@ export function isRoomCode(v: unknown): v is string {
   return typeof v === 'string' && new RegExp(`^[LDUR]{${CODE_LENGTH}}$`).test(v);
 }
 
-/** Display form: L/D/U/R -> ←↓↑→ */
-export function codeToArrows(code: string): string {
-  const glyph: Record<string, string> = { L: '←', D: '↓', U: '↑', R: '→' };
-  return [...code].map((c) => glyph[c] ?? c).join(' ');
-}
-
 // ---- song / chart identity --------------------------------------------------------
 
 /** One chart's identity + display meta inside a song descriptor. */

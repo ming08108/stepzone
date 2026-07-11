@@ -9,12 +9,12 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { keyboardRole } from '../input/inputBus';
-import { CODE_ARROWS, CODE_LENGTH, codeToArrows } from '../net/versus';
+import { CODE_ARROWS, CODE_LENGTH } from '../net/versus';
 import { dismissRoomError, hostRoom, joinRoomByCode, roomState, subscribeRoom } from './roomStore';
 import { RoomDock } from './RoomDock';
+import { CodeArrows, PadArrow } from './PadArrow';
 
 const AC = '#ff5d47';
-const ARROW_GLYPH: Record<string, string> = { L: '←', D: '↓', U: '↑', R: '→' };
 
 /** Auto-join dedupe across StrictMode's dev double-mount — only the first
  *  instance starts the join; its store writes outlive the remount. */
@@ -203,20 +203,23 @@ export function MultiplayerPanel({
           {vs.k === 'idle' && step.k === 'enter' && (
             <div className="flex flex-col items-center gap-3 py-2">
               <div className="text-[12px] tracking-[0.2em] text-[#ececec]/55">ENTER ROOM CODE</div>
-              <div className="text-[42px] font-bold tracking-[0.18em]">
-                {codeToArrows(step.code)}
-                <span className="text-[#ececec]/30">
-                  {' · '.repeat(Math.max(0, CODE_LENGTH - step.code.length)).trimEnd()}
-                </span>
+              <div className="flex h-[40px] items-center gap-2">
+                {step.code.length > 0 && <CodeArrows code={step.code} size={34} gap={8} />}
+                {Array.from({ length: CODE_LENGTH - step.code.length }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="inline-block h-[6px] w-[6px] rounded-full bg-[#ececec]/25"
+                  />
+                ))}
               </div>
               <div className="flex gap-2">
                 {CODE_ARROWS.map((a) => (
                   <button
                     key={a}
                     onClick={() => pressArrow(a)}
-                    className="border border-white/15 px-4 py-2 text-[20px] leading-none text-[#ececec]/85 hover:border-[#ff5d47] hover:text-[#ececec]"
+                    className="flex items-center justify-center border border-white/15 px-4 py-2 text-[#ececec]/85 hover:border-[#ff5d47] hover:text-[#ececec]"
                   >
-                    {ARROW_GLYPH[a]}
+                    <PadArrow dir={a} size={22} />
                   </button>
                 ))}
               </div>

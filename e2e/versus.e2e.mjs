@@ -26,8 +26,13 @@ const step = (name, ok, extra = '') => {
 const skip = (name, why) => console.log(`SKIP ${name} — ${why}`);
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
-const KEY = { '←': 'ArrowLeft', '↓': 'ArrowDown', '↑': 'ArrowUp', '→': 'ArrowRight' };
-const LDUR = { '←': 'L', '↓': 'D', '↑': 'U', '→': 'R' };
+const KEY = { L: 'ArrowLeft', D: 'ArrowDown', U: 'ArrowUp', R: 'ArrowRight' };
+
+/** The room code, read as its L/D/U/R letters from the arrow glyphs' data-arrow
+ *  attributes (the code renders as rotated SVG arrows, not text). On the host's
+ *  PLAYER OPTIONS the only such arrows are the 6-arrow dock code. */
+const readCode = async (pg) =>
+  (await pg.$$eval('[data-arrow]', (els) => els.map((e) => e.getAttribute('data-arrow')))).join('');
 
 /** A context with a fixed online identity; guests stay on the pack grid. */
 async function playerPage(browser, base, name, { stayOnGrid = false, query = '' } = {}) {
@@ -102,14 +107,12 @@ try {
       null,
       { timeout: 15_000 },
     );
-    const codeGlyphs = (await bodyText(alpha)).match(/([←↓↑→](?:\s[←↓↑→]){5})/)?.[1];
-    step('host shows a 6-arrow room code on PLAYER OPTIONS', !!codeGlyphs, codeGlyphs ?? 'none');
-    const codeLdur = codeGlyphs
-      ? codeGlyphs
-          .split(' ')
-          .map((g) => LDUR[g])
-          .join('')
-      : '';
+    const codeLdur = await readCode(alpha);
+    step(
+      'host shows a 6-arrow room code on PLAYER OPTIONS',
+      /^[LDUR]{6}$/.test(codeLdur),
+      codeLdur || 'none',
+    );
 
     // 2. BRAVO joins from the PACK GRID: SELECT -> MULTIPLAYER panel ->
     //    JOIN WITH CODE -> press the 6 arrows.
@@ -122,8 +125,8 @@ try {
     await bravo.waitForFunction(() => document.body.innerText.includes('ENTER ROOM CODE'), null, {
       timeout: 10_000,
     });
-    for (const glyph of codeGlyphs.split(' ')) {
-      await bravo.keyboard.press(KEY[glyph]);
+    for (const letter of codeLdur) {
+      await bravo.keyboard.press(KEY[letter]);
       await bravo.waitForTimeout(80);
     }
 
