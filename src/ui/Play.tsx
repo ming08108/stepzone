@@ -627,11 +627,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     >
       <div className="relative z-[1] flex h-full w-full">
         <canvas ref={canvasRef} className="block h-full min-w-0 flex-1" />
-        {/* Arcade 2P: the rival's live field (their chart, our synced clock).
-            The panel reserves its width for the whole screen lifetime so the
-            main field's canvas never resizes mid-song. */}
+        {/* Arcade 2P: the rival's live field (their chart, our synced clock),
+            split 50/50 like a real cab — the note field is height-constrained,
+            so half-width costs the main field nothing on wide screens. The
+            panel reserves its space for the whole screen lifetime so the main
+            field's canvas never resizes mid-song. */}
         {req.versus?.opponentChart && (
-          <div className="h-full w-[34%] max-w-[560px] flex-none border-l border-white/10 bg-black/30">
+          <div className="h-full min-w-0 flex-1 border-l border-white/10 bg-black/30">
             {phase === 'playing' && sessionRef.current && (
               <OpponentField session={sessionRef.current} versus={req.versus} song={req.song} />
             )}
