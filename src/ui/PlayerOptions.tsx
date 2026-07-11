@@ -249,8 +249,9 @@ export function PlayerOptions({
     value: string;
     help: string;
     valueColor?: string;
-    /** 'section' renders as a collapsible group header instead of a ◀▶ row. */
-    kind?: 'section';
+    /** 'section' renders as a collapsible group header instead of a ◀▶ row;
+     *  'action' renders as a button (◀▶/click = press, not value-browsing). */
+    kind?: 'section' | 'action';
     /** Indented child row belonging to the section header above it. */
     sub?: boolean;
     /** Accent-tinted row — the practice block, so it reads as a feature, not a mod. */
@@ -385,21 +386,21 @@ export function PlayerOptions({
     },
     {
       label: 'LIVE VERSUS',
-      tone: 'accent',
+      kind: 'action',
       value:
         vs.k === 'idle'
-          ? 'OFF'
+          ? 'HOST A ROOM ▸'
           : vs.k === 'busy'
-            ? '…'
+            ? 'CREATING…'
             : vs.k === 'hosting'
-              ? 'HOSTING…'
+              ? 'HOSTING — LEAVE ✕'
               : vs.k === 'error'
-                ? 'ERROR'
-                : 'CONNECTED',
-      valueColor: vs.k === 'connected' ? '#59f07f' : versusActive ? AC : undefined,
+                ? 'TRY AGAIN ▸'
+                : 'CONNECTED — LEAVE ✕',
+      valueColor: vs.k === 'connected' ? '#59f07f' : undefined,
       help: versusActive
-        ? 'Turn OFF to leave the room (your rival is told). Everything else about the room shows in the LIVE VERSUS block below.'
-        : 'Race a friend live on this song: creates a room and shows a 6-arrow code (plus an invite link) they join with. You each pick your own difficulty.',
+        ? 'Press again (or SELECT) to leave the room — your rival is told. The room details live in the LIVE VERSUS block below.'
+        : 'Race a friend live on this song: press to create a room — you get a 6-arrow code and an invite link they join with, and you each pick your own difficulty.',
       adjust: () => {
         if (versusActive) abandonVersus();
         else void hostVersus(req.song, settings.musicRate, req.entry);
@@ -542,6 +543,40 @@ export function PlayerOptions({
                           {r2.value ? '· ' : ''}SHOW
                         </span>
                       )}
+                    </div>
+                  );
+                }
+                if (r2.kind === 'action') {
+                  // A button in the row list: whole row presses (◀▶ or click),
+                  // no value-stepper chevrons — same accent language as the
+                  // song-select action buttons.
+                  return (
+                    <div
+                      key={r2.label}
+                      ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                      onClick={() => {
+                        setRow(i);
+                        r2.adjust(1);
+                      }}
+                      className="flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4 font-bold"
+                      style={{
+                        borderColor: on ? AC : AC + '59',
+                        borderLeftColor: AC,
+                        background: on ? AC + '2b' : AC + '0d',
+                      }}
+                    >
+                      <span
+                        className="flex-1 truncate text-[13px] tracking-[0.14em]"
+                        style={{ color: AC }}
+                      >
+                        {r2.label}
+                      </span>
+                      <span
+                        className="text-[14px] tracking-[0.08em]"
+                        style={r2.valueColor ? { color: r2.valueColor } : { color: '#ececec' }}
+                      >
+                        {r2.value}
+                      </span>
                     </div>
                   );
                 }
