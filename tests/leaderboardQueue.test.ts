@@ -44,8 +44,8 @@ function queued(): unknown[] {
 }
 
 function play(percent = 0.9): PendingPlay {
-  const { chart, musicRate, result, input, replay } = validSubmit();
-  return { chart, musicRate, result: { ...result, percent }, input, replay };
+  const { chart, musicRate, result, input, chartData, replay } = validSubmit();
+  return { chart, musicRate, result: { ...result, percent }, input, chartData, replay };
 }
 
 const okBody = { ok: true, rank: 1, isPersonalBest: true };
@@ -65,11 +65,14 @@ describe('submitScore', () => {
     expect(await submitScore(play())).toEqual(okBody);
     expect(queued()).toHaveLength(0);
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
-    expect(body.protocol).toBe(2);
+    expect(body.protocol).toBe(3);
     expect(typeof body.playerId).toBe('string');
     expect(body.result.percent).toBe(0.9);
     expect(body.input.device).toBe('pad');
     expect(Array.isArray(body.replay)).toBe(true);
+    // v3 ships the chart so the server can re-simulate the replay.
+    expect(typeof body.chartData.noteData).toBe('string');
+    expect(Array.isArray(body.chartData.timing.bpms)).toBe(true);
   });
 
   it('parks the play when offline and flushQueue delivers it later', async () => {
@@ -94,6 +97,25 @@ describe('submitScore', () => {
     vi.stubGlobal('fetch', respond(500, { ok: false, code: 'oops', message: 'down' }));
     expect(await submitScore(play())).toBeNull();
     expect(queued()).toHaveLength(1);
+  });
+
+  it('drops an older queued play with no chartData (pre-v3 evidence)', async () => {
+    // A play parked before v3 carries no chartData; the server would re-simulate
+    // against nothing, so loadQueue must drop it rather than submit it blind.
+    const stale = { ...play() } as Record<string, unknown>;
+    delete stale.chartData;
+    const fresh = play(0.42);
+    store.set(QUEUE_KEY, JSON.stringify([stale, fresh]));
+
+    const fetchMock = respond(200, okBody);
+    vi.stubGlobal('fetch', fetchMock);
+    await flushQueue();
+
+    // Only the well-formed play was delivered; the stale one never went out.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.result.percent).toBe(0.42);
+    expect(queued()).toHaveLength(0);
   });
 
   it('queues behind older parked plays and caps the queue at the newest 50', async () => {

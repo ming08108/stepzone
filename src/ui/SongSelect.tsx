@@ -26,6 +26,7 @@ import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import { GlobalBest } from './GlobalBest';
+import { buildChartSeed, type ChartSeed } from './devSeed';
 import { LeaderboardSide } from './LeaderboardSide';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
@@ -362,6 +363,25 @@ export function SongSelect({
     };
   }, [inPacks, song?.entry]);
   useEffect(() => () => stopPreview(), []);
+
+  // DEV-only test hook (mirrors Play.tsx's window.__nfSession): expose the
+  // highlighted chart's board hash + chartData + an ideal replay, so the
+  // leaderboard e2e can seed genuine, re-simulatable v3 scores on the very
+  // chart the header/RANKS panel query. Never attached in production.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as unknown as { __seedChartData?: () => Promise<ChartSeed | null> };
+    w.__seedChartData = async () => {
+      const e = song?.entry;
+      if (!e) return null;
+      const loaded = await ensureLoaded(e);
+      const chart = bestChartsPerSlot(loaded.song)[diff];
+      return chart ? buildChartSeed(loaded.song, chart) : null;
+    };
+    return () => {
+      delete w.__seedChartData;
+    };
+  }, [song?.entry, diff]);
 
   // Warm the preview cache for songs near the cursor (todos3 #4), so scrolling
   // onto a neighbor starts its sample immediately instead of after a decode.

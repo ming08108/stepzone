@@ -14,6 +14,7 @@
 
 import { error, json } from './httpResponse';
 import { parseSubmitScoreRequest, type SubmitScoreRequest } from './protocol';
+import { verifyReplay } from '../gameplay/replayVerify';
 import type { ScoreStore } from './scoreStore';
 
 const DEFAULT_LIMIT = 20;
@@ -28,30 +29,22 @@ const MIN_REPLAY_SPAN_SECONDS = 5;
 const MIN_TAPS_FOR_SPAN = 20;
 
 /**
- * Cross-field anti-cheat: the replay has to be consistent with the claimed
- * result. Parse-shape checks live in protocol.ts; this is the plausibility
- * layer, beside the existing combo check. Returns a rejection reason, or null
- * when the submission looks legitimate.
+ * A cheap pre-filter before the (heavier) re-simulation: an empty or instant
+ * replay can't have played anything, so reject it without rebuilding the chart.
+ * The authoritative check is verifyReplay — this only trims obvious garbage.
+ * Returns a rejection reason, or null to proceed to re-simulation.
  */
-function implausible(sub: SubmitScoreRequest): string | null {
-  // Judged non-miss taps: TapNoteScore W5..W1 map to keys 5..9 (noteTypes.ts).
-  let judgedTaps = 0;
-  for (let k = 5; k <= 9; k++) judgedTaps += sub.result.counts[k] ?? 0;
-
-  // (a) You can't hit notes without pressing: presses (up=false) must cover at
-  // least the longest combo. A keyboard-forged or empty replay fails here.
-  let presses = 0;
+function degenerateReplay(sub: SubmitScoreRequest): string | null {
+  if (sub.replay.length === 0) return 'empty replay';
   let firstT = Infinity;
   let lastT = -Infinity;
+  let judgedTaps = 0;
+  for (let k = 5; k <= 9; k++) judgedTaps += sub.result.counts[k] ?? 0;
   for (const e of sub.replay) {
-    if (!e.up) presses++;
     if (e.t < firstT) firstT = e.t;
     if (e.t > lastT) lastT = e.t;
   }
-  if (presses < sub.result.maxCombo) return 'replay presses below combo';
-
-  // (b) A real play of any length spans time — a log collapsed to an instant is
-  // fabricated. Very short plays are exempt (few taps, little to span).
+  // A play claiming real length must span real time — an instant log is forged.
   if (judgedTaps >= MIN_TAPS_FOR_SPAN && lastT - firstT < MIN_REPLAY_SPAN_SECONDS) {
     return 'replay span too short';
   }
@@ -115,9 +108,15 @@ export function createHandlers(store: ScoreStore, now: () => number = Date.now):
       }
       const sub = parseSubmitScoreRequest(parsed);
       if (!sub) return error(400, 'bad_request', 'invalid submission');
-      const reason = implausible(sub);
-      if (reason) return error(400, 'bad_request', reason);
-      const outcome = await store.submit(sub, await sha256Hex(sub.secret), now());
+      const degenerate = degenerateReplay(sub);
+      if (degenerate) return error(400, 'bad_request', degenerate);
+      // The real anti-cheat: re-run the replay against the shipped chart (bound
+      // to the board by content hash) and RANK ON WHAT IT PRODUCES, not on the
+      // client's self-reported result. A forged score is scored as it plays.
+      const verified = verifyReplay(sub.chartData, sub.chart.chartHash, sub.replay, sub.musicRate);
+      if ('reject' in verified) return error(400, 'bad_request', verified.reject);
+      const authoritative: SubmitScoreRequest = { ...sub, result: verified.result };
+      const outcome = await store.submit(authoritative, await sha256Hex(sub.secret), now());
       if (!outcome.ok) return error(403, outcome.code, 'secret does not match this playerId');
       return json(200, { ok: true, rank: outcome.rank, isPersonalBest: outcome.isPersonalBest });
     },

@@ -77,9 +77,21 @@ function timingFingerprint(t: TimingData): string {
   ].join(';');
 }
 
+/**
+ * The content hash from its raw parts (stepsType + raw note grid + resolved
+ * timing). Split out so the leaderboard server can recompute the SAME hash from
+ * a submitted chart payload — binding a replay to the board it claims — without
+ * a Song/Steps object (src/net/replayVerify.ts). Any change here must stay in
+ * lockstep on both ends, or existing records orphan.
+ */
+export function hashChartContent(
+  stepsType: string,
+  noteDataString: string,
+  timing: TimingData,
+): string {
+  return hash64(`${stepsType}|${normalizeNotes(noteDataString)}|${timingFingerprint(timing)}`);
+}
+
 export function chartContentHash(song: Song, chart: Steps): string {
-  const timing = chart.getTimingData(song.timing);
-  return hash64(
-    `${chart.stepsType}|${normalizeNotes(chart.noteDataString)}|${timingFingerprint(timing)}`,
-  );
+  return hashChartContent(chart.stepsType, chart.noteDataString, chart.getTimingData(song.timing));
 }

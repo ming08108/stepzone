@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_GHOST_FRAMES,
+  MAX_NOTE_DATA_CHARS,
   MAX_REPLAY_EVENTS,
+  parseChartData,
   parseChartRef,
   parseGhost,
   parsePlayResult,
@@ -10,10 +12,13 @@ import {
   parseSubmitScoreRequest,
   rateKey,
   PROTOCOL_VERSION,
+  type ChartData,
   type GhostFrame,
   type ReplayEvent,
   type SubmitScoreRequest,
 } from '../src/net/protocol';
+import { hashChartContent } from '../src/song/chartHash';
+import { reconstructTiming } from '../src/gameplay/replayVerify';
 
 /** A plausible pad replay: enough presses to cover any test combo, spanning
  *  well past the server's minimum duration. */
@@ -25,7 +30,64 @@ export function sampleReplay(n = 120): ReplayEvent[] {
   }));
 }
 
-/** A well-formed submission the tests then break one field at a time. */
+// ---- shared re-simulatable fixture chart --------------------------------------
+// A 4-measure quarter-note stream on lane 0 (16 taps at 120 BPM: beat b at b/2
+// seconds). The server now RE-SIMULATES the submitted replay against the
+// submitted chartData and ranks on what it produces, so the API tests need a
+// real chart, a replay that actually scores, and a chartHash the chart hashes
+// to. Mirrors tests/replayVerify.test.ts.
+export const FIXTURE_STEPS_TYPE = 'dance-single';
+export const FIXTURE_NOTE_GRID = Array.from({ length: 4 }, () => '1000\n1000\n1000\n1000').join(
+  '\n,\n',
+);
+/** The 16 note times (seconds), one quarter note per beat at 120 BPM. */
+export const FIXTURE_NOTE_TIMES = Array.from({ length: 16 }, (_, i) => i * 0.5);
+
+export function fixtureChartData(): ChartData {
+  return {
+    stepsType: FIXTURE_STEPS_TYPE,
+    noteData: FIXTURE_NOTE_GRID,
+    timing: { offset: 0, bpms: [{ row: 0, bps: 2 }], stops: [], delays: [], warps: [], fakes: [] },
+  };
+}
+
+/** The content hash the client keys a submission on — recomputed the SAME way
+ *  the server does (so a submission with this chartData verifies). */
+export const FIXTURE_CHART_HASH = hashChartContent(
+  FIXTURE_STEPS_TYPE,
+  FIXTURE_NOTE_GRID,
+  reconstructTiming(fixtureChartData().timing),
+);
+
+/** A replay pressing the given note indices (0..15), each released 50 ms later,
+ *  time-sorted. Pressing at the exact note time scores W1 (an `offset` shifts
+ *  the hit into a worse window). */
+export function fixtureReplay(indices: number[], offset = 0): ReplayEvent[] {
+  const ev: ReplayEvent[] = [];
+  for (const i of indices) {
+    const t = Math.round((FIXTURE_NOTE_TIMES[i] + offset) * 1e4) / 1e4;
+    ev.push({ t, track: 0, up: false });
+    ev.push({ t: Math.round((t + 0.05) * 1e4) / 1e4, track: 0, up: true });
+  }
+  return ev.sort((a, b) => a.t - b.t);
+}
+
+/** Hits every note perfectly — re-sims to 100% / AAA / 16 combo. */
+export function perfectReplay(): ReplayEvent[] {
+  return fixtureReplay([...Array(16).keys()]);
+}
+
+/** Hits `count` notes evenly spread across the stream (always including the
+ *  first and last, so the span always clears the server's minimum) — a partial
+ *  play that re-sims strictly below a perfect one. */
+export function spreadReplay(count: number): ReplayEvent[] {
+  const idx = new Set<number>();
+  for (let k = 0; k < count; k++) idx.add(Math.round((k * 15) / (count - 1)));
+  return fixtureReplay([...idx]);
+}
+
+/** A well-formed submission the tests then break one field at a time. The chart
+ *  + replay re-simulate to a real 100% on the fixture board. */
 export function validSubmit(): SubmitScoreRequest {
   return {
     protocol: PROTOCOL_VERSION,
@@ -33,7 +95,7 @@ export function validSubmit(): SubmitScoreRequest {
     secret: 'secret-1',
     playerName: 'PLAYER',
     chart: {
-      chartHash: 'abc123',
+      chartHash: FIXTURE_CHART_HASH,
       title: 'Song',
       artist: 'Artist',
       stepsType: 'dance-single',
@@ -50,7 +112,8 @@ export function validSubmit(): SubmitScoreRequest {
       holdCounts: { 6: 10 },
     },
     input: { device: 'pad', padId: 'pad-1', padKnown: false },
-    replay: sampleReplay(),
+    chartData: fixtureChartData(),
+    replay: perfectReplay(),
   };
 }
 
@@ -69,21 +132,31 @@ describe('parseSubmitScoreRequest', () => {
     expect(parseSubmitScoreRequest(JSON.parse(JSON.stringify(sub)))).toEqual(sub);
   });
 
+  it('pins the current protocol version', () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+    expect(validSubmit().protocol).toBe(3);
+  });
+
   it('rejects non-objects and wrong protocol versions', () => {
     expect(parseSubmitScoreRequest(null)).toBeNull();
     expect(parseSubmitScoreRequest('hi')).toBeNull();
-    // v1 submissions no longer parse — old queued plays are dropped on load.
+    // Only the current version parses; older submissions no longer do — old
+    // queued plays are dropped on load rather than accepted without v3 evidence.
     expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 1 })).toBeNull();
-    expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 3 })).toBeNull();
+    expect(parseSubmitScoreRequest({ ...validSubmit(), protocol: 2 })).toBeNull();
   });
 
-  it('requires a pad input and a replay (anti-cheat, v2)', () => {
+  it('requires a pad input, a chart, and a replay (anti-cheat, v3)', () => {
     const noInput = { ...validSubmit() } as Record<string, unknown>;
     delete noInput.input;
     expect(parseSubmitScoreRequest(noInput)).toBeNull();
     const noReplay = { ...validSubmit() } as Record<string, unknown>;
     delete noReplay.replay;
     expect(parseSubmitScoreRequest(noReplay)).toBeNull();
+    // The chart itself is required in v3 (the server re-simulates against it).
+    const noChartData = { ...validSubmit() } as Record<string, unknown>;
+    delete noChartData.chartData;
+    expect(parseSubmitScoreRequest(noChartData)).toBeNull();
     // Only a pad is accepted — a keyboard device is rejected outright.
     expect(
       parseSubmitScoreRequest({
@@ -91,8 +164,9 @@ describe('parseSubmitScoreRequest', () => {
         input: { device: 'keyboard', padId: 'kb', padKnown: false },
       }),
     ).toBeNull();
-    // A malformed replay rejects the whole submission.
+    // A malformed replay or chartData rejects the whole submission.
     expect(parseSubmitScoreRequest({ ...validSubmit(), replay: 'nope' })).toBeNull();
+    expect(parseSubmitScoreRequest({ ...validSubmit(), chartData: 'nope' })).toBeNull();
   });
 
   it('rejects missing/oversized identity fields', () => {
@@ -186,6 +260,46 @@ describe('parseSubmitInput', () => {
     expect(parseSubmitInput({ device: 'pad', padId: '', padKnown: false })).toBeNull();
     expect(parseSubmitInput({ device: 'pad', padId: 'x'.repeat(129), padKnown: false })).toBeNull();
     expect(parseSubmitInput({ device: 'pad', padId: 'x' })).toBeNull();
+  });
+});
+
+describe('parseChartData', () => {
+  it('accepts a well-formed chart payload and echoes it back', () => {
+    const cd = fixtureChartData();
+    expect(parseChartData(JSON.parse(JSON.stringify(cd)))).toEqual(cd);
+  });
+
+  it('rejects a non-object or a missing timing block', () => {
+    expect(parseChartData(null)).toBeNull();
+    expect(parseChartData('nope')).toBeNull();
+    const noTiming = { ...fixtureChartData() } as Record<string, unknown>;
+    delete noTiming.timing;
+    expect(parseChartData(noTiming)).toBeNull();
+  });
+
+  it('rejects a non-string or over-long note grid', () => {
+    expect(parseChartData({ ...fixtureChartData(), noteData: 1234 })).toBeNull();
+    expect(
+      parseChartData({ ...fixtureChartData(), noteData: 'x'.repeat(MAX_NOTE_DATA_CHARS + 1) }),
+    ).toBeNull();
+  });
+
+  it('rejects a malformed timing segment', () => {
+    const withTiming = (timing: object) =>
+      parseChartData({
+        ...fixtureChartData(),
+        timing: { ...fixtureChartData().timing, ...timing },
+      });
+    // A segment row must be a non-negative integer.
+    expect(withTiming({ bpms: [{ row: -1, bps: 2 }] })).toBeNull();
+    expect(withTiming({ bpms: [{ row: 1.5, bps: 2 }] })).toBeNull();
+    // The segment value (here bps) must be finite.
+    expect(withTiming({ bpms: [{ row: 0, bps: Infinity }] })).toBeNull();
+    expect(withTiming({ bpms: [{ row: 0, bps: 'fast' }] })).toBeNull();
+    // A missing offset sinks the whole timing block.
+    const noOffset = { ...fixtureChartData().timing } as Record<string, unknown>;
+    delete noOffset.offset;
+    expect(parseChartData({ ...fixtureChartData(), timing: noOffset })).toBeNull();
   });
 });
 

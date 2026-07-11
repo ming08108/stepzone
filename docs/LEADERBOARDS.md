@@ -42,12 +42,25 @@ boards. The client needs no configuration either way; it just talks to
 
 ## Trust model (M1)
 
-The client is authoritative for its own score (see ONLINE-MULTIPLAYER.md §8.1
-for why that is unavoidable). The API enforces shape and plausibility
-(percent 0..1, integer counts with sane bounds, maxCombo ≤ judged steps), and
-identity spoofing is blocked by the secret hash — but a modified client can
-submit a fabricated score. Replay-proofs and statistical checks are M4
-hardening; boards are best-effort honest until then.
+**Server-side replay verification (v3) — the score is NOT trusted.** A
+submission ships the full input replay (song-seconds press/release log) AND the
+chart it ran on (`chartData`: raw note grid + resolved timing). On every POST
+the server (src/gameplay/replayVerify.ts, bundled into the scores function):
+
+1. Recomputes the chart's content hash from the shipped parts and rejects the
+   submission unless it equals the board's `chartHash` — so the payload is the
+   exact chart the board is keyed on, never an easier substitute.
+2. Re-runs the real `Judge` over the replay (the same `step()`/`update()` the
+   live play used) and **derives the score from what the inputs actually
+   produce**. The client's self-reported `result` is ignored for ranking — a
+   forged 99% with a replay that scores 40% is stored as 40%.
+
+Pad gating (v2) still blocks keyboard plays client-side (`input.device`), and
+identity spoofing is blocked by the secret hash. What survives: a **bot/TAS**
+that genuinely produces winning inputs for the chart — the irreducible limit
+for any rhythm game, and the target for statistical anomaly detection later.
+Compute is bounded against a crafted chart (note-grid + timing-segment caps in
+protocol.ts, a fine-sim horizon cap in replayVerify.ts).
 
 ## Ghosts (race the ghost)
 
@@ -90,4 +103,5 @@ WORLD readout (src/ui/useLeaderboard.ts).
 
 ## Not yet built
 
-- Anti-cheat beyond plausibility checks (M4: replay proofs, anomaly detection).
+- Anti-cheat beyond replay re-simulation (statistical anomaly detection to
+  catch bots/TAS that produce genuinely-winning inputs).

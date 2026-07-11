@@ -23,12 +23,14 @@ import type {
   SubmitScoreResponse,
 } from './protocol';
 import {
+  parseChartData,
   parseChartRef,
   parseGhost,
   parsePlayResult,
   parseReplay,
   parseSubmitInput,
   PROTOCOL_VERSION,
+  type ChartData,
 } from './protocol';
 
 export interface PendingPlay {
@@ -37,7 +39,10 @@ export interface PendingPlay {
   result: PlayResult;
   /** Device the play ran on — a pad (keyboard plays are never queued). */
   input: SubmitInput;
-  /** Full input log of the play; the server checks + stores it on a PB. */
+  /** The chart the play ran on, so the server can re-simulate the replay. */
+  chartData: ChartData;
+  /** Full input log of the play; the server RE-SIMULATES it to score the play
+   *  and stores it on a PB. */
   replay: ReplayEvent[];
   /** Scoreboard timeline for race-the-ghost; kept server-side on a PB. */
   ghost?: GhostFrame[];
@@ -55,14 +60,23 @@ function loadQueue(): PendingPlay[] {
     if (!isRecord(v) || typeof v.musicRate !== 'number') continue;
     const chart = parseChartRef(v.chart);
     const result = parsePlayResult(v.result);
-    // input + replay are required in v2 — a queued v1 play (no input/replay)
-    // fails here and is dropped rather than submitted without its evidence.
+    // input + chartData + replay are required in v3 — a queued older play (no
+    // chart evidence) fails here and is dropped rather than submitted blind.
     const input = parseSubmitInput(v.input);
+    const chartData = parseChartData(v.chartData);
     const replay = parseReplay(v.replay);
-    if (!chart || !result || !input || !replay) continue;
+    if (!chart || !result || !input || !chartData || !replay) continue;
     // A corrupt parked ghost drops the ghost, not the play.
     const ghost = v.ghost !== undefined ? parseGhost(v.ghost) : null;
-    out.push({ chart, musicRate: v.musicRate, result, input, replay, ...(ghost ? { ghost } : {}) });
+    out.push({
+      chart,
+      musicRate: v.musicRate,
+      result,
+      input,
+      chartData,
+      replay,
+      ...(ghost ? { ghost } : {}),
+    });
   }
   return out;
 }
@@ -85,6 +99,7 @@ function toRequest(play: PendingPlay): SubmitScoreRequest {
       percent: Math.max(0, Math.min(1, play.result.percent)),
     },
     input: play.input,
+    chartData: play.chartData,
     replay: play.replay,
     ...(play.ghost && play.ghost.length > 0 ? { ghost: play.ghost } : {}),
   };

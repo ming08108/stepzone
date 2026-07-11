@@ -80,25 +80,34 @@ try {
   const rate = reqUrl.searchParams.get('rate') ?? '1';
   step('song select queries the board for the highlighted chart', !!chartHash, `hash ${chartHash}`);
 
-  // 2. Seed two players through the real POST endpoint (RIVAL has a ghost).
-  // v2 anti-cheat: every submission declares a pad and carries a plausible
-  // replay (enough presses for the combo, spanning real play time).
-  const seedReplay = () => {
-    const events = [];
-    for (let i = 0; i < 60; i++) {
-      const t = 1 + i * 0.5;
-      events.push({ t, track: i % 4, up: false }, { t: t + 0.05, track: i % 4, up: true });
-    }
-    return events;
-  };
-  const submit = (playerId, playerName, percent, ghost) =>
+  // 2. v3 anti-cheat: the server RE-SIMULATES every submitted replay against
+  //    the submitted chart and ranks on what it scores, ignoring the claimed
+  //    result. A seed must therefore ship the genuine chart the board is keyed
+  //    on plus a replay that actually plays it — which the harness gets from
+  //    the DEV-only `window.__seedChartData()` hook for the highlighted chart.
+  await page.waitForFunction(() => typeof window.__seedChartData === 'function', null, {
+    timeout: 10_000,
+  });
+  const seed = await page.evaluate(() => window.__seedChartData());
+  step(
+    'dev seed hook yields the highlighted chart (hash + chartData + replay)',
+    !!seed && seed.chartHash === chartHash && Array.isArray(seed.perfectReplay),
+    `hash ${seed?.chartHash} notes ${seed?.perfectReplay?.length}`,
+  );
+
+  // The claimed result is ignored by the re-sim, so keep it minimal (few judged
+  // taps => no minimum-span rule) — the stored score is whatever the replay
+  // scores. RIVAL plays the full ideal replay (~100%); BRONZE plays only the
+  // first half (the rest miss), so RIVAL must outrank BRONZE on the re-sim.
+  const submit = (playerId, playerName, replay, ghost) =>
     fetch(`${base}api/scores`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        protocol: 2,
+        protocol: 3,
         input: { device: 'pad', padId: 'E2E Virtual Dance Pad', padKnown: true },
-        replay: seedReplay(),
+        chartData: seed.chartData,
+        replay,
         playerId,
         secret: `secret-${playerId}`,
         playerName,
@@ -106,36 +115,60 @@ try {
           chartHash,
           title: 'Seeded',
           artist: 'E2E',
-          stepsType: 'dance-single',
+          stepsType: seed.chartData.stepsType,
           difficulty: 3,
           meter: 5,
         },
         musicRate: Number(rate),
         result: {
-          percent,
-          grade: 'AA',
-          maxCombo: 50,
+          percent: 0.5,
+          grade: 'A',
+          maxCombo: 5,
           failed: false,
-          counts: { 9: 50 },
+          counts: { 9: 5 },
           holdCounts: {},
         },
         ...(ghost ? { ghost } : {}),
       }),
     });
-  const r1 = await submit('rival-1', 'RIVAL', 0.97, [
+  const full = seed.perfectReplay;
+  const half = full.slice(0, Math.max(2, Math.floor(full.length / 2)));
+  const r1 = await submit('rival-1', 'RIVAL', full, [
     { atSong: 0, percent: 0, combo: 0, life: 0.5 },
     { atSong: 1, percent: 0.5, combo: 5, life: 0.8 },
   ]);
-  const r2 = await submit('bronze-1', 'BRONZE', 0.8);
+  const r2 = await submit('bronze-1', 'BRONZE', half);
   step('seed submissions accepted', r1.status === 200 && r2.status === 200);
 
-  // 3. Fresh page (module caches reset) — the WORLD line shows the seeded top.
+  // Read back the re-simulated board at the API level: RIVAL (full replay) must
+  // rank above BRONZE (half replay). The stored percents drive the UI regexes.
+  const boardRows = await (
+    await fetch(
+      `${base}api/scores?chartHash=${encodeURIComponent(chartHash)}&rate=${rate}&limit=10`,
+    )
+  ).json();
+  const rival = boardRows.rows?.find((r) => r.playerId === 'rival-1');
+  const bronze = boardRows.rows?.find((r) => r.playerId === 'bronze-1');
+  step(
+    're-sim ranks the full replay above the partial',
+    !!rival && !!bronze && rival.rank === 1 && rival.percent > bronze.percent,
+    `rival ${(rival?.percent * 100).toFixed(2)}% > bronze ${(bronze?.percent * 100).toFixed(2)}%`,
+  );
+  const pct = (p) => (p * 100).toFixed(2);
+  const rivalPct = pct(rival.percent);
+  const bronzePct = pct(bronze.percent);
+
+  // 3. Fresh page (server store persists) — the WORLD line shows the seeded top.
   await openAllSongs(page, base);
   await page.waitForFunction(() => document.body.innerText.includes('WORLD'), null, {
     timeout: 10_000,
   });
   const header = await bodyText(page);
-  step('WORLD best appears in the header', /WORLD\s*97\.00% RIVAL/.test(header));
+  step(
+    'WORLD best appears in the header',
+    new RegExp(`WORLD\\s*${rivalPct}% RIVAL`).test(header),
+    `expected ${rivalPct}% — header: ${header.replace(/\s+/g, ' ').slice(0, 120)}`,
+  );
 
   // 4. The full board renders in the side panel beside the list — no menu
   //    navigation needed (the panel is always visible on wide viewports).
@@ -144,7 +177,11 @@ try {
   });
   const panel = await bodyText(page);
   step('side panel lists the seeded board', /#1\s*RIVAL/.test(panel) && /#2\s*BRONZE/.test(panel));
-  step('percent/grade render', /97\.00%/.test(panel) && /80\.00%/.test(panel));
+  step(
+    'percent/grade render',
+    panel.includes(`${rivalPct}%`) && panel.includes(`${bronzePct}%`),
+    `rival ${rivalPct}% bronze ${bronzePct}%`,
+  );
   step('ghost marker shows on the racable row', panel.includes('▶'));
   step('list stays navigable alongside the panel', /▲▼ SONG/.test(panel));
 

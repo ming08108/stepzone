@@ -20,7 +20,7 @@
 // plausibility before storing. v1 submissions no longer parse (the version
 // gate rejects them), so old queued plays are dropped on load rather than
 // silently accepted without the new evidence.
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Immutable identity of a chart (content hash) + display metadata that
  *  rides along for rendering boards without owning the simfile. */
@@ -82,6 +82,28 @@ export interface SubmitInput {
   padKnown: boolean;
 }
 
+/**
+ * The chart a play ran on, shipped so a STATELESS server can re-simulate the
+ * replay against it (v3 anti-cheat). The server recomputes the content hash of
+ * these parts and rejects the submission unless it equals `chart.chartHash` —
+ * so the payload is the exact chart that board is keyed on, no easier
+ * substitute. `noteData` is the raw `#NOTES` grid; `timing` is the resolved
+ * per-chart timing (only the segments that affect beat<->time and judgability).
+ */
+export interface ChartData {
+  stepsType: string;
+  /** Raw note grid string (hashed verbatim, then parsed to re-simulate). */
+  noteData: string;
+  timing: {
+    offset: number;
+    bpms: Array<{ row: number; bps: number }>;
+    stops: Array<{ row: number; seconds: number }>;
+    delays: Array<{ row: number; seconds: number }>;
+    warps: Array<{ row: number; lengthRows: number }>;
+    fakes: Array<{ row: number; lengthRows: number }>;
+  };
+}
+
 export interface SubmitScoreRequest {
   protocol: typeof PROTOCOL_VERSION;
   playerId: string;
@@ -91,11 +113,15 @@ export interface SubmitScoreRequest {
   chart: ChartRef;
   /** Music rate this play used (1 = normal); boards partition on it. */
   musicRate: number;
+  /** The client's claimed result — NOT trusted for ranking: the server
+   *  re-simulates the replay and stores the score IT computes (v3). */
   result: PlayResult;
   /** Device the play ran on — must be a pad (anti-cheat, v2). */
   input: SubmitInput;
-  /** Full input log of the play; the server checks it for plausibility and
-   *  stores it (alongside the ghost) only when the play sets a new best. */
+  /** The chart, so the server can re-run the replay against it (v3). */
+  chartData: ChartData;
+  /** Full input log of the play; the server RE-SIMULATES it to derive the
+   *  authoritative score, and stores it (alongside the ghost) on a new best. */
   replay: ReplayEvent[];
   /** Scoreboard timeline of this play; stored only when it sets a new best. */
   ghost?: GhostFrame[];
@@ -264,6 +290,54 @@ export function parseReplay(v: unknown): ReplayEvent[] | null {
   return out;
 }
 
+/** A raw note grid dwarfs everything else in a submission; cap it well above
+ *  any real chart (dense marathons are tens of KB) but below abuse — this also
+ *  bounds how many notes the server re-simulates (anti-DoS). */
+export const MAX_NOTE_DATA_CHARS = 256 * 1024;
+/** Even the gimmick-heaviest real chart has a few hundred timing changes; a
+ *  low cap keeps the server's beat<->time scan (O(notes × segments)) cheap. */
+const MAX_TIMING_SEGMENTS = 2_000;
+/** Note rows are non-negative integers; a sane ceiling rejects garbage rows. */
+const MAX_ROW = 1 << 28;
+
+function parseRowSegments<T>(
+  v: unknown,
+  field: 'bps' | 'seconds' | 'lengthRows',
+  make: (row: number, value: number) => T,
+): T[] | null {
+  if (!Array.isArray(v) || v.length > MAX_TIMING_SEGMENTS) return null;
+  const out: T[] = [];
+  for (const s of v) {
+    if (!isObj(s)) return null;
+    if (!finiteNum(s.row) || !Number.isInteger(s.row) || s.row < 0 || s.row > MAX_ROW) return null;
+    const value = s[field];
+    if (!finiteNum(value)) return null;
+    if (field === 'lengthRows' && (!Number.isInteger(value) || value < 0)) return null;
+    out.push(make(s.row, value));
+  }
+  return out;
+}
+
+export function parseChartData(v: unknown): ChartData | null {
+  if (!isObj(v)) return null;
+  if (!str(v.stepsType, MAX_STRING_LENGTH)) return null;
+  if (typeof v.noteData !== 'string' || v.noteData.length > MAX_NOTE_DATA_CHARS) return null;
+  if (!isObj(v.timing)) return null;
+  const t = v.timing;
+  if (!finiteNum(t.offset)) return null;
+  const bpms = parseRowSegments(t.bpms, 'bps', (row, bps) => ({ row, bps }));
+  const stops = parseRowSegments(t.stops, 'seconds', (row, seconds) => ({ row, seconds }));
+  const delays = parseRowSegments(t.delays, 'seconds', (row, seconds) => ({ row, seconds }));
+  const warps = parseRowSegments(t.warps, 'lengthRows', (row, lengthRows) => ({ row, lengthRows }));
+  const fakes = parseRowSegments(t.fakes, 'lengthRows', (row, lengthRows) => ({ row, lengthRows }));
+  if (!bpms || !stops || !delays || !warps || !fakes) return null;
+  return {
+    stepsType: v.stepsType,
+    noteData: v.noteData,
+    timing: { offset: t.offset, bpms, stops, delays, warps, fakes },
+  };
+}
+
 /** Input device declaration; only a pad is accepted (keyboard never submits). */
 export function parseSubmitInput(v: unknown): SubmitInput | null {
   if (!isObj(v)) return null;
@@ -286,11 +360,12 @@ export function parseSubmitScoreRequest(v: unknown): SubmitScoreRequest | null {
   let judged = 0;
   for (const n of Object.values(result.counts)) judged += n;
   if (result.maxCombo > judged) return null;
-  // Device + replay are required in v2 (anti-cheat). A malformed one is
-  // tampering, not version skew — our own client always sends both well-formed.
+  // Device + chart + replay are required in v3 (anti-cheat). A malformed one is
+  // tampering, not version skew — our own client always sends them well-formed.
   const input = parseSubmitInput(v.input);
+  const chartData = parseChartData(v.chartData);
   const replay = parseReplay(v.replay);
-  if (!input || !replay) return null;
+  if (!input || !chartData || !replay) return null;
   // A ghost is optional, but a malformed one rejects the submission (our own
   // client never sends one, so it is tampering, not version skew).
   let ghost: GhostFrame[] | undefined;
@@ -308,6 +383,7 @@ export function parseSubmitScoreRequest(v: unknown): SubmitScoreRequest | null {
     musicRate: v.musicRate,
     result,
     input,
+    chartData,
     replay,
     ...(ghost !== undefined ? { ghost } : {}),
   };

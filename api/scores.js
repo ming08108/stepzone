@@ -12,7 +12,7 @@ function error(status, code, message) {
 }
 
 // src/net/protocol.ts
-var PROTOCOL_VERSION = 2;
+var PROTOCOL_VERSION = 3;
 function rateKey(musicRate) {
   return Math.round(musicRate * 100);
 }
@@ -107,6 +107,41 @@ function parseReplay(v2) {
   }
   return out;
 }
+var MAX_NOTE_DATA_CHARS = 256 * 1024;
+var MAX_TIMING_SEGMENTS = 2e3;
+var MAX_ROW = 1 << 28;
+function parseRowSegments(v2, field, make) {
+  if (!Array.isArray(v2) || v2.length > MAX_TIMING_SEGMENTS) return null;
+  const out = [];
+  for (const s of v2) {
+    if (!isObj(s)) return null;
+    if (!finiteNum(s.row) || !Number.isInteger(s.row) || s.row < 0 || s.row > MAX_ROW) return null;
+    const value = s[field];
+    if (!finiteNum(value)) return null;
+    if (field === "lengthRows" && (!Number.isInteger(value) || value < 0)) return null;
+    out.push(make(s.row, value));
+  }
+  return out;
+}
+function parseChartData(v2) {
+  if (!isObj(v2)) return null;
+  if (!str(v2.stepsType, MAX_STRING_LENGTH)) return null;
+  if (typeof v2.noteData !== "string" || v2.noteData.length > MAX_NOTE_DATA_CHARS) return null;
+  if (!isObj(v2.timing)) return null;
+  const t = v2.timing;
+  if (!finiteNum(t.offset)) return null;
+  const bpms = parseRowSegments(t.bpms, "bps", (row, bps) => ({ row, bps }));
+  const stops = parseRowSegments(t.stops, "seconds", (row, seconds) => ({ row, seconds }));
+  const delays = parseRowSegments(t.delays, "seconds", (row, seconds) => ({ row, seconds }));
+  const warps = parseRowSegments(t.warps, "lengthRows", (row, lengthRows) => ({ row, lengthRows }));
+  const fakes = parseRowSegments(t.fakes, "lengthRows", (row, lengthRows) => ({ row, lengthRows }));
+  if (!bpms || !stops || !delays || !warps || !fakes) return null;
+  return {
+    stepsType: v2.stepsType,
+    noteData: v2.noteData,
+    timing: { offset: t.offset, bpms, stops, delays, warps, fakes }
+  };
+}
 function parseSubmitInput(v2) {
   if (!isObj(v2)) return null;
   if (v2.device !== "pad") return null;
@@ -127,8 +162,9 @@ function parseSubmitScoreRequest(v2) {
   for (const n of Object.values(result.counts)) judged += n;
   if (result.maxCombo > judged) return null;
   const input = parseSubmitInput(v2.input);
+  const chartData = parseChartData(v2.chartData);
   const replay = parseReplay(v2.replay);
-  if (!input || !replay) return null;
+  if (!input || !chartData || !replay) return null;
   let ghost;
   if (v2.ghost !== void 0) {
     const parsed = parseGhost(v2.ghost);
@@ -144,9 +180,1091 @@ function parseSubmitScoreRequest(v2) {
     musicRate: v2.musicRate,
     result,
     input,
+    chartData,
     replay,
     ...ghost !== void 0 ? { ghost } : {}
   };
+}
+
+// src/notes/noteTypes.ts
+var ROWS_PER_BEAT = 48;
+var BEATS_PER_MEASURE = 4;
+var ROWS_PER_MEASURE = ROWS_PER_BEAT * BEATS_PER_MEASURE;
+var MAX_NOTE_ROW = 1 << 30;
+function beatToNoteRow(beat) {
+  return Math.round(beat * ROWS_PER_BEAT);
+}
+function noteRowToBeat(row) {
+  return row / ROWS_PER_BEAT;
+}
+var NO_KEYSOUND = -1;
+var NO_PLAYER = -1;
+function baseNote(type) {
+  return {
+    type,
+    subType: 2 /* Invalid */,
+    durationRows: 0,
+    keysoundIndex: NO_KEYSOUND,
+    player: NO_PLAYER
+  };
+}
+var makeTap = () => baseNote(1 /* Tap */);
+var makeMine = () => baseNote(4 /* Mine */);
+var makeLift = () => baseNote(5 /* Lift */);
+var makeFake = () => baseNote(8 /* Fake */);
+var makeAutoKeysound = () => baseNote(7 /* AutoKeysound */);
+function makeHoldHead(sub) {
+  const n = baseNote(2 /* HoldHead */);
+  n.subType = sub;
+  n.durationRows = MAX_NOTE_ROW;
+  return n;
+}
+
+// src/notes/noteData.ts
+var EMPTY_NOTE = Object.freeze({
+  type: 0 /* Empty */,
+  subType: 2 /* Invalid */,
+  durationRows: 0,
+  keysoundIndex: NO_KEYSOUND,
+  player: NO_PLAYER
+});
+var NoteData = class {
+  tracks;
+  constructor(numTracks) {
+    this.tracks = Array.from({ length: numTracks }, () => []);
+  }
+  get numTracks() {
+    return this.tracks.length;
+  }
+  lowerBound(arr, row) {
+    let lo2 = 0;
+    let hi = arr.length;
+    while (lo2 < hi) {
+      const mid = lo2 + hi >> 1;
+      if (arr[mid].row < row) lo2 = mid + 1;
+      else hi = mid;
+    }
+    return lo2;
+  }
+  /** Insert/overwrite a note; passing an Empty note erases the cell. */
+  setTapNote(track, row, note) {
+    if (track < 0 || track >= this.tracks.length || row < 0) return;
+    const arr = this.tracks[track];
+    const idx = this.lowerBound(arr, row);
+    const exists = idx < arr.length && arr[idx].row === row;
+    if (note.type === 0 /* Empty */) {
+      if (exists) arr.splice(idx, 1);
+      return;
+    }
+    if (exists) arr[idx].note = note;
+    else arr.splice(idx, 0, { row, note });
+  }
+  /** The note at a cell, or the shared Empty sentinel if absent. */
+  getTapNote(track, row) {
+    const arr = this.tracks[track];
+    if (!arr) return EMPTY_NOTE;
+    const idx = this.lowerBound(arr, row);
+    if (idx < arr.length && arr[idx].row === row) return arr[idx].note;
+    return EMPTY_NOTE;
+  }
+  removeTapNote(track, row) {
+    this.setTapNote(track, row, EMPTY_NOTE);
+  }
+  /** The sorted (row, note) list for a track. Do not mutate. */
+  getTrack(track) {
+    return this.tracks[track] ?? [];
+  }
+  /** Total non-empty entries across all tracks. */
+  get size() {
+    let n = 0;
+    for (const t of this.tracks) n += t.length;
+    return n;
+  }
+  firstRow() {
+    let first = -1;
+    for (const t of this.tracks) {
+      if (t.length > 0 && (first < 0 || t[0].row < first)) first = t[0].row;
+    }
+    return first < 0 ? 0 : first;
+  }
+  /** Last occupied row, counting hold tails (headRow + durationRows). */
+  lastRow() {
+    let last = 0;
+    for (const t of this.tracks) {
+      for (const { row, note } of t) {
+        const end = note.type === 2 /* HoldHead */ ? row + note.durationRows : row;
+        if (end > last) last = end;
+      }
+    }
+    return last;
+  }
+  computeCounts() {
+    const c = {
+      taps: 0,
+      holdHeads: 0,
+      rollHeads: 0,
+      mines: 0,
+      lifts: 0,
+      fakes: 0,
+      jumps: 0,
+      hands: 0,
+      tapsAndHolds: 0
+    };
+    const tapsPerRow = /* @__PURE__ */ new Map();
+    for (const t of this.tracks) {
+      for (const { row, note } of t) {
+        switch (note.type) {
+          case 1 /* Tap */:
+            c.taps++;
+            c.tapsAndHolds++;
+            tapsPerRow.set(row, (tapsPerRow.get(row) ?? 0) + 1);
+            break;
+          case 2 /* HoldHead */:
+            if (note.subType === 1 /* Roll */) c.rollHeads++;
+            else c.holdHeads++;
+            c.tapsAndHolds++;
+            tapsPerRow.set(row, (tapsPerRow.get(row) ?? 0) + 1);
+            break;
+          case 4 /* Mine */:
+            c.mines++;
+            break;
+          case 5 /* Lift */:
+            c.lifts++;
+            tapsPerRow.set(row, (tapsPerRow.get(row) ?? 0) + 1);
+            break;
+          case 8 /* Fake */:
+            c.fakes++;
+            break;
+          default:
+            break;
+        }
+      }
+    }
+    for (const count of tapsPerRow.values()) {
+      if (count >= 2) c.jumps++;
+      if (count >= 3) c.hands++;
+    }
+    return c;
+  }
+};
+
+// src/notes/noteGrid.ts
+function stripComments(s) {
+  return s.split("\n").map((line) => {
+    const idx = line.indexOf("//");
+    return idx >= 0 ? line.slice(0, idx) : line;
+  }).join("\n");
+}
+function parseNoteGrid(grid, numTracks, warnings = []) {
+  const out = new NoteData(numTracks);
+  const text = stripComments(grid);
+  const openRow = new Array(numTracks).fill(-1);
+  const openNote = new Array(numTracks).fill(null);
+  let measure = -1;
+  for (const rawMeasure of text.split(",")) {
+    if (rawMeasure.length === 0) continue;
+    measure++;
+    const lines = rawMeasure.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    const numLines = lines.length;
+    for (let l = 0; l < numLines; l++) {
+      const line = lines[l];
+      const beat = (measure + l / numLines) * BEATS_PER_MEASURE;
+      const row = beatToNoteRow(beat);
+      let p2 = 0;
+      let track = 0;
+      while (track < numTracks && p2 < line.length) {
+        const ch = line[p2];
+        p2++;
+        let note = null;
+        switch (ch) {
+          case "0":
+            break;
+          case "1":
+            note = makeTap();
+            break;
+          case "2":
+          case "4": {
+            note = makeHoldHead(ch === "2" ? 0 /* Hold */ : 1 /* Roll */);
+            openRow[track] = row;
+            openNote[track] = note;
+            break;
+          }
+          case "3": {
+            const headRow = openRow[track];
+            const head = openNote[track];
+            if (headRow >= 0 && head) {
+              head.durationRows = row - headRow;
+              openRow[track] = -1;
+              openNote[track] = null;
+            } else {
+              warnings.push(`Unmatched '3' (hold tail) at row ${row}, track ${track}`);
+            }
+            break;
+          }
+          case "M":
+            note = makeMine();
+            break;
+          case "K":
+            note = makeAutoKeysound();
+            break;
+          case "L":
+            note = makeLift();
+            break;
+          case "F":
+            note = makeFake();
+            break;
+          default:
+            break;
+        }
+        if (line[p2] === "[") {
+          p2++;
+          let digits = "";
+          while (p2 < line.length && line[p2] !== "]") {
+            digits += line[p2];
+            p2++;
+          }
+          if (line[p2] === "]") p2++;
+          const idx = Number.parseInt(digits, 10);
+          if (note && !Number.isNaN(idx)) note.keysoundIndex = idx;
+        }
+        if (note) out.setTapNote(track, row, note);
+        track++;
+      }
+    }
+  }
+  for (let t = 0; t < numTracks; t++) {
+    if (openRow[t] >= 0) {
+      warnings.push(`Unmatched hold head (no '3') at row ${openRow[t]}, track ${t}`);
+      out.removeTapNote(t, openRow[t]);
+    }
+  }
+  return out;
+}
+
+// src/song/chartHash.ts
+function hash64(str2) {
+  let h1 = 3735928559;
+  let h2 = 1103547991;
+  for (let i = 0; i < str2.length; i++) {
+    const ch = str2.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+  h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+  h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+function minimizeMeasure(rows) {
+  let r = rows;
+  while (r.length > 1 && r.length % 2 === 0) {
+    let padded = true;
+    for (let i = 1; i < r.length; i += 2) {
+      if (!/^0+$/.test(r[i])) {
+        padded = false;
+        break;
+      }
+    }
+    if (!padded) break;
+    const half = [];
+    for (let i = 0; i < r.length; i += 2) half.push(r[i]);
+    r = half;
+  }
+  return r;
+}
+function normalizeNotes(noteDataString) {
+  return noteDataString.split(",").map((measure) => {
+    const rows = measure.split("\n").map((line) => line.replace(/\/\/.*/, "").trim()).filter((line) => line.length > 0);
+    return minimizeMeasure(rows).join("\n");
+  }).join(",");
+}
+var num = (v2) => v2.toFixed(6);
+function timingFingerprint(t) {
+  return [
+    t.bpms.map((s) => `${s.row}:${num(s.bps)}`).join(","),
+    t.stops.map((s) => `${s.row}:${num(s.seconds)}`).join(","),
+    t.delays.map((s) => `${s.row}:${num(s.seconds)}`).join(","),
+    t.warps.map((s) => `${s.row}:${s.lengthRows}`).join(","),
+    t.fakes.map((s) => `${s.row}:${s.lengthRows}`).join(",")
+  ].join(";");
+}
+function hashChartContent(stepsType, noteDataString, timing) {
+  return hash64(`${stepsType}|${normalizeNotes(noteDataString)}|${timingFingerprint(timing)}`);
+}
+
+// src/song/stepsType.ts
+var STEPS_TYPES = {
+  "dance-single": { numTracks: 4, category: "Single" },
+  "dance-double": { numTracks: 8, category: "Double" },
+  "dance-couple": { numTracks: 8, category: "Couple" },
+  "dance-solo": { numTracks: 6, category: "Single" },
+  "dance-threepanel": { numTracks: 3, category: "Single" },
+  "dance-routine": { numTracks: 8, category: "Routine" },
+  "pump-single": { numTracks: 5, category: "Single" },
+  "pump-halfdouble": { numTracks: 6, category: "Double" },
+  "pump-double": { numTracks: 10, category: "Double" },
+  "pump-couple": { numTracks: 10, category: "Couple" },
+  "pump-routine": { numTracks: 10, category: "Routine" },
+  "techno-single4": { numTracks: 4, category: "Single" },
+  "techno-single5": { numTracks: 5, category: "Single" },
+  "techno-single8": { numTracks: 8, category: "Single" },
+  "techno-double4": { numTracks: 8, category: "Double" },
+  "techno-double5": { numTracks: 10, category: "Double" },
+  "techno-double8": { numTracks: 16, category: "Double" }
+};
+function stepsTypeNumTracks(name) {
+  return STEPS_TYPES[name]?.numTracks ?? -1;
+}
+
+// src/timing/segments.ts
+function sortByRow(segs) {
+  return segs.sort((a2, b2) => a2.row - b2.row);
+}
+
+// src/timing/timingData.ts
+var DEFAULT_BPS = 60 / 60;
+var TimingData = class _TimingData {
+  /** Seconds between the start of the audio and musical beat 0 (the `#OFFSET`). */
+  offsetSeconds = 0;
+  // Consumed by beat<->time conversion (bpms/stops/delays/warps) and
+  // judgability (warps/fakes).
+  bpms = [];
+  stops = [];
+  delays = [];
+  warps = [];
+  fakes = [];
+  // Parsed and carried, but not yet consumed by anything (timing math,
+  // judging, or rendering). Kept for future features — do not delete.
+  scrolls = [];
+  speeds = [];
+  timeSignatures = [];
+  tickcounts = [];
+  combos = [];
+  labels = [];
+  /**
+   * Copy this timing: offset copied, every segment array copied (segment
+   * objects shared — treat them as immutable). Arrays are discovered
+   * dynamically so a newly added segment list can never be silently dropped.
+   */
+  clone() {
+    const t = new _TimingData();
+    t.offsetSeconds = this.offsetSeconds;
+    for (const key of Object.keys(this)) {
+      const v2 = this[key];
+      if (Array.isArray(v2)) t[key] = [...v2];
+    }
+    return t;
+  }
+  /** Sort every list by row and guarantee a BPM at row 0 (default 60). */
+  tidy() {
+    sortByRow(this.bpms);
+    sortByRow(this.stops);
+    sortByRow(this.delays);
+    sortByRow(this.warps);
+    sortByRow(this.scrolls);
+    sortByRow(this.speeds);
+    sortByRow(this.timeSignatures);
+    sortByRow(this.tickcounts);
+    sortByRow(this.combos);
+    sortByRow(this.labels);
+    sortByRow(this.fakes);
+    if (this.bpms.length === 0 || this.bpms[0].row !== 0) {
+      this.bpms.unshift({ row: 0, bps: DEFAULT_BPS });
+    }
+  }
+  /** BPS in effect at a row (last segment whose row <= the query). */
+  getBpsAtRow(row) {
+    let bps = this.bpms.length > 0 ? this.bpms[0].bps : DEFAULT_BPS;
+    for (const b2 of this.bpms) {
+      if (b2.row <= row) bps = b2.bps;
+      else break;
+    }
+    return bps;
+  }
+  /** BPM at a row. Unused by the engine itself; kept as a trivial convenience. */
+  getBpmAtRow(row) {
+    return this.getBpsAtRow(row) * 60;
+  }
+  // --- The event scanner (ITGmania FindEvent) ------------------------------
+  // Ties are broken by check order (strict `< eventRow`), which is what gives
+  // DELAY-before-notes and STOP-after-notes their semantics. Do not reorder.
+  findEvent(c, beat, findMarker) {
+    let eventRow = Number.MAX_SAFE_INTEGER;
+    let eventType = 6 /* NotFound */;
+    if (c.isWarping && beatToNoteRow(c.warpDestination) < eventRow) {
+      eventRow = beatToNoteRow(c.warpDestination);
+      eventType = 0 /* WarpDestination */;
+    }
+    if (c.bpm < this.bpms.length && this.bpms[c.bpm].row < eventRow) {
+      eventRow = this.bpms[c.bpm].row;
+      eventType = 1 /* BpmChange */;
+    }
+    if (c.delay < this.delays.length && this.delays[c.delay].row < eventRow) {
+      eventRow = this.delays[c.delay].row;
+      eventType = 2 /* Delay */;
+    }
+    if (findMarker && beatToNoteRow(beat) < eventRow) {
+      eventRow = beatToNoteRow(beat);
+      eventType = 3 /* Marker */;
+    }
+    if (c.stop < this.stops.length && this.stops[c.stop].row < eventRow) {
+      eventRow = this.stops[c.stop].row;
+      eventType = 4 /* Stop */;
+    }
+    if (c.warp < this.warps.length && this.warps[c.warp].row < eventRow) {
+      eventRow = this.warps[c.warp].row;
+      eventType = 5 /* Warp */;
+    }
+    return { row: eventRow, type: eventType };
+  }
+  newCursor() {
+    return {
+      bpm: 0,
+      warp: 0,
+      stop: 0,
+      delay: 0,
+      lastRow: 0,
+      lastTime: 0,
+      warpDestination: 0,
+      isWarping: false,
+      warpBeginRow: -1
+    };
+  }
+  /**
+   * Enter the warp at cursor index `c.warp`: start warping, extend the warp
+   * destination if this warp reaches further, and advance the index. Shared
+   * by both conversion loops; the event-order semantics live in findEvent.
+   */
+  advanceWarp(c) {
+    c.isWarping = true;
+    const ws = this.warps[c.warp];
+    const warpSum = noteRowToBeat(ws.lengthRows) + noteRowToBeat(ws.row);
+    if (warpSum > c.warpDestination) c.warpDestination = warpSum;
+    c.warp++;
+  }
+  // --- beat -> time (ITGmania GetElapsedTimeInternal) ----------------------
+  elapsedTimeInternal(c, beat) {
+    let bps = this.getBpsAtRow(c.lastRow);
+    for (; ; ) {
+      const ev = this.findEvent(c, beat, true);
+      const timeToNext = c.isWarping ? 0 : noteRowToBeat(ev.row - c.lastRow) / bps;
+      c.lastTime += timeToNext;
+      switch (ev.type) {
+        case 0 /* WarpDestination */:
+          c.isWarping = false;
+          break;
+        case 1 /* BpmChange */:
+          bps = this.bpms[c.bpm].bps;
+          c.bpm++;
+          break;
+        case 4 /* Stop */:
+          c.lastTime += this.stops[c.stop].seconds;
+          c.stop++;
+          break;
+        case 2 /* Delay */:
+          c.lastTime += this.delays[c.delay].seconds;
+          c.delay++;
+          break;
+        case 3 /* Marker */:
+          return c.lastTime;
+        case 5 /* Warp */:
+          this.advanceWarp(c);
+          break;
+        case 6 /* NotFound */:
+          return c.lastTime;
+      }
+      c.lastRow = ev.row;
+    }
+  }
+  /** Elapsed audio seconds at a beat (song `#OFFSET` applied). */
+  getElapsedTimeFromBeat(beat) {
+    const c = this.newCursor();
+    return this.elapsedTimeInternal(c, beat) - this.offsetSeconds;
+  }
+  // --- time -> beat (ITGmania GetBeatInternal) -----------------------------
+  beatInternal(c, elapsedTime) {
+    let bps = this.getBpsAtRow(c.lastRow);
+    let warpBeginRow = c.warpBeginRow;
+    let warpDestination = c.warpDestination;
+    for (; ; ) {
+      const ev = this.findEvent(c, 0, false);
+      if (ev.type === 6 /* NotFound */) break;
+      const timeToNext = c.isWarping ? 0 : noteRowToBeat(ev.row - c.lastRow) / bps;
+      const nextEventTime = c.lastTime + timeToNext;
+      if (elapsedTime < nextEventTime) break;
+      c.lastTime = nextEventTime;
+      switch (ev.type) {
+        case 0 /* WarpDestination */:
+          c.isWarping = false;
+          break;
+        case 1 /* BpmChange */:
+          bps = this.bpms[c.bpm].bps;
+          c.bpm++;
+          break;
+        case 2 /* Delay */: {
+          const d2 = this.delays[c.delay];
+          const endTime = c.lastTime + d2.seconds;
+          if (elapsedTime < endTime) {
+            return {
+              beat: noteRowToBeat(d2.row),
+              bps,
+              freeze: false,
+              delay: true,
+              warpBeginRow,
+              warpDestination
+            };
+          }
+          c.lastTime = endTime;
+          c.delay++;
+          break;
+        }
+        case 4 /* Stop */: {
+          const s = this.stops[c.stop];
+          const endTime = c.lastTime + s.seconds;
+          if (elapsedTime < endTime) {
+            return {
+              beat: noteRowToBeat(s.row),
+              bps,
+              freeze: true,
+              delay: false,
+              warpBeginRow,
+              warpDestination
+            };
+          }
+          c.lastTime = endTime;
+          c.stop++;
+          break;
+        }
+        case 5 /* Warp */:
+          this.advanceWarp(c);
+          warpBeginRow = ev.row;
+          warpDestination = c.warpDestination;
+          break;
+        case 3 /* Marker */:
+          break;
+      }
+      c.lastRow = ev.row;
+    }
+    return {
+      beat: noteRowToBeat(c.lastRow) + (elapsedTime - c.lastTime) * bps,
+      bps,
+      freeze: false,
+      delay: false,
+      warpBeginRow,
+      warpDestination
+    };
+  }
+  /** Full beat info at an audio position (song `#OFFSET` applied). */
+  getBeatInfoFromElapsedTime(seconds) {
+    const c = this.newCursor();
+    return this.beatInternal(c, seconds + this.offsetSeconds);
+  }
+  /** Musical beat at an audio position. */
+  getBeatFromElapsedTime(seconds) {
+    return this.getBeatInfoFromElapsedTime(seconds).beat;
+  }
+  // --- Warp / fake / judgability -------------------------------------------
+  /** Is this row skipped by a warp (and thus unhittable)? */
+  isWarpAtRow(row) {
+    const beat = noteRowToBeat(row);
+    for (const w of this.warps) {
+      const start = noteRowToBeat(w.row);
+      const end = start + noteRowToBeat(w.lengthRows);
+      if (start <= beat && beat < end) {
+        if (this.stops.length === 0 && this.delays.length === 0) return true;
+        if (this.getStopAtRow(row) !== 0 || this.getDelayAtRow(row) !== 0) return false;
+        return true;
+      }
+    }
+    return false;
+  }
+  /** Is this row inside a fake region (drawn but unjudgable)? */
+  isFakeAtRow(row) {
+    const beat = noteRowToBeat(row);
+    for (const f of this.fakes) {
+      const start = noteRowToBeat(f.row);
+      const end = start + noteRowToBeat(f.lengthRows);
+      if (start <= beat && beat < end) return true;
+    }
+    return false;
+  }
+  /** A note at this row can be scored only if it is neither warped nor faked. */
+  isJudgableAtRow(row) {
+    return !this.isWarpAtRow(row) && !this.isFakeAtRow(row);
+  }
+  getStopAtRow(row) {
+    for (const s of this.stops) if (s.row === row) return s.seconds;
+    return 0;
+  }
+  getDelayAtRow(row) {
+    for (const d2 of this.delays) if (d2.row === row) return d2.seconds;
+    return 0;
+  }
+};
+
+// src/gameplay/scoring.ts
+function tapDancePoints(tns) {
+  switch (tns) {
+    case 9 /* W1 */:
+      return 3;
+    case 8 /* W2 */:
+      return 2;
+    case 7 /* W3 */:
+      return 1;
+    case 1 /* HitMine */:
+      return -2;
+    default:
+      return 0;
+  }
+}
+function holdDancePoints(hns) {
+  return hns === 2 /* Held */ ? 3 : 0;
+}
+function tapGradePoints(tns) {
+  switch (tns) {
+    case 9 /* W1 */:
+      return 2;
+    case 8 /* W2 */:
+      return 2;
+    case 7 /* W3 */:
+      return 1;
+    case 5 /* W5 */:
+      return -4;
+    case 4 /* Miss */:
+      return -8;
+    case 1 /* HitMine */:
+      return -8;
+    default:
+      return 0;
+  }
+}
+function holdGradePoints(hns) {
+  return hns === 2 /* Held */ ? 6 : 0;
+}
+function tapLifeDelta(tns) {
+  switch (tns) {
+    case 9 /* W1 */:
+    case 8 /* W2 */:
+      return 8e-3;
+    case 7 /* W3 */:
+      return 4e-3;
+    case 6 /* W4 */:
+      return 0;
+    case 5 /* W5 */:
+      return -0.04;
+    case 4 /* Miss */:
+      return -0.08;
+    case 1 /* HitMine */:
+      return -0.16;
+    default:
+      return 0;
+  }
+}
+function holdLifeDelta(hns) {
+  switch (hns) {
+    case 2 /* Held */:
+      return 8e-3;
+    case 1 /* LetGo */:
+      return -0.08;
+    default:
+      return 0;
+  }
+}
+var GRADE_TIERS = [
+  { min: 1, name: "AAA" },
+  { min: 0.93, name: "AA" },
+  { min: 0.8, name: "A" },
+  { min: 0.65, name: "B" },
+  { min: 0.45, name: "C" },
+  { min: -Infinity, name: "D" }
+];
+function gradeFromPercent(percent) {
+  for (const tier of GRADE_TIERS) if (percent >= tier.min) return tier.name;
+  return "D";
+}
+
+// src/gameplay/windows.ts
+var DEFAULT_WINDOWS = {
+  w0: 0.0115,
+  w1: 0.0225,
+  w2: 0.045,
+  w3: 0.09,
+  w4: 0.135,
+  w5: 0.18,
+  mine: 0.09,
+  hold: 0.25,
+  roll: 0.5,
+  scale: 1,
+  add: 0
+};
+function windowSeconds(w, key) {
+  return w[key] * w.scale + w.add;
+}
+function missHorizonSeconds(w) {
+  return Math.max(windowSeconds(w, "w5"), windowSeconds(w, "mine"));
+}
+
+// src/gameplay/judge.ts
+var INITIAL_LIFE = 0.5;
+var REGEN_COMBO_AFTER_MISS = 5;
+var MAX_REGEN_COMBO = 5;
+var Judge = class {
+  windows;
+  notesByTrack;
+  notes;
+  // flat, sorted by time
+  combo = 0;
+  maxCombo = 0;
+  missCombo = 0;
+  life = INITIAL_LIFE;
+  failed = false;
+  /** Increments on every tap judgment (hit, miss, or mine) for UI feedback. */
+  judgmentSeq = 0;
+  lastTns = 0 /* None */;
+  /** Whether the last judgment was a white (FA+) W1 — display only. */
+  lastWhite = false;
+  tapCounts = {};
+  holdCounts = {};
+  actualDance = 0;
+  possibleDance = 0;
+  possibleGrade = 0;
+  rate;
+  missHorizon;
+  lastUpdate = 0;
+  /** Hits still owed before life regenerates after a loss (ITG regen-after-miss). */
+  comboToRegainLife = 0;
+  // Perf: advance a cursor over the time-sorted notes instead of scanning all
+  // of them each frame, and track only the currently-active holds (todo #14).
+  missCursor = 0;
+  activeHolds = [];
+  // Per-row combo cohesion (jumps): ITG dance adds one combo per tap, but the
+  // continue/break decision is per ROW — settled by the row's WORST tap once
+  // every tap in the row has been judged (Player/ScoreKeeperNormal). A single
+  // note is just a 1-tap row, so this is identical for streams.
+  rowCombo = /* @__PURE__ */ new Map();
+  constructor(noteData, timing, windows = DEFAULT_WINDOWS, rate = 1, section = null) {
+    this.windows = windows;
+    this.rate = rate;
+    this.missHorizon = missHorizonSeconds(windows) * rate;
+    this.notesByTrack = Array.from({ length: noteData.numTracks }, () => []);
+    this.notes = [];
+    for (let track = 0; track < noteData.numTracks; track++) {
+      for (const { row, note } of noteData.getTrack(track)) {
+        if (note.type === 0 /* Empty */) continue;
+        const beat = noteRowToBeat(row);
+        const time = timing.getElapsedTimeFromBeat(beat);
+        const scoreableType = note.type === 1 /* Tap */ || note.type === 2 /* HoldHead */ || note.type === 4 /* Mine */ || note.type === 5 /* Lift */;
+        const inSection = section === null || time >= section.startSeconds && time < section.endSeconds;
+        const judgable = scoreableType && inSection && timing.isJudgableAtRow(row);
+        const isHoldHead = note.type === 2 /* HoldHead */;
+        const tailRow = isHoldHead ? row + note.durationRows : row;
+        const an = {
+          track,
+          row,
+          beat,
+          time,
+          note,
+          judgable,
+          tns: 0 /* None */,
+          offset: 0,
+          hidden: false,
+          isHold: isHoldHead && note.subType === 0 /* Hold */,
+          isRoll: isHoldHead && note.subType === 1 /* Roll */,
+          tailRow,
+          tailTime: timing.getElapsedTimeFromBeat(noteRowToBeat(tailRow)),
+          holdInitiated: false,
+          holdLife: 1,
+          hns: 0 /* None */,
+          holdResolved: false
+        };
+        this.notesByTrack[track].push(an);
+        this.notes.push(an);
+        if (judgable) {
+          if (note.type !== 4 /* Mine */) {
+            this.possibleDance += tapDancePoints(9 /* W1 */);
+            this.possibleGrade += tapGradePoints(9 /* W1 */);
+            const rc = this.rowCombo.get(row);
+            if (rc) rc.total++;
+            else this.rowCombo.set(row, { total: 1, judged: 0, worst: 9 /* W1 */ });
+          }
+          if (isHoldHead) {
+            this.possibleDance += holdDancePoints(2 /* Held */);
+            this.possibleGrade += holdGradePoints(2 /* Held */);
+          }
+        }
+      }
+    }
+    this.notes.sort((a2, b2) => a2.time - b2.time || a2.track - b2.track);
+  }
+  /**
+   * Wipe every judgment and score back to a fresh state for another pass over
+   * the same notes (practice-loop replays). The note list and judgable flags
+   * are untouched; judgmentSeq deliberately keeps counting so UI layers that
+   * diff it don't see a stale match after the reset.
+   */
+  reset() {
+    for (const n of this.notes) {
+      n.tns = 0 /* None */;
+      n.offset = 0;
+      n.hidden = false;
+      n.holdInitiated = false;
+      n.holdLife = 1;
+      n.hns = 0 /* None */;
+      n.holdResolved = false;
+    }
+    this.combo = 0;
+    this.maxCombo = 0;
+    this.missCombo = 0;
+    this.life = INITIAL_LIFE;
+    this.failed = false;
+    this.lastTns = 0 /* None */;
+    this.lastWhite = false;
+    for (const k in this.tapCounts) delete this.tapCounts[k];
+    for (const k in this.holdCounts) delete this.holdCounts[k];
+    this.actualDance = 0;
+    this.lastUpdate = 0;
+    this.comboToRegainLife = 0;
+    this.missCursor = 0;
+    this.activeHolds.length = 0;
+    for (const rc of this.rowCombo.values()) {
+      rc.judged = 0;
+      rc.worst = 9 /* W1 */;
+    }
+  }
+  /** Effective (rate-scaled) window in chart-seconds. */
+  win(key) {
+    return windowSeconds(this.windows, key) * this.rate;
+  }
+  classify(err) {
+    if (err <= this.win("w1")) return 9 /* W1 */;
+    if (err <= this.win("w2")) return 8 /* W2 */;
+    if (err <= this.win("w3")) return 7 /* W3 */;
+    if (err <= this.win("w4")) return 6 /* W4 */;
+    if (err <= this.win("w5")) return 5 /* W5 */;
+    return 0 /* None */;
+  }
+  changeLife(delta) {
+    if (this.failed) return;
+    if (delta >= 0) {
+      this.comboToRegainLife = Math.max(this.comboToRegainLife - 1, 0);
+      if (this.comboToRegainLife > 0) delta = 0;
+    } else {
+      this.comboToRegainLife = Math.min(
+        MAX_REGEN_COMBO,
+        this.comboToRegainLife + REGEN_COMBO_AFTER_MISS
+      );
+    }
+    this.life = Math.min(1, Math.max(0, this.life + delta));
+    if (this.life <= 0) this.failed = true;
+  }
+  countTap(tns) {
+    this.tapCounts[tns] = (this.tapCounts[tns] ?? 0) + 1;
+  }
+  countHold(hns) {
+    this.holdCounts[hns] = (this.holdCounts[hns] ?? 0) + 1;
+  }
+  applyTapScore(note, tns, offset) {
+    note.tns = tns;
+    note.offset = offset;
+    note.hidden = tns !== 4 /* Miss */;
+    this.lastTns = tns;
+    this.lastWhite = tns === 9 /* W1 */ && Math.abs(offset) <= this.win("w0");
+    this.judgmentSeq++;
+    this.countTap(tns);
+    if (!this.failed) this.actualDance += tapDancePoints(tns);
+    if (tns !== 1 /* HitMine */ && tns !== 2 /* AvoidMine */) {
+      const rc = this.rowCombo.get(note.row);
+      if (rc) {
+        rc.judged++;
+        if (tns < rc.worst) rc.worst = tns;
+        if (rc.judged >= rc.total) this.settleRowCombo(rc);
+      }
+    }
+    this.changeLife(tapLifeDelta(tns));
+  }
+  /** Apply a fully-judged row's combo: continue (adding one per tap) when its
+   *  worst tap is W3+, else break. Only an actual Miss extends the miss combo
+   *  (MaxScoreToIncrementMissCombo=Miss, MissComboIsPerRow=true). */
+  settleRowCombo(rc) {
+    if (rc.worst >= 7 /* W3 */) {
+      this.combo += rc.total;
+      this.missCombo = 0;
+      if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+    } else {
+      this.combo = 0;
+      if (rc.worst <= 4 /* Miss */) this.missCombo++;
+    }
+  }
+  /** Process a button press (or release) on a column at an audio time. */
+  step(track, timeSeconds, release) {
+    const lane = this.notesByTrack[track];
+    if (!lane) return null;
+    if (!release) {
+      for (const n of lane) {
+        if (n.isRoll && n.holdInitiated && !n.holdResolved && timeSeconds >= n.time && timeSeconds <= n.tailTime) {
+          n.holdLife = 1;
+        }
+      }
+    }
+    let cand = null;
+    let best = Infinity;
+    for (const n of lane) {
+      if (n.tns !== 0 /* None */ || !n.judgable) continue;
+      const d2 = Math.abs(n.time - timeSeconds);
+      if (d2 < best) {
+        best = d2;
+        cand = n;
+      }
+    }
+    if (!cand) return null;
+    const offset = timeSeconds - cand.time;
+    const err = Math.abs(offset);
+    let tns = 0 /* None */;
+    switch (cand.note.type) {
+      case 4 /* Mine */:
+        if (!release && err <= this.win("mine")) tns = 1 /* HitMine */;
+        break;
+      case 5 /* Lift */:
+        if (release) tns = this.classify(err);
+        break;
+      case 1 /* Tap */:
+      case 2 /* HoldHead */:
+        if (!release) tns = this.classify(err);
+        break;
+      default:
+        break;
+    }
+    if (tns === 0 /* None */) return null;
+    this.applyTapScore(cand, tns, offset);
+    if (cand.note.type === 2 /* HoldHead */) {
+      cand.holdInitiated = true;
+      cand.holdLife = 1;
+      if (!this.activeHolds.includes(cand)) this.activeHolds.push(cand);
+    }
+    return { track, tns, offset, combo: this.combo, white: this.lastWhite };
+  }
+  /** Advance time: age misses and update hold/roll life. `held` = keys down per column. */
+  update(nowSeconds, held = []) {
+    const dt = Math.max(0, nowSeconds - this.lastUpdate);
+    this.lastUpdate = nowSeconds;
+    const horizon = nowSeconds - this.missHorizon;
+    while (this.missCursor < this.notes.length && this.notes[this.missCursor].time < horizon) {
+      const n = this.notes[this.missCursor];
+      this.missCursor++;
+      if (n.tns !== 0 /* None */ || !n.judgable) continue;
+      if (n.note.type === 4 /* Mine */) {
+        n.tns = 2 /* AvoidMine */;
+        this.countTap(2 /* AvoidMine */);
+      } else {
+        this.applyTapScore(n, 4 /* Miss */, this.win("w5"));
+        if (n.note.type === 2 /* HoldHead */) {
+          n.hns = 3 /* Missed */;
+          n.holdResolved = true;
+          this.countHold(3 /* Missed */);
+        }
+      }
+    }
+    for (let i = this.activeHolds.length - 1; i >= 0; i--) {
+      const n = this.activeHolds[i];
+      if (n.holdResolved) {
+        this.activeHolds.splice(i, 1);
+        continue;
+      }
+      const down = held[n.track] ?? false;
+      if (nowSeconds > n.time && nowSeconds < n.tailTime) {
+        if (n.isRoll) {
+          n.holdLife = Math.max(0, n.holdLife - dt / this.win("roll"));
+        } else if (down) {
+          n.holdLife = 1;
+        } else {
+          n.holdLife = Math.max(0, n.holdLife - dt / this.win("hold"));
+        }
+      }
+      if (n.holdLife <= 0) {
+        this.resolveHold(n, 1 /* LetGo */, i);
+        continue;
+      }
+      if (nowSeconds >= n.tailTime) {
+        this.resolveHold(n, 2 /* Held */, i);
+      }
+    }
+  }
+  /** Score a live hold (Held at the tail, or LetGo the moment life hits 0). */
+  resolveHold(n, hns, activeIdx) {
+    n.hns = hns;
+    n.holdResolved = true;
+    this.countHold(hns);
+    if (!this.failed) this.actualDance += holdDancePoints(hns);
+    this.changeLife(holdLifeDelta(hns));
+    this.activeHolds.splice(activeIdx, 1);
+  }
+  get percentDancePoints() {
+    if (this.possibleDance <= 0) return 0;
+    return Math.max(0, this.actualDance / this.possibleDance);
+  }
+  get grade() {
+    if (this.failed) return "F";
+    let actual = 0;
+    for (const k in this.tapCounts) actual += this.tapCounts[k] * tapGradePoints(Number(k));
+    for (const k in this.holdCounts) actual += this.holdCounts[k] * holdGradePoints(Number(k));
+    const percent = this.possibleGrade > 0 ? actual / this.possibleGrade : 0;
+    return gradeFromPercent(percent);
+  }
+};
+
+// src/gameplay/replayVerify.ts
+var SIM_STEP_SECONDS = 1 / 300;
+var SIM_TAIL_SECONDS = 3;
+var MAX_FINE_SIM_SECONDS = 3600;
+function reconstructTiming(timing) {
+  const t = new TimingData();
+  t.offsetSeconds = timing.offset;
+  t.bpms = timing.bpms.map((s) => ({ row: s.row, bps: s.bps }));
+  t.stops = timing.stops.map((s) => ({ row: s.row, seconds: s.seconds }));
+  t.delays = timing.delays.map((s) => ({ row: s.row, seconds: s.seconds }));
+  t.warps = timing.warps.map((s) => ({ row: s.row, lengthRows: s.lengthRows }));
+  t.fakes = timing.fakes.map((s) => ({ row: s.row, lengthRows: s.lengthRows }));
+  t.tidy();
+  return t;
+}
+function resultOf(judge) {
+  return {
+    percent: Math.max(0, Math.min(1, judge.percentDancePoints)),
+    grade: judge.grade,
+    maxCombo: judge.maxCombo,
+    failed: judge.failed,
+    counts: { ...judge.tapCounts },
+    holdCounts: { ...judge.holdCounts }
+  };
+}
+function verifyReplay(chartData, expectedChartHash, replay, musicRate) {
+  const timing = reconstructTiming(chartData.timing);
+  const hash = hashChartContent(chartData.stepsType, chartData.noteData, timing);
+  if (hash !== expectedChartHash) return { reject: "chart does not match the board hash" };
+  const numTracks = stepsTypeNumTracks(chartData.stepsType) || 4;
+  const noteData = parseNoteGrid(chartData.noteData, numTracks, []);
+  const judge = new Judge(noteData, timing, DEFAULT_WINDOWS, musicRate);
+  let end = 0;
+  for (const n of judge.notes) end = Math.max(end, n.time, n.tailTime);
+  end += SIM_TAIL_SECONDS;
+  const held = new Array(numTracks).fill(false);
+  let cursor = 0;
+  const applyDueEvents = (now) => {
+    while (cursor < replay.length && replay[cursor].t <= now) {
+      const e = replay[cursor++];
+      if (e.track >= 0 && e.track < numTracks) held[e.track] = !e.up;
+      judge.step(e.track, e.t, e.up);
+    }
+  };
+  const fineEnd = Math.min(end, MAX_FINE_SIM_SECONDS);
+  for (let now = 0; now <= fineEnd; now += SIM_STEP_SECONDS) {
+    applyDueEvents(now);
+    judge.update(now, held);
+  }
+  applyDueEvents(end);
+  judge.update(end, held);
+  return { result: resultOf(judge) };
 }
 
 // src/net/scoresApi.ts
@@ -155,18 +1273,16 @@ var MAX_LIMIT = 100;
 var MAX_BODY_BYTES = 2 * 1024 * 1024;
 var MIN_REPLAY_SPAN_SECONDS = 5;
 var MIN_TAPS_FOR_SPAN = 20;
-function implausible(sub) {
-  let judgedTaps = 0;
-  for (let k = 5; k <= 9; k++) judgedTaps += sub.result.counts[k] ?? 0;
-  let presses = 0;
+function degenerateReplay(sub) {
+  if (sub.replay.length === 0) return "empty replay";
   let firstT = Infinity;
   let lastT = -Infinity;
+  let judgedTaps = 0;
+  for (let k = 5; k <= 9; k++) judgedTaps += sub.result.counts[k] ?? 0;
   for (const e of sub.replay) {
-    if (!e.up) presses++;
     if (e.t < firstT) firstT = e.t;
     if (e.t > lastT) lastT = e.t;
   }
-  if (presses < sub.result.maxCombo) return "replay presses below combo";
   if (judgedTaps >= MIN_TAPS_FOR_SPAN && lastT - firstT < MIN_REPLAY_SPAN_SECONDS) {
     return "replay span too short";
   }
@@ -222,9 +1338,12 @@ function createHandlers(store, now = Date.now) {
       }
       const sub = parseSubmitScoreRequest(parsed);
       if (!sub) return error(400, "bad_request", "invalid submission");
-      const reason = implausible(sub);
-      if (reason) return error(400, "bad_request", reason);
-      const outcome = await store.submit(sub, await sha256Hex(sub.secret), now());
+      const degenerate = degenerateReplay(sub);
+      if (degenerate) return error(400, "bad_request", degenerate);
+      const verified = verifyReplay(sub.chartData, sub.chart.chartHash, sub.replay, sub.musicRate);
+      if ("reject" in verified) return error(400, "bad_request", verified.reject);
+      const authoritative = { ...sub, result: verified.result };
+      const outcome = await store.submit(authoritative, await sha256Hex(sub.secret), now());
       if (!outcome.ok) return error(403, outcome.code, "secret does not match this playerId");
       return json(200, { ok: true, rank: outcome.rank, isPersonalBest: outcome.isPersonalBest });
     }

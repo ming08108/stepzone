@@ -11,6 +11,10 @@ function error(status, code, message) {
   return json(status, { ok: false, code, message });
 }
 
+// src/net/protocol.ts
+var MAX_NOTE_DATA_CHARS = 256 * 1024;
+var MAX_ROW = 1 << 28;
+
 // src/net/versus.ts
 var CODE_ARROWS = ["L", "D", "U", "R"];
 var CODE_LENGTH = 6;

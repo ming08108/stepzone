@@ -16,7 +16,15 @@ import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import { saveReplay } from '../app/replays';
 import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
-import { rateKey, type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
+import {
+  rateKey,
+  type ChartData,
+  type PlayResult,
+  type ReplayEvent,
+  type SubmitInput,
+} from '../net/protocol';
+import type { Song } from '../song/song';
+import type { Steps } from '../song/steps';
 import { GhostRace, type GhostInfo } from './GhostRace';
 import { RivalBars, RoomStandings } from './RoomRace';
 import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
@@ -84,6 +92,25 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 const AC = '#ff5d47';
 /** How long `back` must be held mid-song to quit (stray taps don't drop out). */
 const QUIT_HOLD_MS = 900;
+
+/** Serialize the chart the play ran on for server-side replay verification —
+ *  the raw note grid + the resolved timing segments the server needs to rebuild
+ *  the chart, recompute its content hash, and re-run the Judge. */
+function chartDataOf(song: Song, chart: Steps): ChartData {
+  const t = chart.getTimingData(song.timing);
+  return {
+    stepsType: chart.stepsType,
+    noteData: chart.noteDataString,
+    timing: {
+      offset: t.offsetSeconds,
+      bpms: t.bpms.map((s) => ({ row: s.row, bps: s.bps })),
+      stops: t.stops.map((s) => ({ row: s.row, seconds: s.seconds })),
+      delays: t.delays.map((s) => ({ row: s.row, seconds: s.seconds })),
+      warps: t.warps.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
+      fakes: t.fakes.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
+    },
+  };
+}
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -646,6 +673,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             holdCounts: { ...judge.holdCounts },
           },
           input,
+          chartData: chartDataOf(req.song, req.chart),
           replay: [...session.inputLog],
           ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
         });

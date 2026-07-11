@@ -8,9 +8,21 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createHandlers, type ScoresHandlers } from '../src/net/scoresApi';
 import { MemoryScoreStore } from '../src/net/scoreStore';
 import type { LeaderboardResponse, ReplayEvent, SubmitScoreRequest } from '../src/net/protocol';
-import { sampleReplay, validSubmit } from './netProtocol.test';
+import {
+  FIXTURE_CHART_HASH,
+  fixtureReplay,
+  perfectReplay,
+  sampleReplay,
+  spreadReplay,
+  validSubmit,
+} from './netProtocol.test';
 
 const URL_BASE = 'http://test/api/scores';
+/** The board the fixture chart hashes to; every submission re-simulates against
+ *  it. Replaces the old hand-picked 'abc123' now that the hash must be real. */
+const HASH = FIXTURE_CHART_HASH;
+/** All 16 note indices of the fixture stream. */
+const ALL = [...Array(16).keys()];
 
 function post(handlers: ScoresHandlers, body: unknown): Promise<Response> {
   return handlers.POST(
@@ -32,6 +44,13 @@ async function board(
   return (await res.json()) as LeaderboardResponse;
 }
 
+/**
+ * Build a submission. The server RE-SIMULATES the replay and ranks on what it
+ * produces, so the score is set by `replay` (defaulting to a perfect run =
+ * 100%), NOT by the claimed `result`. Pass a partial replay to rank a player
+ * below a perfect one. `percent`/`maxCombo` only shape the (ignored) claimed
+ * result — kept so the malformed-body checks still have knobs.
+ */
 function play(over: {
   playerId?: string;
   secret?: string;
@@ -39,6 +58,7 @@ function play(over: {
   percent?: number;
   maxCombo?: number;
   musicRate?: number;
+  replay?: ReplayEvent[];
 }): SubmitScoreRequest {
   const base = validSubmit();
   return {
@@ -52,6 +72,7 @@ function play(over: {
       percent: over.percent ?? base.result.percent,
       maxCombo: over.maxCombo ?? base.result.maxCombo,
     },
+    replay: over.replay ?? base.replay,
   };
 }
 
@@ -70,34 +91,42 @@ describe('POST /api/scores', () => {
     expect(await res.json()).toEqual({ ok: true, rank: 1, isPersonalBest: true });
   });
 
-  it('ranks players by percent and reports the submitters rank', async () => {
-    await post(handlers, play({ playerId: 'a', percent: 0.9 }));
-    const res = await post(handlers, play({ playerId: 'b', percent: 0.8 }));
+  it('ranks players by re-simulated percent and reports the submitters rank', async () => {
+    // A perfect replay (100%) outranks a partial one — the CLAIMED percents are
+    // ignored; the server ranks on what each replay actually scores.
+    await post(handlers, play({ playerId: 'a', replay: perfectReplay() }));
+    const res = await post(handlers, play({ playerId: 'b', replay: spreadReplay(8) }));
     expect(await res.json()).toEqual({ ok: true, rank: 2, isPersonalBest: true });
   });
 
   it('merges a worse play into the stored best (maxCombo folds independently)', async () => {
-    await post(handlers, play({ playerId: 'a', percent: 0.9, maxCombo: 50 }));
-    const res = await post(handlers, play({ playerId: 'a', percent: 0.7, maxCombo: 80 }));
+    // Play 1: high percent, broken combo (one note missed -> 0.9375, combo 8).
+    await post(
+      handlers,
+      play({ playerId: 'a', replay: fixtureReplay(ALL.filter((i) => i !== 8)) }),
+    );
+    // Play 2: lower percent, but a full combo (all 16 hit late as W3 -> combo 16).
+    const res = await post(handlers, play({ playerId: 'a', replay: fixtureReplay(ALL, 0.05) }));
     expect(await res.json()).toEqual({ ok: true, rank: 1, isPersonalBest: false });
-    const rows = (await board(handlers, 'abc123')).rows;
+    const rows = (await board(handlers, HASH)).rows;
     expect(rows).toHaveLength(1);
-    expect(rows[0].percent).toBe(0.9);
-    expect(rows[0].maxCombo).toBe(80);
+    // The best percent stays with play 1; the max combo folds in from play 2.
+    expect(rows[0].percent).toBeCloseTo(0.9375, 6);
+    expect(rows[0].maxCombo).toBe(16);
   });
 
   it('rejects a claimed playerId with the wrong secret', async () => {
     await post(handlers, play({ playerId: 'a', secret: 'right' }));
     const res = await post(handlers, play({ playerId: 'a', secret: 'wrong' }));
     expect(res.status).toBe(403);
-    const rows = (await board(handlers, 'abc123')).rows;
+    const rows = (await board(handlers, HASH)).rows;
     expect(rows).toHaveLength(1);
   });
 
   it('updates the display name on later submissions', async () => {
     await post(handlers, play({ playerId: 'a', playerName: 'OLD' }));
     await post(handlers, play({ playerId: 'a', playerName: 'NEW', percent: 0.1 }));
-    expect((await board(handlers, 'abc123')).rows[0].playerName).toBe('NEW');
+    expect((await board(handlers, HASH)).rows[0].playerName).toBe('NEW');
   });
 
   it('rejects malformed bodies', async () => {
@@ -131,8 +160,9 @@ describe('POST /api/scores — anti-cheat', () => {
     expect((await post(handlers, { ...validSubmit(), protocol: 1 })).status).toBe(400);
   });
 
-  it('rejects a replay with fewer presses than the combo', async () => {
-    // maxCombo 100 (allowed by the 100 judged taps), but only 50 presses logged.
+  it('rejects a stunted replay that cannot back the claimed play', async () => {
+    // 50 presses crammed into < 5 s while the claim reports 95 judged taps —
+    // too short to be a real play of a full chart. Rejected before re-sim.
     const sub = { ...validSubmit(), replay: sampleReplay(50) };
     expect((await post(handlers, sub)).status).toBe(400);
   });
@@ -150,16 +180,16 @@ describe('POST /api/scores — anti-cheat', () => {
   it('stores the replay on a personal best and serves it via replayOf', async () => {
     const res = await post(handlers, play({ playerId: 'a', percent: 0.9 }));
     expect(res.status).toBe(200);
-    expect((await board(handlers, 'abc123')).rows[0].hasReplay).toBe(true);
+    expect((await board(handlers, HASH)).rows[0].hasReplay).toBe(true);
 
-    const got = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&replayOf=a`));
+    const got = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&replayOf=a`));
     expect(got.status).toBe(200);
     const body = (await got.json()) as { replay: ReplayEvent[] };
     expect(body.replay).toEqual(validSubmit().replay);
   });
 
   it('404s a replay request for a player with none stored', async () => {
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&replayOf=z`));
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&replayOf=z`));
     expect(res.status).toBe(404);
   });
 });
@@ -177,15 +207,15 @@ describe('GET /api/scores', () => {
   it('partitions boards by music rate', async () => {
     await post(handlers, play({ playerId: 'a', musicRate: 1 }));
     await post(handlers, play({ playerId: 'b', musicRate: 1.5 }));
-    expect((await board(handlers, 'abc123', 1)).rows.map((r) => r.playerId)).toEqual(['a']);
-    expect((await board(handlers, 'abc123', 1.5)).rows.map((r) => r.playerId)).toEqual(['b']);
+    expect((await board(handlers, HASH, 1)).rows.map((r) => r.playerId)).toEqual(['a']);
+    expect((await board(handlers, HASH, 1.5)).rows.map((r) => r.playerId)).toEqual(['b']);
   });
 
   it('shares ranks on ties and orders earlier achievers first', async () => {
-    await post(handlers, play({ playerId: 'a', percent: 0.9 }));
-    await post(handlers, play({ playerId: 'b', percent: 0.9 }));
-    await post(handlers, play({ playerId: 'c', percent: 0.5 }));
-    const rows = (await board(handlers, 'abc123')).rows;
+    await post(handlers, play({ playerId: 'a', replay: perfectReplay() }));
+    await post(handlers, play({ playerId: 'b', replay: perfectReplay() }));
+    await post(handlers, play({ playerId: 'c', replay: spreadReplay(8) }));
+    const rows = (await board(handlers, HASH)).rows;
     expect(rows.map((r) => [r.playerId, r.rank])).toEqual([
       ['a', 1],
       ['b', 1],
@@ -196,36 +226,40 @@ describe('GET /api/scores', () => {
   it('stores a ghost with a personal best and serves it via ghostOf', async () => {
     const ghost = [{ atSong: 0, percent: 0.1, combo: 3, life: 0.9 }];
     await post(handlers, { ...play({ playerId: 'a', percent: 0.9 }), ghost });
-    expect((await board(handlers, 'abc123')).rows[0].hasGhost).toBe(true);
+    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(true);
 
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&ghostOf=a`));
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ghost });
   });
 
   it('a worse play keeps the best ghost; a better ghostless play clears it', async () => {
     const ghost = [{ atSong: 0, percent: 0.1, combo: 3, life: 0.9 }];
-    await post(handlers, { ...play({ playerId: 'a', percent: 0.9 }), ghost });
-    await post(handlers, play({ playerId: 'a', percent: 0.5 }));
-    expect((await board(handlers, 'abc123')).rows[0].hasGhost).toBe(true);
+    // Best so far (0.75) carries a ghost.
+    await post(handlers, { ...play({ playerId: 'a', replay: spreadReplay(12) }), ghost });
+    // A worse ghostless play (0.375) doesn't beat it — the ghost is retained.
+    await post(handlers, play({ playerId: 'a', replay: spreadReplay(8) }));
+    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(true);
 
-    await post(handlers, play({ playerId: 'a', percent: 0.95 }));
-    expect((await board(handlers, 'abc123')).rows[0].hasGhost).toBe(false);
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&ghostOf=a`));
+    // A better ghostless play (100%) sets a new best and clears the old ghost.
+    await post(handlers, play({ playerId: 'a', replay: perfectReplay() }));
+    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(false);
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
     expect(res.status).toBe(404);
   });
 
   it('404s a ghost request for a player with no stored ghost', async () => {
     await post(handlers, play({ playerId: 'a' }));
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&ghostOf=a`));
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
     expect(res.status).toBe(404);
   });
 
   it('caps rows at the limit but reports the full total', async () => {
     for (let i = 0; i < 5; i++) {
-      await post(handlers, play({ playerId: `p${i}`, percent: 0.5 + i / 100 }));
+      // Distinct re-simulated percents (0.6875 .. 0.9375), p4 the highest.
+      await post(handlers, play({ playerId: `p${i}`, replay: spreadReplay(11 + i) }));
     }
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=abc123&rate=1&limit=2`));
+    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&limit=2`));
     const body = (await res.json()) as LeaderboardResponse;
     expect(body.rows).toHaveLength(2);
     expect(body.total).toBe(5);
