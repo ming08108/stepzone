@@ -239,7 +239,8 @@ try {
     await bravo.waitForFunction(
       () =>
         document.body.innerText.includes('ALL SONGS') &&
-        document.body.innerText.includes('MULTIPLAYER'),
+        // The global room dock still lists the host — the room survived the quit.
+        document.body.innerText.includes('ALPHA'),
       null,
       { timeout: 15_000 },
     );

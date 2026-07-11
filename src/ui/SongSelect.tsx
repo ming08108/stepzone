@@ -32,7 +32,6 @@ import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
 import { isRoomCode } from '../net/versus';
 import { MultiplayerPanel } from './MultiplayerPanel';
-import { RoomDock } from './RoomDock';
 import { roomState, subscribeRoom } from './roomStore';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
@@ -1280,35 +1279,20 @@ export function SongSelect({
         <MultiplayerPanel initialCode={joinCode} onClose={() => setVersusOpen(false)} />
       )}
 
-      {/* The party dock — the room floats over song select between songs.
-          Guests watch the host's pick resolve here; the App routes them to
-          PLAYER OPTIONS when it's ready (roomStore follow state). */}
-      {!versusOpen && vsRoom.k !== 'idle' && (
-        <div className="absolute bottom-[56px] right-4 z-[20] w-[420px] max-w-[92%]">
-          <RoomDock
-            vs={vsRoom}
-            status={
-              vsRoom.k === 'in-room'
-                ? vsRoom.room.isHost
-                  ? 'PICK A SONG FOR THE ROOM'
-                  : vsRoom.follow.k === 'resolving'
-                    ? vsRoom.follow.message
-                    : vsRoom.follow.k === 'error'
-                      ? vsRoom.follow.message
-                      : vsRoom.room.phase !== 'lobby'
-                        ? 'A SONG IS IN PROGRESS — YOU JOIN THE NEXT ONE'
-                        : 'THE HOST IS PICKING A SONG…'
-                : undefined
-            }
-          />
-        </div>
-      )}
+      {/* The room dock (party roster) is a global element pinned bottom-right
+          by App — not rendered per-screen, so it stays put as you navigate. */}
 
       {namePromptOpen && <NamePrompt onDone={() => setNamePromptOpen(false)} />}
 
       {/* Hint bar — context-aware (pack grid vs song list). */}
       <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/62">
-        {inPacks ? (
+        {isRoomGuest ? (
+          // A guest can browse but can't pick — the host chooses the song and
+          // everyone follows automatically.
+          <span style={{ color: AC }} className="tracking-[0.16em]">
+            IN A ROOM — THE HOST PICKS THE SONG · YOU’LL JOIN AUTOMATICALLY
+          </span>
+        ) : inPacks ? (
           <>
             <span>◀▶▲▼ PACK</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — OPEN</span>

@@ -1,17 +1,19 @@
 /**
- * The multiplayer panel — host or join a persistent room from SONG SELECT,
- * no song required (docs/VERSUS.md). Opened from the pack grid's SELECT, the
- * hint-bar button, or a ?join= share link. Pad-operable throughout: ▲▼ picks
- * HOST/JOIN, START confirms, the join code is pressed as 6 arrows, SELECT
- * backs out. Mouse mirrors on everything. Once in a room the panel shows the
- * roster (the dock takes over after closing); the room itself lives in the
- * roomStore and survives every screen change.
+ * The multiplayer ENTRY panel — host or join a persistent room from SONG
+ * SELECT (docs/VERSUS.md). Opened from the pack grid's SELECT, the hint-bar
+ * button, or a ?join= share link. Pad-operable throughout: ▲▼ picks HOST/JOIN,
+ * START confirms, the join code is pressed as 6 arrows, SELECT backs out.
+ * Mouse mirrors on everything.
+ *
+ * It handles ONLY the entry choice + code entry. The moment a room exists (or
+ * a connect starts), the panel closes and the roster/status live in the global
+ * room dock (App → RoomDock, pinned bottom-right) — so the party stays in one
+ * place as you move between screens.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { keyboardRole } from '../input/inputBus';
 import { CODE_ARROWS, CODE_LENGTH } from '../net/versus';
-import { dismissRoomError, hostRoom, joinRoomByCode, roomState, subscribeRoom } from './roomStore';
-import { RoomDock } from './RoomDock';
+import { hostRoom, joinRoomByCode, roomState, subscribeRoom } from './roomStore';
 import { CodeArrows, PadArrow } from './PadArrow';
 
 const AC = '#ff5d47';
@@ -34,8 +36,8 @@ export function MultiplayerPanel({
   const [step, setStep] = useState<Step>({ k: 'menu', sel: 0 });
   const stepRef = useRef(step);
   stepRef.current = step;
-  const vsRef = useRef(vs);
-  vsRef.current = vs;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // A ?join= share link goes straight to connecting (once — see autoJoined).
   useEffect(() => {
@@ -46,6 +48,11 @@ export function MultiplayerPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Once a room is being created / joined / live, hand off to the global dock.
+  useEffect(() => {
+    if (vs.k !== 'idle') onCloseRef.current();
+  }, [vs.k]);
+
   const activate = (sel: number) => {
     if (sel === 0) void hostRoom();
     else setStep({ k: 'enter', code: '' });
@@ -55,12 +62,8 @@ export function MultiplayerPanel({
     const s = stepRef.current;
     if (s.k !== 'enter') return;
     const code = s.code + a;
-    if (code.length >= CODE_LENGTH) {
-      setStep({ k: 'menu', sel: 1 });
-      void joinRoomByCode(code);
-    } else {
-      setStep({ k: 'enter', code });
-    }
+    if (code.length >= CODE_LENGTH) void joinRoomByCode(code);
+    else setStep({ k: 'enter', code });
   };
 
   useEffect(() => {
@@ -79,27 +82,12 @@ export function MultiplayerPanel({
       if (!isConfirm && !isBack && !arrow) return;
       e.preventDefault();
       const s = stepRef.current;
-      const state = vsRef.current;
       if (isBack) {
-        if (state.k === 'error') dismissRoomError();
-        else if (s.k === 'enter') setStep({ k: 'menu', sel: 1 });
-        else onClose();
-        return;
-      }
-      if (state.k === 'error') {
-        if (isConfirm) dismissRoomError();
-        return;
-      }
-      if (state.k === 'in-room' || state.k === 'busy') {
-        if (isConfirm && state.k === 'in-room') onClose(); // roster seen — go browse
-        return;
-      }
-      if (s.k === 'menu') {
-        if (arrow === 'U' || arrow === 'D') {
-          setStep({ k: 'menu', sel: s.sel === 0 ? 1 : 0 });
-        } else if (isConfirm) {
-          activate(s.sel);
-        }
+        if (s.k === 'enter') setStep({ k: 'menu', sel: 1 });
+        else onCloseRef.current();
+      } else if (s.k === 'menu') {
+        if (arrow === 'U' || arrow === 'D') setStep({ k: 'menu', sel: s.sel === 0 ? 1 : 0 });
+        else if (isConfirm) activate(s.sel);
       } else if (arrow) {
         pressArrow(arrow);
       }
@@ -109,21 +97,23 @@ export function MultiplayerPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The panel only exists for the idle entry choice; once a room spins up the
+  // handoff effect above closes it.
+  if (vs.k !== 'idle') return null;
+
   const menuRows = [
-    { label: 'HOST A ROOM', hint: 'Get a 6-arrow code and an invite link friends join with.' },
+    { label: 'HOST A ROOM', hint: 'Get a 6-arrow code + invite link friends join with.' },
     { label: 'JOIN WITH CODE', hint: 'Press the 6 arrows from the host’s screen.' },
   ];
 
   return (
     <div className="absolute inset-0 z-[30] flex items-center justify-center bg-black/60">
-      <div className="flex w-[560px] max-w-[92%] flex-col border border-white/15 bg-[#0b0c0e] shadow-2xl">
+      <div className="flex w-[520px] max-w-[92%] flex-col border border-white/15 bg-[#0b0c0e] shadow-2xl">
         <div className="flex flex-none items-baseline gap-3 border-b border-white/[0.09] px-5 py-3">
           <span className="text-[13px] font-bold tracking-[0.22em]" style={{ color: AC }}>
             MULTIPLAYER
           </span>
-          <span className="min-w-0 flex-1 truncate text-[15px] font-bold">
-            {vs.k === 'in-room' ? 'YOUR ROOM' : 'PLAY WITH FRIENDS'}
-          </span>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-bold">PLAY WITH FRIENDS</span>
           <button
             onClick={onClose}
             title="Close"
@@ -133,44 +123,8 @@ export function MultiplayerPanel({
           </button>
         </div>
 
-        <div className="min-h-[170px] px-6 py-5">
-          {vs.k === 'busy' && (
-            <div className="py-10 text-center text-[13px] tracking-[0.16em] text-[#ececec]/70">
-              {vs.message}
-            </div>
-          )}
-
-          {vs.k === 'error' && (
-            <div className="flex flex-col items-center gap-4 py-6">
-              <div className="text-center text-[13px] tracking-[0.14em] text-[#ff5d47]">
-                {vs.message}
-              </div>
-              <button
-                onClick={dismissRoomError}
-                className="border px-5 py-1.5 text-[12px] tracking-[0.16em]"
-                style={{ borderColor: AC, background: AC + '1a' }}
-              >
-                TRY AGAIN
-              </button>
-            </div>
-          )}
-
-          {vs.k === 'in-room' && (
-            <div className="flex flex-col gap-3">
-              <RoomDock
-                vs={vs}
-                status="Close this panel and pick songs together — the room stays."
-              />
-              <div className="text-[12px] leading-relaxed text-[#ececec]/55">
-                The room lasts as long as the host stays — play as many songs as you like.
-                {vs.room.isHost
-                  ? ' You pick the songs; everyone picks their own difficulty.'
-                  : ' The host picks the songs; you pick your own difficulty.'}
-              </div>
-            </div>
-          )}
-
-          {vs.k === 'idle' && step.k === 'menu' && (
+        <div className="min-h-[160px] px-6 py-5">
+          {step.k === 'menu' && (
             <div className="flex flex-col gap-2 py-1">
               {menuRows.map((row, i) => {
                 const on = step.sel === i;
@@ -191,7 +145,7 @@ export function MultiplayerPanel({
                     >
                       {row.label}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-right text-[12px] text-[#ececec]/50">
+                    <span className="min-w-0 flex-1 truncate text-right text-[12px] text-[#ececec]/55">
                       {row.hint}
                     </span>
                   </div>
@@ -200,7 +154,7 @@ export function MultiplayerPanel({
             </div>
           )}
 
-          {vs.k === 'idle' && step.k === 'enter' && (
+          {step.k === 'enter' && (
             <div className="flex flex-col items-center gap-3 py-2">
               <div className="text-[12px] tracking-[0.2em] text-[#ececec]/55">ENTER ROOM CODE</div>
               <div className="flex h-[40px] items-center gap-2">
@@ -229,11 +183,9 @@ export function MultiplayerPanel({
 
         <div className="flex flex-none justify-end border-t border-white/[0.09] px-5 py-2">
           <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
-            {vs.k === 'in-room'
-              ? 'START — BROWSE SONGS · SELECT — CLOSE'
-              : step.k === 'enter'
-                ? 'PRESS THE 6 ARROWS · SELECT — BACK'
-                : '▲▼ CHOOSE · START — CONFIRM · SELECT — CLOSE'}
+            {step.k === 'enter'
+              ? 'PRESS THE 6 ARROWS · SELECT — BACK'
+              : '▲▼ CHOOSE · START — CONFIRM · SELECT — CLOSE'}
           </span>
         </div>
       </div>

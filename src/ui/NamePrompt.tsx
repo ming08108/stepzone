@@ -7,18 +7,22 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { keyboardRole } from '../input/inputBus';
-import { markNamePrompted, setPlayerName } from '../net/identity';
+import { getIdentity, markNamePrompted, setPlayerName } from '../net/identity';
 
 const AC = '#ff5d47';
 
 export function NamePrompt({ onDone }: { onDone: () => void }) {
-  const [name, setName] = useState('');
+  // Pre-fill with the auto-assigned arcade name; selected on mount so typing
+  // replaces it. SKIP keeps it, SAVE commits whatever's shown.
+  const [assigned] = useState(() => getIdentity().name);
+  const [name, setName] = useState(assigned);
   const inputRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef(name);
   nameRef.current = name;
 
   useEffect(() => {
     inputRef.current?.focus();
+    inputRef.current?.select();
   }, []);
 
   const finish = (save: boolean) => {
@@ -55,7 +59,7 @@ export function NamePrompt({ onDone }: { onDone: () => void }) {
           WELCOME TO STEPZONE
         </div>
         <div className="text-[15px] tracking-[0.08em] text-[#ececec]/80">
-          Pick a player name for the online leaderboards
+          We named you <span style={{ color: AC }}>{assigned}</span> — keep it or pick your own
         </div>
         <input
           ref={inputRef}

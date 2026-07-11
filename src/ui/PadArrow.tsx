@@ -1,10 +1,10 @@
 /**
- * One dance-pad direction arrow for the room-code UI, drawn as a rotated SVG so
- * all four directions are pixel-identical. The Unicode arrows ←↓↑→ have
- * different glyph metrics per font (up/down render smaller than left/right),
- * which looked lopsided in the code display — one shape rotated by direction
- * fixes it by construction. `dir` is the L/D/U/R room-code letter; the arrow
- * points that way and takes the surrounding text color (currentColor).
+ * One dance-pad direction arrow for the room-code UI: a filled triangle (the
+ * app's ◀▶ arrow language) drawn as a rotated SVG so all four directions are
+ * pixel-identical. Unicode arrows ←↓↑→ have different glyph metrics per font
+ * (up/down render smaller than left/right), which looked lopsided — one shape
+ * rotated by direction fixes it by construction. `dir` is the L/D/U/R room-code
+ * letter; the arrow points that way and takes the surrounding text color.
  */
 
 /** Rotation (deg) that makes the base up-arrow point in each direction. */
@@ -42,7 +42,8 @@ export function PadArrow({
         aria-hidden="true"
         style={{ transform: `rotate(${ROTATION[dir] ?? 0}deg)`, display: 'block' }}
       >
-        <path d="M12 2.5 L19.5 11 L14.5 11 L14.5 21.5 L9.5 21.5 L9.5 11 L4.5 11 Z" />
+        {/* Filled triangle, matching the app's ◀▶ steppers. */}
+        <path d="M12 4.5 L20 18.5 L4 18.5 Z" />
       </svg>
     </span>
   );

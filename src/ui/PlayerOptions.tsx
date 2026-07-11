@@ -35,7 +35,6 @@ import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
-import { RoomDock } from './RoomDock';
 import { pickOf } from './versusResolve';
 import {
   announceSong,
@@ -697,33 +696,7 @@ export function PlayerOptions({
             <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/62">
               {curRow.help}
             </div>
-            {versusActive && (
-              <div className="mt-1">
-                <RoomDock
-                  vs={vs}
-                  status={
-                    room
-                      ? room.players.filter((p) => !p.left).length < 2
-                        ? 'WAITING FOR PLAYERS — SHARE THE CODE OR LINK'
-                        : selfReady
-                          ? 'WAITING FOR EVERYONE TO READY UP…'
-                          : 'PICK YOUR DIFFICULTY, THEN START'
-                      : undefined
-                  }
-                  action={
-                    room && !selfReady && room.song ? (
-                      <button
-                        onClick={go}
-                        className="border px-3 py-[3px] text-[11px] font-bold tracking-[0.14em]"
-                        style={{ borderColor: AC, background: AC + '1a' }}
-                      >
-                        READY UP
-                      </button>
-                    ) : undefined
-                  }
-                />
-              </div>
-            )}
+            {/* The room roster (RoomDock) is pinned bottom-right globally by App. */}
             <button
               onClick={go}
               disabled={versusActive && (vs.k !== 'in-room' || selfReady || !room?.song)}
