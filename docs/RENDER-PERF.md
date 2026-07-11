@@ -35,7 +35,28 @@ Per scenario it reports:
 Scenarios: a typical hard chart (175BPM 16ths, X2.5) and a beyond-worst-case
 stress chart (200BPM 16ths + jumps + overlapping freezes/rolls + mines at X1 ≈
 74 arrows + 7 holds + 17 mines on screen, DANGER chrome forced), across
-backends and with a background image composited.
+backends and with a background image composited. `gpu-versus-dual` renders TWO
+stress fields on the one canvas (a second autoplayed mirror judge) — the live
+1v1 room-race path, so versus regressions show up here, not in production.
+
+## Numbers (2026-07-11, worktree, 1920×1080 headless, vsync off)
+
+Uncapped, `--disable-gpu-vsync --disable-frame-rate-limit`:
+
+| scenario                | fps  | missed | draw CPU avg | GPU avg  |
+| ----------------------- | ---- | ------ | ------------ | -------- |
+| webgpu typical          | 4079 | 0%     | 0.10 ms      | 0.032 ms |
+| webgpu stress + DANGER  | 2618 | 0%     | 0.15 ms      | 0.067 ms |
+| webgpu stress + bgimage | 2589 | 0%     | 0.15 ms      | 0.111 ms |
+| webgpu stress + bgvideo | 2423 | 0%     | 0.16 ms      | 0.101 ms |
+| webgpu ITG stress       | 2619 | 0%     | 0.14 ms      | 0.065 ms |
+| webgpu VERSUS two-field | 2132 | 0%     | 0.23 ms      | 0.088 ms |
+
+Worst case (dual-field stress) binds at ~0.23 ms CPU per frame — ~70 frames of
+headroom inside one 60 Hz refresh, ~18 inside a 240 Hz one. Frame p99 stays
+under 1 ms in every scenario; the residual risk is GC (28–55 pauses per 5 s
+window from ~8–58 KB allocated per frame), which has yet to show up in any
+p99.
 
 ## Numbers (RTX 3080, 238Hz display, 1600×900@1dpr, Chrome 149)
 

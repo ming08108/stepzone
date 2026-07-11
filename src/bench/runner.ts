@@ -23,6 +23,7 @@ import type { NoteSkin } from '../game/playOptions';
 import { Judge } from '../gameplay/judge';
 import { TapNoteScore, TapNoteType } from '../notes/noteTypes';
 import { parseSimfile } from '../parse/loader';
+import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import { makeBenchSsc, type BenchChartOpts } from './benchChart';
@@ -43,6 +44,9 @@ export interface BenchScenario {
   /** Composite a moving background VIDEO — exercises the per-frame external-
    *  texture import + bind-group rebuild the image path never touches. */
   bgVideo?: boolean;
+  /** Render TWO field views on the one canvas (a second autoplayed mirror
+   *  judge) — the live-versus rival path (docs/VERSUS.md). */
+  dual?: boolean;
   /** Seconds of measured rAF time (default 5). */
   seconds?: number;
 }
@@ -101,6 +105,15 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
     noteSkin: 'itg',
     chart: STRESS_CHART,
     scrollValue: 1,
+  },
+  {
+    id: 'gpu-versus-dual',
+    label: 'WEBGPU · VERSUS · TWO FIELDS',
+    backend: 'webgpu',
+    noteSkin: 'arcade',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+    dual: true,
   },
 ];
 
@@ -467,10 +480,34 @@ async function buildScene(
   field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
   if (bg) field.setBackground(bg);
   else if (video) field.setBackground(video.el);
+  // Dual view: a second autoplayed mirror judge rendered as the rival field
+  // on the SAME canvas — exactly what a 1v1 room race draws every frame.
+  let rival: { judge: Judge; fb: Feedback; auto: Autoplayer } | null = null;
+  if (scn.dual) {
+    const rivalJudge = new Judge(chart.getNoteData(), timing);
+    const rivalFb: Feedback = {
+      lastJudgment: null,
+      laneFlash: new Array<number>(4).fill(-999),
+      laneHit: new Array<Feedback['laneHit'][number]>(4).fill(null),
+    };
+    rival = { judge: rivalJudge, fb: rivalFb, auto: new Autoplayer(rivalJudge, 4, rivalFb) };
+    field.setRival({
+      numTracks: 4,
+      columnAngles: columnAnglesFor('dance-single', 4),
+      meta: { title: 'RIVAL', subtitle: 'LIVE RIVAL', difficulty: BENCH_META.difficulty },
+    });
+  }
   field.prewarm(); // bake atlas + compile pipelines before the measured window
   return {
     ...common,
-    render: (now, beat, progress) => field.draw(judge, now, beat, progress, fb),
+    render: (now, beat, progress) => {
+      if (rival) {
+        rival.auto.tick(now);
+        field.draw(judge, now, beat, progress, fb, { judge: rival.judge, feedback: rival.fb });
+      } else {
+        field.draw(judge, now, beat, progress, fb);
+      }
+    },
     perfStats: () => field.perfStats(),
     gpu: field.gpuTimingAvailable
       ? {

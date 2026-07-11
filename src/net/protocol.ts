@@ -14,7 +14,13 @@
  * submissions must present the same secret.
  */
 
-export const PROTOCOL_VERSION = 1;
+// v2 adds server-side anti-cheat: every submission must declare the input
+// device (only a gamepad/dance-pad is accepted — keyboard plays never reach
+// the board) and carry the full replay of the run, which the server checks for
+// plausibility before storing. v1 submissions no longer parse (the version
+// gate rejects them), so old queued plays are dropped on load rather than
+// silently accepted without the new evidence.
+export const PROTOCOL_VERSION = 2;
 
 /** Immutable identity of a chart (content hash) + display metadata that
  *  rides along for rendering boards without owning the simfile. */
@@ -53,6 +59,29 @@ export interface GhostFrame {
   life: number;
 }
 
+/** One judged-relevant input from a play: a press or release on a column at a
+ *  song-second, recorded by the engine and replayable frame-for-frame. `t` is
+ *  the same song-seconds value fed to the judge (rounded to 4 decimals). */
+export interface ReplayEvent {
+  /** Song-seconds of the event (the judge's own time axis). */
+  t: number;
+  /** Column index (dance-single 0..3; up to 15 for wider styles). */
+  track: number;
+  /** True = release (key up), false = press (key down). */
+  up: boolean;
+}
+
+/** How a submitted play was controlled. Only a gamepad/dance-pad is accepted —
+ *  keyboard plays are held back client-side and never submitted, and the server
+ *  rejects any device but 'pad'. */
+export interface SubmitInput {
+  device: 'pad';
+  /** Gamepad.id of the pad that played (diagnostics + pad-known heuristic). */
+  padId: string;
+  /** True when padId matched a known dance-pad name (src/input/padDetect.ts). */
+  padKnown: boolean;
+}
+
 export interface SubmitScoreRequest {
   protocol: typeof PROTOCOL_VERSION;
   playerId: string;
@@ -63,6 +92,11 @@ export interface SubmitScoreRequest {
   /** Music rate this play used (1 = normal); boards partition on it. */
   musicRate: number;
   result: PlayResult;
+  /** Device the play ran on — must be a pad (anti-cheat, v2). */
+  input: SubmitInput;
+  /** Full input log of the play; the server checks it for plausibility and
+   *  stores it (alongside the ghost) only when the play sets a new best. */
+  replay: ReplayEvent[];
   /** Scoreboard timeline of this play; stored only when it sets a new best. */
   ghost?: GhostFrame[];
 }
@@ -87,11 +121,18 @@ export interface LeaderboardRow {
   at: number;
   /** True when a ghost timeline is stored for this best (racable). */
   hasGhost: boolean;
+  /** True when a replay is stored for this best (watchable). */
+  hasReplay: boolean;
 }
 
 /** GET ?chartHash=..&rate=..&ghostOf=playerId */
 export interface GhostResponse {
   ghost: GhostFrame[];
+}
+
+/** GET ?chartHash=..&rate=..&replayOf=playerId */
+export interface ReplayResponse {
+  replay: ReplayEvent[];
 }
 
 export interface LeaderboardResponse {
@@ -200,6 +241,38 @@ export function parseGhost(v: unknown): GhostFrame[] | null {
   return out;
 }
 
+/** Replays are capped hard — a long marathon at a heavy stream stays well
+ *  under this, and the number bounds both the request body and stored blob. */
+export const MAX_REPLAY_EVENTS = 30_000;
+/** Pad ids are browser-provided (Gamepad.id); long but bounded. */
+const MAX_PAD_ID_LENGTH = 128;
+
+export function parseReplay(v: unknown): ReplayEvent[] | null {
+  if (!Array.isArray(v) || v.length > MAX_REPLAY_EVENTS) return null;
+  const out: ReplayEvent[] = [];
+  let prevT = Number.NEGATIVE_INFINITY;
+  for (const e of v) {
+    if (!isObj(e)) return null;
+    if (!finiteNum(e.t) || e.t < -60 || e.t > 36_000) return null;
+    if (e.t < prevT) return null; // events are recorded in time order
+    if (!finiteNum(e.track) || !Number.isInteger(e.track) || e.track < 0 || e.track > 15)
+      return null;
+    if (typeof e.up !== 'boolean') return null;
+    prevT = e.t;
+    out.push({ t: e.t, track: e.track, up: e.up });
+  }
+  return out;
+}
+
+/** Input device declaration; only a pad is accepted (keyboard never submits). */
+export function parseSubmitInput(v: unknown): SubmitInput | null {
+  if (!isObj(v)) return null;
+  if (v.device !== 'pad') return null;
+  if (!str(v.padId, MAX_PAD_ID_LENGTH)) return null;
+  if (typeof v.padKnown !== 'boolean') return null;
+  return { device: 'pad', padId: v.padId, padKnown: v.padKnown };
+}
+
 export function parseSubmitScoreRequest(v: unknown): SubmitScoreRequest | null {
   if (!isObj(v)) return null;
   if (v.protocol !== PROTOCOL_VERSION) return null;
@@ -213,6 +286,11 @@ export function parseSubmitScoreRequest(v: unknown): SubmitScoreRequest | null {
   let judged = 0;
   for (const n of Object.values(result.counts)) judged += n;
   if (result.maxCombo > judged) return null;
+  // Device + replay are required in v2 (anti-cheat). A malformed one is
+  // tampering, not version skew — our own client always sends both well-formed.
+  const input = parseSubmitInput(v.input);
+  const replay = parseReplay(v.replay);
+  if (!input || !replay) return null;
   // A ghost is optional, but a malformed one rejects the submission (our own
   // client never sends one, so it is tampering, not version skew).
   let ghost: GhostFrame[] | undefined;
@@ -229,6 +307,8 @@ export function parseSubmitScoreRequest(v: unknown): SubmitScoreRequest | null {
     chart,
     musicRate: v.musicRate,
     result,
+    input,
+    replay,
     ...(ghost !== undefined ? { ghost } : {}),
   };
 }
