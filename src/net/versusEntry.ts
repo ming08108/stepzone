@@ -1,13 +1,14 @@
 /**
- * Vercel Function: /api/versus — WebRTC signaling for live versus
- * (docs/VERSUS.md). Handshake state must survive across serverless
+ * Vercel Function source: /api/versus — WebRTC signaling for live versus
+ * (docs/VERSUS.md). Bundled to api/versus.js by scripts/buildApi.mjs (see
+ * scoresEntry.ts for why). Handshake state must survive across serverless
  * invocations, so this endpoint requires the database; without DATABASE_URL
  * it reports unavailable (the client shows versus as offline). Dev servers
  * get an in-memory store from the Vite middleware instead.
  */
 
-import { createSignalHandlers } from '../src/net/signalApi';
-import { PgSignalStore } from '../src/net/pgSignalStore';
+import { createSignalHandlers } from './signalApi';
+import { PgSignalStore } from './pgSignalStore';
 
 const databaseUrl = process.env.DATABASE_URL;
 const handlers = databaseUrl ? createSignalHandlers(new PgSignalStore(databaseUrl)) : null;

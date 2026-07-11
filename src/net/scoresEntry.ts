@@ -1,7 +1,12 @@
 /**
- * Vercel Function: /api/scores — the async-leaderboard endpoint
+ * Vercel Function source: /api/scores — the async-leaderboard endpoint
  * (docs/ONLINE-MULTIPLAYER.md M1). Thin entry only: routing/validation live
- * in src/net/scoresApi.ts so tests exercise the identical handlers.
+ * in scoresApi.ts so tests exercise the identical handlers.
+ *
+ * NOT deployed as-is: scripts/buildApi.mjs esbuild-bundles this file into the
+ * self-contained api/scores.js that Vercel runs (the Node builder does not
+ * bundle imports reaching outside api/, so a raw TS entry there crashes with
+ * ERR_MODULE_NOT_FOUND at runtime).
  *
  * Storage: Neon Postgres when DATABASE_URL is set (Vercel Marketplace ->
  * Neon; the schema bootstraps itself). Without it, an in-memory store keeps
@@ -9,9 +14,9 @@
  * function instance, by design.
  */
 
-import { createHandlers } from '../src/net/scoresApi';
-import { MemoryScoreStore } from '../src/net/scoreStore';
-import { PgScoreStore } from '../src/net/pgScoreStore';
+import { createHandlers } from './scoresApi';
+import { MemoryScoreStore } from './scoreStore';
+import { PgScoreStore } from './pgScoreStore';
 
 const databaseUrl = process.env.DATABASE_URL;
 const handlers = createHandlers(

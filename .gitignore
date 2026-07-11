@@ -24,3 +24,6 @@ todos*.txt
 
 # Claude Code transient worktrees
 .claude/worktrees/
+
+.vercel
+.env*
