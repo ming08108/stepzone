@@ -23,7 +23,7 @@ POST answer     ──────────────▶  (offer/answer  �
 
 - **Signaling** (`src/net/signalApi.ts`, `api/versus.js`): plain
   request/response HTTP — works on serverless, no WebSocket. V2 is
-  *joiner-initiated*: the room row is just "this code has a live host"
+  _joiner-initiated_: the room row is just "this code has a live host"
   (Postgres in prod via `pgSignalStore.ts`, memory in dev); each joiner posts
   an offer row and the host, polling, answers it. The host's poll doubles as
   a heartbeat — a room is joinable while its host keeps polling (parties can
