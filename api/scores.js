@@ -260,7 +260,7 @@ var MemoryScoreStore = class {
   }
 };
 
-// node_modules/@neondatabase/serverless/index.mjs
+// ../../../node_modules/@neondatabase/serverless/index.mjs
 var So = Object.create;
 var Ie = Object.defineProperty;
 var Eo = Object.getOwnPropertyDescriptor;

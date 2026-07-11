@@ -168,7 +168,7 @@ export function RoomStandings({
           const winner = rank === 0 && r.result !== null && !r.left;
           const pct = r.result?.percent ?? r.livePercent;
           const anim = final
-            ? undefined
+            ? 'none'
             : `standingsIn ${REVEAL_ROW_MS}ms ${delayMs}ms cubic-bezier(.2,.9,.25,1) both`;
           return (
             <div
@@ -223,7 +223,7 @@ export function RoomStandings({
                 {winner && (
                   <span
                     className="text-[12px] font-black tracking-[0.2em]"
-                    style={{ color: AC, animation: final ? 'blinkStart 1.4s infinite' : undefined }}
+                    style={{ color: AC, animation: final ? 'blinkStart 1.4s infinite' : 'none' }}
                   >
                     WINNER
                   </span>

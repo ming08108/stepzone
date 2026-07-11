@@ -408,8 +408,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     }
     if (e.role === 'confirm') {
       // While the standings are still revealing, the first confirm SKIPS the
-      // show (before the focused CONTINUE can swallow the press).
+      // show (before the focused CONTINUE can swallow the press). The ref
+      // flips HERE, synchronously — the React round-trip through the
+      // standings component is async, and a quick second press must read
+      // "already skipped" and mean CONTINUE, never a second eaten skip.
       if (phaseRef.current === 'done' && versusRef.current && !standingsRevealedRef.current) {
+        standingsRevealedRef.current = true;
         e.nativeEvent?.preventDefault();
         setSkipSignal((s) => s + 1);
         return;
@@ -643,6 +647,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
     if (import.meta.env.DEV) {
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
+      (window as unknown as { __playDebug?: () => unknown }).__playDebug = () => ({
+        phase: phaseRef.current,
+        versus: !!versusRef.current,
+        revealed: standingsRevealedRef.current,
+        roomPhase: versusRef.current?.room.phase,
+        roomEnded: versusRef.current?.room.ended,
+      });
     }
     setResult(null);
     // Keep the LOADING splash up through GPU init + audio decode + prewarm, and

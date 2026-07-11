@@ -22,50 +22,27 @@ function randomRoomCode() {
 function isRoomCode(v2) {
   return typeof v2 === "string" && new RegExp(`^[LDUR]{${CODE_LENGTH}}$`).test(v2);
 }
-var MAX_ROOM_CHARTS = 32;
-var str = (v2, max) => typeof v2 === "string" && v2.length > 0 && v2.length <= max;
-function parseVersusChartMeta(v2) {
-  if (!isObj(v2)) return null;
-  if (!str(v2.chartHash, 64) || !str(v2.stepsType, 64)) return null;
-  if (!num(v2.difficulty) || !Number.isInteger(v2.difficulty)) return null;
-  if (!num(v2.meter) || !Number.isInteger(v2.meter) || v2.meter < 0 || v2.meter > 100) return null;
-  return {
-    chartHash: v2.chartHash,
-    stepsType: v2.stepsType,
-    difficulty: v2.difficulty,
-    meter: v2.meter
-  };
-}
-function parseVersusSongRef(v2) {
-  if (!isObj(v2)) return null;
-  if (!str(v2.title, 256) || typeof v2.artist !== "string" || v2.artist.length > 256) return null;
-  if (!Array.isArray(v2.charts) || v2.charts.length === 0 || v2.charts.length > MAX_ROOM_CHARTS)
-    return null;
-  const charts = [];
-  for (const c of v2.charts) {
-    const meta = parseVersusChartMeta(c);
-    if (!meta) return null;
-    charts.push(meta);
-  }
-  return { title: v2.title, artist: v2.artist, charts };
-}
+var MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+var MAX_BG_BYTES = 32 * 1024 * 1024;
 var isObj = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2);
-var num = (v2) => typeof v2 === "number" && Number.isFinite(v2);
-var ROOM_TTL_MS = 10 * 6e4;
+var ROOM_LIVE_MS = 6e4;
+var JOIN_TTL_MS = 2 * 6e4;
 var MAX_SDP_LENGTH = 64 * 1024;
+var playerName = (n) => typeof n === "string" && n.length > 0 && n.length <= 24;
+var sdp = (s) => typeof s === "string" && s.length > 0 && s.length <= MAX_SDP_LENGTH;
+var joinId = (s) => typeof s === "string" && /^[a-zA-Z0-9-]{8,64}$/.test(s);
 function parseSignalRequest(v2) {
   if (!isObj(v2)) return null;
-  const name = (n) => typeof n === "string" && n.length > 0 && n.length <= 24;
-  const sdp = (s) => typeof s === "string" && s.length > 0 && s.length <= MAX_SDP_LENGTH;
   if (v2.t === "create") {
-    const song = parseVersusSongRef(v2.song);
-    if (!song || !name(v2.hostName) || !sdp(v2.offer)) return null;
-    if (!num(v2.musicRate) || v2.musicRate < 0.5 || v2.musicRate > 3) return null;
-    return { t: "create", hostName: v2.hostName, song, musicRate: v2.musicRate, offer: v2.offer };
+    return playerName(v2.hostName) ? { t: "create", hostName: v2.hostName } : null;
+  }
+  if (v2.t === "join") {
+    if (!isRoomCode(v2.code) || !playerName(v2.joinerName) || !sdp(v2.offer)) return null;
+    return { t: "join", code: v2.code, joinerName: v2.joinerName, offer: v2.offer };
   }
   if (v2.t === "answer") {
-    if (!isRoomCode(v2.code) || !name(v2.joinerName) || !sdp(v2.answer)) return null;
-    return { t: "answer", code: v2.code, joinerName: v2.joinerName, answer: v2.answer };
+    if (!isRoomCode(v2.code) || !joinId(v2.joinId) || !sdp(v2.answer)) return null;
+    return { t: "answer", code: v2.code, joinId: v2.joinId, answer: v2.answer };
   }
   return null;
 }
@@ -78,17 +55,24 @@ function createSignalHandlers(store, now = Date.now) {
       const url = new URL(req.url);
       const code = url.searchParams.get("code");
       if (!isRoomCode(code)) return error(400, "bad_request", "invalid room code");
-      const room = await store.get(code, now());
-      if (!room) return error(404, "not_found", "no such room (or it expired)");
-      if (url.searchParams.get("role") === "host") {
-        return json(200, { answer: room.answer, joinerName: room.joinerName });
+      const joinId2 = url.searchParams.get("joinId");
+      if (joinId2 !== null) {
+        const join = await store.getJoin(code, joinId2, now());
+        if (!join) return error(404, "not_found", "no such join (or it expired)");
+        return json(200, { answer: join.answer });
       }
-      return json(200, {
-        hostName: room.hostName,
-        song: room.song,
-        musicRate: room.musicRate,
-        offer: room.offer
-      });
+      if (url.searchParams.get("role") === "host") {
+        if (!await store.heartbeat(code, now())) {
+          return error(404, "not_found", "no such room (or it expired)");
+        }
+        const joins = await store.pendingJoins(code, now());
+        return json(200, {
+          joins: joins.map((j) => ({ joinId: j.joinId, joinerName: j.joinerName, offer: j.offer }))
+        });
+      }
+      const room = await store.getRoom(code, now());
+      if (!room) return error(404, "not_found", "no such room (or it expired)");
+      return json(200, { hostName: room.hostName });
     },
     async POST(req) {
       const raw = await req.text();
@@ -104,29 +88,39 @@ function createSignalHandlers(store, now = Date.now) {
       if (msg.t === "create") {
         for (let attempt = 0; attempt < 5; attempt++) {
           const code = randomRoomCode();
-          const ok = await store.create({
+          const at = now();
+          const ok = await store.createRoom({
             code,
             hostName: msg.hostName,
-            song: msg.song,
-            musicRate: msg.musicRate,
-            offer: msg.offer,
-            answer: null,
-            joinerName: null,
-            createdAt: now()
+            createdAt: at,
+            lastSeen: at
           });
           if (ok) return json(200, { code });
         }
         return error(503, "busy", "could not allocate a room code");
       }
-      const outcome = await store.answer(msg.code, msg.joinerName, msg.answer, now());
-      if (outcome === "not_found") return error(404, "not_found", "no such room (or it expired)");
-      if (outcome === "taken") return error(409, "taken", "room already has a player");
+      if (msg.t === "join") {
+        const joinId2 = crypto.randomUUID();
+        const outcome = await store.addJoin({
+          code: msg.code,
+          joinId: joinId2,
+          joinerName: msg.joinerName,
+          offer: msg.offer,
+          answer: null,
+          createdAt: now()
+        });
+        if (outcome === "no_room") return error(404, "not_found", "no such room (or it expired)");
+        return json(200, { joinId: joinId2 });
+      }
+      if (!await store.answerJoin(msg.code, msg.joinId, msg.answer, now())) {
+        return error(404, "not_found", "no such pending join");
+      }
       return json(200, { ok: true });
     }
   };
 }
 
-// node_modules/@neondatabase/serverless/index.mjs
+// ../../../node_modules/@neondatabase/serverless/index.mjs
 var So = Object.create;
 var Ie = Object.defineProperty;
 var Eo = Object.getOwnPropertyDescriptor;
@@ -5361,15 +5355,20 @@ var export_escapeLiteral = ct.escapeLiteral;
 var export_types = ct.types;
 
 // src/net/pgSignalStore.ts
-var SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms2 (
-  code        TEXT PRIMARY KEY,
-  host_name   TEXT NOT NULL,
-  song        JSONB NOT NULL,
-  music_rate  DOUBLE PRECISION NOT NULL,
+var ROOMS_SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms3 (
+  code       TEXT PRIMARY KEY,
+  host_name  TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  last_seen  BIGINT NOT NULL
+)`;
+var JOINS_SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_joins1 (
+  code        TEXT NOT NULL,
+  join_id     TEXT NOT NULL,
+  joiner_name TEXT NOT NULL,
   offer       TEXT NOT NULL,
   answer      TEXT,
-  joiner_name TEXT,
-  created_at  BIGINT NOT NULL
+  created_at  BIGINT NOT NULL,
+  PRIMARY KEY (code, join_id)
 )`;
 var PgSignalStore = class {
   sql;
@@ -5378,59 +5377,112 @@ var PgSignalStore = class {
     this.sql = cs(databaseUrl2);
   }
   ensureSchema() {
-    this.schemaReady ??= this.sql.query(SCHEMA).then(() => void 0);
+    this.schemaReady ??= (async () => {
+      await this.sql.query(ROOMS_SCHEMA);
+      await this.sql.query(JOINS_SCHEMA);
+    })();
     return this.schemaReady;
   }
-  async create(room) {
+  async createRoom(room) {
     await this.ensureSchema();
-    await this.sql.query(`DELETE FROM net_versus_rooms2 WHERE created_at < $1`, [
-      room.createdAt - ROOM_TTL_MS
+    await this.sql.query(`DELETE FROM net_versus_rooms3 WHERE last_seen < $1`, [
+      room.createdAt - ROOM_LIVE_MS
+    ]);
+    await this.sql.query(`DELETE FROM net_versus_joins1 WHERE created_at < $1`, [
+      room.createdAt - JOIN_TTL_MS
     ]);
     const rows = await this.sql.query(
-      `INSERT INTO net_versus_rooms2 (code, host_name, song, music_rate, offer, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO net_versus_rooms3 (code, host_name, created_at, last_seen)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (code) DO NOTHING
        RETURNING code`,
-      [
-        room.code,
-        room.hostName,
-        JSON.stringify(room.song),
-        room.musicRate,
-        room.offer,
-        room.createdAt
-      ]
+      [room.code, room.hostName, room.createdAt, room.lastSeen]
     );
     return rows.length > 0;
   }
-  async get(code, now) {
+  async getRoom(code, now) {
     await this.ensureSchema();
     const rows = await this.sql.query(
-      `SELECT * FROM net_versus_rooms2 WHERE code = $1 AND created_at > $2`,
-      [code, now - ROOM_TTL_MS]
+      `SELECT * FROM net_versus_rooms3 WHERE code = $1 AND last_seen > $2`,
+      [code, now - ROOM_LIVE_MS]
     );
     const r = rows[0];
     if (!r) return null;
     return {
       code: r.code,
       hostName: r.host_name,
-      song: r.song,
-      musicRate: r.music_rate,
-      offer: r.offer,
-      answer: r.answer,
-      joinerName: r.joiner_name,
-      createdAt: Number(r.created_at)
+      createdAt: Number(r.created_at),
+      lastSeen: Number(r.last_seen)
     };
   }
-  async answer(code, joinerName, answer, now) {
+  async heartbeat(code, now) {
+    await this.ensureSchema();
+    const rows = await this.sql.query(
+      `UPDATE net_versus_rooms3 SET last_seen = $2
+       WHERE code = $1 AND last_seen > $3
+       RETURNING code`,
+      [code, now, now - ROOM_LIVE_MS]
+    );
+    return rows.length > 0;
+  }
+  async addJoin(join) {
+    await this.ensureSchema();
+    const live = await this.sql.query(
+      `SELECT code FROM net_versus_rooms3 WHERE code = $1 AND last_seen > $2`,
+      [join.code, join.createdAt - ROOM_LIVE_MS]
+    );
+    if (live.length === 0) return "no_room";
+    await this.sql.query(
+      `INSERT INTO net_versus_joins1 (code, join_id, joiner_name, offer, answer, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (code, join_id) DO NOTHING`,
+      [join.code, join.joinId, join.joinerName, join.offer, join.answer, join.createdAt]
+    );
+    return "ok";
+  }
+  async pendingJoins(code, now) {
+    await this.ensureSchema();
+    const rows = await this.sql.query(
+      `SELECT * FROM net_versus_joins1
+       WHERE code = $1 AND answer IS NULL AND created_at > $2
+       ORDER BY created_at ASC`,
+      [code, now - JOIN_TTL_MS]
+    );
+    return rows.map((r) => ({
+      code: r.code,
+      joinId: r.join_id,
+      joinerName: r.joiner_name,
+      offer: r.offer,
+      answer: r.answer,
+      createdAt: Number(r.created_at)
+    }));
+  }
+  async answerJoin(code, joinId2, answer, now) {
     await this.ensureSchema();
     const claimed = await this.sql.query(
-      `UPDATE net_versus_rooms2 SET answer = $2, joiner_name = $3
-       WHERE code = $1 AND answer IS NULL AND created_at > $4
-       RETURNING code`,
-      [code, answer, joinerName, now - ROOM_TTL_MS]
+      `UPDATE net_versus_joins1 SET answer = $3
+       WHERE code = $1 AND join_id = $2 AND answer IS NULL AND created_at > $4
+       RETURNING join_id`,
+      [code, joinId2, answer, now - JOIN_TTL_MS]
     );
-    if (claimed.length > 0) return "ok";
-    return await this.get(code, now) ? "taken" : "not_found";
+    return claimed.length > 0;
+  }
+  async getJoin(code, joinId2, now) {
+    await this.ensureSchema();
+    const rows = await this.sql.query(
+      `SELECT * FROM net_versus_joins1 WHERE code = $1 AND join_id = $2 AND created_at > $3`,
+      [code, joinId2, now - JOIN_TTL_MS]
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      code: r.code,
+      joinId: r.join_id,
+      joinerName: r.joiner_name,
+      offer: r.offer,
+      answer: r.answer,
+      createdAt: Number(r.created_at)
+    };
   }
 };
 

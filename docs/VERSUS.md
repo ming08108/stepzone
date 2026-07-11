@@ -1,108 +1,113 @@
-# Live versus (P2P over WebRTC)
+# Multiplayer rooms (P2P over WebRTC)
 
-Status: implemented. Two players race the same chart live — synchronized
-start, streaming opponent bar, win/lose standings — with **no game server**:
-the match runs peer-to-peer on an RTCDataChannel, and the only server
-involvement is a tiny HTTP signaling exchange on the existing Vercel
-deployment.
+Status: implemented. A ROOM is a persistent party of up to 8 players that
+lasts across songs: friends join once and keep racing until they leave — with
+**no game server**. Every match runs peer-to-peer on RTCDataChannels in a STAR
+around the host, and the only server involvement is a tiny HTTP signaling
+exchange on the existing Vercel deployment.
 
 ## Architecture
 
 ```
-host                       /api/versus (HTTP)                    joiner
-────                       ──────────────────                    ──────
-create offer SDP  ──POST create──▶  room row (code, chart, offer)
+host                        /api/versus (HTTP)                     joiners (N)
+────                        ──────────────────                     ───────────
+create room  ──POST create──▶  room row (code, heartbeat)
 show arrow code                     │
-                                    ◀──GET ?code── fetch chart+offer
-                   ◀─poll answer──  ◀─POST answer─ send answer SDP
-        └──────────── RTCDataChannel (P2P, server out of the loop) ──────────┘
-   hello ⇄ ready ⇄ load ⇄ loaded ⇄ ping/pong ⇄ go ⇄ snaps ⇄ finish
+poll ?role=host ◀──────────────  join rows   ◀──POST join── joiner offer SDP
+POST answer     ──────────────▶  (offer/answer  ◀─poll answer── each joiner
+                                  per joiner)
+      └────────── RTCDataChannel per joiner (P2P star, host = hub) ──────────┘
+  hello ⇄ welcome/roster ⇄ song ⇄ ready ⇄ load/loaded ⇄ ping/pong ⇄ go ⇄
+  snaps/notes (relayed) ⇄ finish ⇄ roster(lobby) … next song, same room
 ```
 
-- **Signaling** (`src/net/signalApi.ts`, `api/versus.ts`): plain
-  request/response HTTP — works on serverless, no WebSocket, no Redis. Rooms
-  are ephemeral rows (10-minute TTL, one answer each) in Postgres in
-  production (`pgSignalStore.ts`) or memory in dev (Vite middleware). ICE is
-  non-trickle: each side waits for candidate gathering and ships ONE complete
-  SDP.
-- **Match flow** (`src/net/versusMatch.ts`): a pure, transport-agnostic state
-  machine, host-authoritative for coordination only. Judging never crosses
-  the wire — each side judges its own input on its own audio clock and
-  streams derived stats (percent/combo/life at ~5 Hz), the authoritative-local
-  model from docs/ONLINE-MULTIPLAYER.md.
-- **Synchronized start**: when both report loaded, the host probes RTT once
-  (ping/pong), then sends `go(delayMs)` and starts itself at
-  `delayMs + rtt/2` — both machines begin on the same wall instant. The e2e
-  measures the two song clocks within ~10 ms on localhost. The engine seam is
-  `GameSession.prepare()`/`begin()` (src/game/session.ts) — solo play's
-  `start()` is the two back to back.
-- **Room codes are 6 pad arrows** (`←↓↑→…`), so joining is fully pad-operable:
-  the joiner literally presses the code on the pad. Codes live in
-  `src/net/versus.ts`.
+- **Signaling** (`src/net/signalApi.ts`, `api/versus.js`): plain
+  request/response HTTP — works on serverless, no WebSocket. V2 is
+  *joiner-initiated*: the room row is just "this code has a live host"
+  (Postgres in prod via `pgSignalStore.ts`, memory in dev); each joiner posts
+  an offer row and the host, polling, answers it. The host's poll doubles as
+  a heartbeat — a room is joinable while its host keeps polling (parties can
+  last hours; abandoned rooms vanish in a minute). ICE is non-trickle: each
+  side ships ONE complete SDP.
+- **Room controllers** (`src/net/roomPeer.ts`): `RoomHost`/`RoomGuest`, pure
+  transport-agnostic state machines sharing one observable surface. The host
+  is authoritative for coordination only: roster, song, phase, start. Judging
+  never crosses the wire — each player judges their own input on their own
+  audio clock and streams derived stats (snap percent/combo/life at ~5 Hz)
+  plus judged-note display events; the host relays them hub-and-spoke
+  (`psnap`/`pnotes`/`pfinish` tagged with player ids).
+- **Synchronized start**: when every racer reports loaded, the host probes
+  each guest's RTT once (ping/pong) and issues per-guest `go(delayMs)` frames
+  compensated by half their RTT — every machine begins on one wall instant
+  (the e2e asserts the clocks within ~10 ms on localhost). The engine seam is
+  `GameSession.prepare()`/`begin()` (src/game/session.ts).
+- **Room codes are 6 pad arrows** (`←↓↑→…`), so joining is fully pad-operable.
+  A `?join=CODE` link auto-joins at load. Codes live in `src/net/versus.ts`.
 
 ## Player flow
 
-**Hosting** lives on PLAYER OPTIONS: pick a song, turn the LIVE VERSUS row ON
-— the lobby dock shows a 6-arrow room code and a COPY INVITE LINK button
-(?join=CODE auto-joins). **Joining** needs no song: SELECT on the pack grid
-(or the link) opens code entry; the room advertises every chart hash of the
-host's song and the joiner's copy is resolved by any-hash match (open the
-pack first — lazy catalog entries aren't scanned). **A joiner who lacks the
-song gets it from the host, peer to peer**: the original simfile text plus
-the audio bytes stream over the already-open data channel (fileReq/fileMeta
-JSON control + chunked binary with bufferedamountlow backpressure,
-net/versusTransfer.ts) and land in the joiner's library through the normal
-drop path — hash-identical to the host's copy, kept for the session, and no
-server ever touches the files. Either way the joiner lands on their own
-PLAYER OPTIONS.
+**The room is global state** (`src/ui/roomStore.ts`) — it survives every
+screen change. Host from the MULTIPLAYER panel on song select (SELECT on the
+pack grid) or the MULTIPLAYER row on PLAYER OPTIONS; join from the same panel
+by pressing the 6 arrows, or via the invite link. No song is needed to host
+or join.
 
-**Each player picks their own difficulty** (arcade style): the DIFFICULTY row
-relays live to the rival's lobby, and START pins the pick inside the ready
-frame (versusSession store + versusResolve helpers own the session/UI side).
-When both are ready the song starts on both machines together. Music rate is
-room-locked; practice is unavailable in versus; percent compares across
-difficulties (meters are labeled on the bar and standings). During play **the rival's
-playfield renders beside yours, arcade 2P style, in ONE render**: the
-session's GpuNoteField hosts a second field view on the same canvas/device
-(view-local layout placed by a batch originX — src/render/gpu), so the song
-background spans both fields uniformly. The rival view draws a mirror judge
-over THEIR chart (resolved locally by hash) on the local synced clock,
-painted from their judged-note stream (`notes` frames, a display feed —
-judging never crosses the wire), with combo/life riding the snap feed. When
-their exact chart revision isn't local the view is absent and the race falls
-back to the bar. The top-left bar shows the rival's live
-percent/combo and your lead/deficit;
-results show WIN/LOSE/DRAW once both finish. RETRY is hidden (a rematch is a
-fresh room). A mid-song disconnect marks the rival DISCONNECTED and the local
-game plays out normally. Versus plays still submit to the async leaderboard
-like any play.
+**The cycle**: the host browses and picks a song like any solo play; landing
+on PLAYER OPTIONS announces it to the room (title + every chart hash — songs
+are identified by chart CONTENT hash, never by name, so same-name charts
+can't collide). Guests auto-follow: their copy resolves by ANY hash match,
+and **a guest who lacks the song gets it from the host, peer to peer** — the
+original simfile text, the audio bytes, and the background art (when it fits
+the 32 MB cap) stream over the already-open channel (`fileMeta` + chunked
+binary with backpressure, `net/versusTransfer.ts`) and land in their library
+through the normal drop path. Everyone lands on their own PLAYER OPTIONS,
+**picks their own difficulty** (arcade style; picks relay live on the roster
+dock), and STARTs to ready up. When ALL present players are ready the song
+starts everywhere together. Music rate is room-locked per song (the host's
+rate at announce time). Practice is unavailable in a room.
+
+During play the rivals' live percent/combo bars stack top-left (ahead/behind
+colored); a 1v1 race also renders **the rival's playfield beside yours in the
+same GpuNoteField render** (mirror judge fed by their note stream, one canvas,
+one shared background — src/render/gpu). Results land in **ranked standings
+with a last-place-first reveal animation — any START press skips it**.
+Quitting mid-song is a DNF, not a room end. CONTINUE returns everyone to the
+same room: the host picks the next song, guests' docks read "THE HOST IS
+PICKING A SONG…". A guest leaving just shrinks the roster; **the host leaving
+closes the room** (star topology — there is nothing to relay through). Room
+plays still submit to the async leaderboard like any play.
 
 ## Limits & follow-ups
 
 - **NAT**: STUN only (Google's public server). Peers who are both behind
   symmetric NAT/CGNAT can't hole-punch and get "COULD NOT CONNECT" — a TURN
-  relay is the known fix if this bites real users. P2P also means the two
-  players' IPs are visible to each other.
-- **2 players.** More would mean a mesh or a relay; out of scope for now.
-- Different chart revisions of the same song: the rival's exact pick may not
-  exist locally (opponentChart is null) — labels/standings still work.
-- Song transfer caps: simfile ≤ 2 MB of text, audio ≤ 64 MB; hosts without
+  relay is the known fix if this bites real users. P2P also means players'
+  IPs are visible to each other.
+- **8 players max** (`MAX_PLAYERS`) — the host relays everything, so fan-out
+  is host upload bandwidth.
+- The host is the hub: no host migration. Host leaves → room over.
+- Different chart revisions of the same song: a rival's exact pick may not
+  exist locally (opponent chart is null) — bars/standings still work.
+- Song transfer caps: simfile ≤ 2 MB of text, audio ≤ 64 MB, background ≤
+  32 MB (oversized backgrounds are omitted, never fatal); hosts without
   original files (synth starter entries) reply CANNOT SHARE. Transferred
-  songs live for the session only (like drag-dropped packs). Sharing is
-  between the two players directly — the host should own what they share.
+  songs live for the session only. Sharing is between players directly — the
+  host should own what they share.
 - Signaling on prod requires `DATABASE_URL` (the same Neon database as the
-  leaderboards); without it /api/versus reports unavailable and the panel
-  says so.
-- Trust: friends racing friends. The finish results ride the channel
-  unverified (the leaderboard's server-side checks still apply to ranked
-  submissions).
+  leaderboards); without it /api/versus reports unavailable.
+- Trust: friends racing friends. Results ride the channel unverified (the
+  leaderboard's server-side checks still apply to ranked submissions).
 
 ## Tests
 
-- Unit: `tests/versusMatch.test.ts` (full choreography over fake channels,
-  half-RTT compensation, disconnects, hostile frames),
-  `tests/signalApi.test.ts` (rooms, one-answer rule, expiry).
-- E2E: `e2e/versus.e2e.mjs` — two real Chrome contexts host/join via the
-  arrow-code pad path, WebRTC through the dev middleware, synced start
-  (clock delta asserted < 350 ms, observed ~10 ms), live opponent bars both
-  ways, mid-song disconnect handling.
+- Unit: `tests/roomPeer.test.ts` (full N-player choreography over fake
+  channels: admission caps, protocol-version rejection, per-guest half-RTT
+  compensation, hub relays, stale-cycle guards, DNFs, lobby return),
+  `tests/signalApi.test.ts` (rooms, heartbeat liveness, join expiry,
+  double-answer), `tests/versusTransfer.test.ts` (multi-file sink).
+- E2E: `e2e/versus.e2e.mjs` — three real Chrome contexts: host + arrow-code
+  joiner + ?join= link joiner, WebRTC through the dev middleware, synced
+  start (clock delta asserted < 350 ms, observed ~10 ms), live rival bars
+  both ways, one-canvas dual field, mid-song quit-as-DNF with the room
+  surviving, a second song on the SAME room transferred P2P to two guests,
+  and the skippable standings reveal.

@@ -1,13 +1,13 @@
 /**
- * End-to-end leg for live P2P versus (docs/VERSUS.md), on the PLAYER OPTIONS
- * flow: the host picks a song and turns on LIVE VERSUS from the options rows;
- * the joiner starts at the PACK GRID (SELECT — no song needed, the room
- * defines it), enters the 6-arrow code BY PRESSING THE ARROWS, resolves the
- * song by hash, and lands on their own PLAYER OPTIONS with the lobby dock.
- * Each player keeps their own difficulty (the picks relay live), both ready
- * up, and gameplay starts on BOTH machines within a synced window. The
- * opponent bar streams live, and a mid-song disconnect shows on the rival's
- * screen.
+ * End-to-end leg for persistent multiplayer rooms (docs/VERSUS.md): the host
+ * opens a room from PLAYER OPTIONS (no rival yet — the song is announced to
+ * the room automatically), a guest joins from the PACK GRID by pressing the
+ * 6-arrow code, auto-follows the host's pick onto their own PLAYER OPTIONS,
+ * both ready up, and gameplay starts on both machines within a synced window.
+ * A mid-song quit is a DNF (the room survives); the SAME room then plays a
+ * SECOND song the guests don't have — the files travel P2P (simfile + audio),
+ * a third player joins mid-room via the ?join= link, and the three-way race
+ * ends on the animated standings, room still alive.
  *
  * Needs WebGPU for gameplay (skips those legs where absent, like the other
  * suites). Run with `node e2e/versus.e2e.mjs`.
@@ -26,9 +26,11 @@ const step = (name, ok, extra = '') => {
 const skip = (name, why) => console.log(`SKIP ${name} — ${why}`);
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
+const KEY = { '←': 'ArrowLeft', '↓': 'ArrowDown', '↑': 'ArrowUp', '→': 'ArrowRight' };
+const LDUR = { '←': 'L', '↓': 'D', '↑': 'U', '→': 'R' };
 
-/** A context with a fixed online identity; joiners stay on the pack grid. */
-async function playerPage(browser, base, name, { stayOnGrid = false } = {}) {
+/** A context with a fixed online identity; guests stay on the pack grid. */
+async function playerPage(browser, base, name, { stayOnGrid = false, query = '' } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((n) => {
     localStorage.setItem(
@@ -38,7 +40,7 @@ async function playerPage(browser, base, name, { stayOnGrid = false } = {}) {
   }, name);
   const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(`${name}: ${e.message}`));
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base + query, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 20_000,
   });
@@ -49,6 +51,13 @@ async function playerPage(browser, base, name, { stayOnGrid = false } = {}) {
     });
   }
   return page;
+}
+
+/** Hold-to-quit a live song (back held past the quit threshold). */
+async function quitSong(page) {
+  await page.keyboard.down('Escape');
+  await page.waitForTimeout(1_500);
+  await page.keyboard.up('Escape');
 }
 
 const pageErrors = [];
@@ -75,39 +84,51 @@ try {
       : false,
   );
   if (!hasGpu) {
-    skip('live versus flow', 'no WebGPU adapter in this environment');
+    skip('room multiplayer flow', 'no WebGPU adapter in this environment');
   } else {
     const bravo = await playerPage(browser, base, 'BRAVO', { stayOnGrid: true });
 
-    // 1. ALPHA: song -> PLAYER OPTIONS -> LIVE VERSUS row (4 below DIFFICULTY)
-    //    -> toggle ON -> the lobby dock shows the room code.
+    // 1. ALPHA: song -> PLAYER OPTIONS -> MULTIPLAYER row (4 below DIFFICULTY)
+    //    -> HOST A ROOM. The dock shows the arrow code, and the song is
+    //    announced to the room automatically.
     await alpha.keyboard.press('Enter');
     await alpha.waitForFunction(() => /PLAYER OPTIONS/i.test(document.body.innerText), null, {
       timeout: 10_000,
     });
     for (let i = 0; i < 4; i++) await alpha.keyboard.press('ArrowDown');
-    await alpha.keyboard.press('ArrowRight'); // LIVE VERSUS: OFF -> hosting
+    await alpha.keyboard.press('ArrowRight'); // MULTIPLAYER: HOST A ROOM
     await alpha.waitForFunction(
-      () => document.body.innerText.includes('WAITING FOR A RIVAL'),
+      () => document.body.innerText.includes('WAITING FOR PLAYERS'),
       null,
       { timeout: 15_000 },
     );
     const codeGlyphs = (await bodyText(alpha)).match(/([←↓↑→](?:\s[←↓↑→]){5})/)?.[1];
     step('host shows a 6-arrow room code on PLAYER OPTIONS', !!codeGlyphs, codeGlyphs ?? 'none');
+    const codeLdur = codeGlyphs
+      ? codeGlyphs
+          .split(' ')
+          .map((g) => LDUR[g])
+          .join('')
+      : '';
 
-    // 2. BRAVO joins from the PACK GRID — no song selection needed.
-    await bravo.keyboard.press('Escape'); // SELECT — JOIN VERSUS (root screen)
+    // 2. BRAVO joins from the PACK GRID: SELECT -> MULTIPLAYER panel ->
+    //    JOIN WITH CODE -> press the 6 arrows.
+    await bravo.keyboard.press('Escape');
+    await bravo.waitForFunction(() => document.body.innerText.includes('HOST A ROOM'), null, {
+      timeout: 10_000,
+    });
+    await bravo.keyboard.press('ArrowDown'); // JOIN WITH CODE
+    await bravo.keyboard.press('Enter');
     await bravo.waitForFunction(() => document.body.innerText.includes('ENTER ROOM CODE'), null, {
       timeout: 10_000,
     });
-    const KEY = { '←': 'ArrowLeft', '↓': 'ArrowDown', '↑': 'ArrowUp', '→': 'ArrowRight' };
     for (const glyph of codeGlyphs.split(' ')) {
       await bravo.keyboard.press(KEY[glyph]);
       await bravo.waitForTimeout(80);
     }
 
-    // 3. The joiner resolves the song by hash and lands on PLAYER OPTIONS;
-    //    both lobbies show both names.
+    // 3. The guest auto-follows the host's announced song (resolved by hash)
+    //    onto PLAYER OPTIONS; both docks show both names.
     await bravo.waitForFunction(
       () =>
         /PLAYER OPTIONS/i.test(document.body.innerText) &&
@@ -115,10 +136,10 @@ try {
       null,
       { timeout: 30_000 },
     );
-    step('joiner lands on PLAYER OPTIONS with the lobby', true);
+    step('guest auto-follows onto PLAYER OPTIONS with the room dock', true);
     for (const [page, who] of [
       [alpha, 'host'],
-      [bravo, 'joiner'],
+      [bravo, 'guest'],
     ]) {
       await page.waitForFunction(
         () =>
@@ -126,15 +147,15 @@ try {
         null,
         { timeout: 15_000 },
       );
-      step(`${who} lobby shows both players`, true);
+      step(`${who} dock shows both players`, true);
     }
 
     // 4. Per-player difficulty: the host is on the song-select default
-    //    (MEDIUM), the joiner defaults to the first hash match — the rival's
-    //    pick must show up in each lobby.
+    //    (MEDIUM), the guest defaults to the first hash match — each pick
+    //    must show on the OTHER machine's roster.
     const alphaLobby = await bodyText(alpha);
     step(
-      'per-player difficulty picks relay to the rival lobby',
+      'per-player difficulty picks relay to every roster',
       /BEGINNER|EASY/.test(alphaLobby) && (await bodyText(bravo)).includes('MEDIUM'),
     );
 
@@ -166,7 +187,7 @@ try {
     });
     step('gameplay clock advances', advanced);
 
-    // 7. The live opponent bar streams on both screens. Generous timeout —
+    // 7. The live rival bars stream on both screens. Generous timeout —
     // two headless WebGPU sessions can run single-digit FPS on CI-ish
     // machines; dump the visible text on failure so a miss is diagnosable.
     let barsOk = true;
@@ -188,7 +209,7 @@ try {
         barDump += ` | ${rival}'s screen: ${JSON.stringify((await bodyText(page)).slice(0, 200))}`;
       }
     }
-    step('opponent bars stream live on both machines', barsOk, barDump);
+    step('rival bars stream live on both machines', barsOk, barDump);
 
     // 7b. Arcade 2P: ONE canvas renders both players' fields (uniform shared
     // background); the session exposes the rival view for testing.
@@ -203,29 +224,39 @@ try {
     );
     step('one canvas renders both fields on both machines', dualA && dualB);
 
-    // 8. BRAVO quits mid-song; ALPHA sees the disconnect and keeps playing.
-    await bravo.keyboard.down('Escape');
-    await bravo.waitForTimeout(1_500);
-    await bravo.keyboard.up('Escape');
-    await alpha.waitForFunction(() => document.body.innerText.includes('DISCONNECTED'), null, {
+    // 8. BRAVO quits mid-song — that's a DNF, not a room end: ALPHA sees the
+    // finish on the bar and keeps playing; BRAVO lands back on song select
+    // with the room dock still up.
+    await quitSong(bravo);
+    await alpha.waitForFunction(() => /BRAVO .*(DONE|FAIL)/.test(document.body.innerText), null, {
       timeout: 15_000,
     });
     const stillPlaying = await alpha.evaluate(() => window.__nfSession.songNow > 0);
-    step('rival disconnect shows while the local game keeps running', stillPlaying);
+    step('a quit shows as a DNF while the local game keeps running', stillPlaying);
+    await bravo.waitForFunction(
+      () =>
+        document.body.innerText.includes('ALL SONGS') &&
+        document.body.innerText.includes('MULTIPLAYER'),
+      null,
+      { timeout: 15_000 },
+    );
+    step('the quitter is back on song select with the room dock alive', true);
 
-    // 9. ALPHA leaves too; back on song select.
-    await alpha.keyboard.down('Escape');
-    await alpha.waitForTimeout(1_500);
-    await alpha.keyboard.up('Escape');
-    await alpha.waitForFunction(() => /▲▼ SONG|ALL SONGS/.test(document.body.innerText), null, {
-      timeout: 15_000,
-    });
-    step('host exits cleanly to song select', true);
+    // 9. ALPHA quits too; the cycle ends and BOTH stay in the same room.
+    await quitSong(alpha);
+    await alpha.waitForFunction(
+      () =>
+        /▲▼ SONG|ALL SONGS/.test(document.body.innerText) &&
+        document.body.innerText.includes('PICK A SONG FOR THE ROOM'),
+      null,
+      { timeout: 15_000 },
+    );
+    step('host exits to song select, room intact and asking for the next song', true);
 
-    // ---- Scenario 2: the joiner doesn't have the song — P2P transfer. ----
-    // ALPHA drops a pack BRAVO lacks and hosts it; the original simfile +
-    // audio travel over the data channel, land in BRAVO's library by the
-    // normal drop path, and the (short) match plays out to the standings.
+    // ---- Scenario 2: the SAME room, next song — one the guests lack. ----
+    // ALPHA drops a pack only it has and picks it; the announcement pulls the
+    // files P2P to every guest. CHARLIE also joins mid-room via the invite
+    // link, making it a 3-player race that ends on the standings.
     await alpha.evaluate(() => {
       const ssc = [
         '#TITLE:Transfer Test;',
@@ -288,53 +319,97 @@ try {
       'host highlights the dropped song',
       await alpha.evaluate(() => document.body.innerText.includes('BPM 120')),
     );
+
+    // CHARLIE joins the live room via the invite link (no song, no panel).
+    const charlie = await playerPage(browser, base, 'CHARLIE', {
+      stayOnGrid: true,
+      query: `?join=${codeLdur}`,
+    });
+    await charlie.waitForFunction(() => document.body.innerText.includes('ALPHA'), null, {
+      timeout: 30_000,
+    });
+    step('a third player joins the live room via the ?join= link', true);
+
+    // ALPHA picks the new song — announced to the room; the guests pull the
+    // files over the data channels and land on PLAYER OPTIONS.
     await alpha.keyboard.press('ArrowRight'); // the chart is HARD-only; move the diff cursor
     await alpha.waitForTimeout(200);
     await alpha.keyboard.press('Enter');
     await alpha.waitForFunction(() => /PLAYER OPTIONS/i.test(document.body.innerText), null, {
       timeout: 10_000,
     });
-    for (let i = 0; i < 4; i++) await alpha.keyboard.press('ArrowDown');
-    await alpha.keyboard.press('ArrowRight');
-    await alpha.waitForFunction(
-      () => document.body.innerText.includes('WAITING FOR A RIVAL'),
-      null,
-      { timeout: 15_000 },
-    );
-    const code2 = (await bodyText(alpha)).match(/([←↓↑→](?:\s[←↓↑→]){5})/)?.[1];
-    step('host reopens a room on the un-shared song', !!code2, code2 ?? 'none');
-
-    await bravo.keyboard.press('Escape'); // pack grid -> JOIN VERSUS
-    await bravo.waitForFunction(() => document.body.innerText.includes('ENTER ROOM CODE'), null, {
-      timeout: 10_000,
-    });
-    for (const glyph of code2.split(' ')) {
-      await bravo.keyboard.press(KEY[glyph]);
-      await bravo.waitForTimeout(80);
+    for (const [page, who] of [
+      [bravo, 'guest'],
+      [charlie, 'third player'],
+    ]) {
+      await page.waitForFunction(
+        () =>
+          /PLAYER OPTIONS/i.test(document.body.innerText) &&
+          document.body.innerText.includes('Transfer Test'),
+        null,
+        { timeout: 45_000 },
+      );
+      step(`${who} receives the song over P2P and reaches the room options`, true);
     }
-    // The join detects the missing song, pulls it from the host over the
-    // channel, adds it to the library, and lands on PLAYER OPTIONS.
-    await bravo.waitForFunction(
-      () =>
-        /PLAYER OPTIONS/i.test(document.body.innerText) &&
-        document.body.innerText.includes('Transfer Test'),
-      null,
-      { timeout: 45_000 },
-    );
-    step('joiner receives the song over P2P and reaches the lobby', true);
 
-    // Both ready; the 2 s song plays out to results with standings.
+    // Everyone readies; the 2 s song plays out to the standings reveal.
     await alpha.keyboard.press('Enter');
     await bravo.keyboard.press('Enter');
+    await charlie.keyboard.press('Enter');
     for (const [page, who] of [
       [alpha, 'host'],
-      [bravo, 'joiner'],
+      [bravo, 'guest'],
+      [charlie, 'third player'],
     ]) {
-      await page.waitForFunction(() => /YOU WIN|WINS|DRAW/.test(document.body.innerText), null, {
-        timeout: 60_000,
+      await page.waitForFunction(() => /STANDINGS/.test(document.body.innerText), null, {
+        timeout: 90_000,
       });
-      step(`${who} reaches the standings on the transferred song`, true);
+      step(`${who} reaches the standings`, true);
     }
+    // The reveal is skippable: one confirm jumps to the final table (the
+    // START — SKIP hint disappears once the show is over).
+    await alpha.keyboard.press('Enter');
+    await alpha.waitForFunction(
+      () =>
+        !document.body.innerText.includes('START — SKIP') && /WINNER/.test(document.body.innerText),
+      null,
+      { timeout: 10_000 },
+    );
+    step('standings reveal skips to the final table on confirm', true);
+    // All three players are on everyone's standings.
+    const standings = await bodyText(alpha);
+    step(
+      'standings list the whole room',
+      ['ALPHA', 'BRAVO', 'CHARLIE'].every((n) => standings.includes(n)),
+    );
+
+    // CONTINUE returns to song select with the room STILL alive.
+    await alpha.keyboard.press('Enter');
+    const survived = await alpha
+      .waitForFunction(
+        () =>
+          /▲▼ SONG|ALL SONGS/.test(document.body.innerText) &&
+          document.body.innerText.includes('PICK A SONG FOR THE ROOM'),
+        null,
+        { timeout: 15_000 },
+      )
+      .then(
+        () => true,
+        () => false,
+      );
+    let debugExtra = '';
+    if (!survived) {
+      debugExtra = await alpha.evaluate(() => {
+        const a = document.activeElement;
+        const dbg = window.__playDebug ? JSON.stringify(window.__playDebug()) : 'n/a';
+        return `active=${a?.tagName} "${(a?.textContent ?? '').slice(0, 24)}" playDebug=${dbg}`;
+      });
+    }
+    step(
+      'the room survives a full race, ready for the next song',
+      survived,
+      survived ? '' : `${debugExtra} | ${JSON.stringify((await bodyText(alpha)).slice(0, 200))}`,
+    );
   }
 
   step('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
