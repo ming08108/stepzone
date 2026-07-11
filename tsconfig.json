@@ -23,5 +23,5 @@
     "noEmit": true,
     "types": ["node", "vite/client", "@webgpu/types"]
   },
-  "include": ["src", "tests", "scripts", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "scripts", "api", "vite.config.ts", "vitest.config.ts"]
 }

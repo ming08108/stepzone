@@ -1,11 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { scoresDevApi } from './src/net/devApiPlugin';
 
 // App build/dev server. The engine's unit tests live in vitest.config.ts and do
 // not use these plugins (the engine imports no React/DOM/CSS).
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // scoresDevApi serves /api/scores in dev (in-memory) the way the Vercel
+  // Function does in production — same handlers, docs/LEADERBOARDS.md.
+  plugins: [react(), tailwindcss(), scoresDevApi()],
   optimizeDeps: {
     // ffmpeg.wasm spawns its worker via `new Worker(new URL(...))` relative to
     // its own module URL — esbuild pre-bundling breaks that in dev.

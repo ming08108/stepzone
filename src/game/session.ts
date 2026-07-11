@@ -10,6 +10,7 @@
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
+import { MAX_GHOST_FRAMES, type GhostFrame } from '../net/protocol';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation } from '../notes/transforms';
@@ -68,6 +69,10 @@ export class GameSession {
    *  judge's counts it survives practice-loop resets, so the global lifetime
    *  step counter (app/stats.ts) can bank it once when the session ends. */
   stepsTaken = 0;
+  /** Scoreboard timeline of this play (2 Hz), for the online ghost. Not
+   *  recorded in practice mode (looping timelines are meaningless). */
+  readonly ghostFrames: GhostFrame[] = [];
+  private lastGhostAt = Number.NEGATIVE_INFINITY;
 
   private dpr = 1;
   private raf = 0;
@@ -200,6 +205,20 @@ export class GameSession {
    * omit it (or pass null) to play a synthesized metronome instead.
    */
   async start(encodedAudio: ArrayBuffer | null = null): Promise<void> {
+    if (await this.prepare(encodedAudio)) this.begin();
+  }
+
+  /** Set by prepare(): a fresh GPU field still needs its warm-up frames. */
+  private pendingPrewarm = false;
+
+  /**
+   * Everything slow and asynchronous before a session can begin: GPU field
+   * init, audio decode, AudioContext resume. Separated from begin() so netplay
+   * can prepare, report "loaded", and hold until the server says go — solo
+   * play calls start(), which is prepare()+begin() back to back.
+   * Returns false when the session was stopped mid-prepare or GPU init failed.
+   */
+  async prepare(encodedAudio: ArrayBuffer | null = null): Promise<boolean> {
     let freshField = false;
     // Create the WebGPU field once per session (both skins render on it). If
     // the device is unavailable there is no canvas fallback — surface an error.
@@ -210,11 +229,11 @@ export class GameSession {
       // disposed clock, and don't leak the fresh device.
       if (this.stopped) {
         gpu?.destroy();
-        return;
+        return false;
       }
       if (!gpu) {
         this.onError?.();
-        return;
+        return false;
       }
       this.gpuField = gpu;
       gpu.onLost = () => {
@@ -226,7 +245,7 @@ export class GameSession {
       if (this.bgMedia) gpu.setBackground(this.bgMedia);
       freshField = true;
     }
-    if (this.stopped) return;
+    if (this.stopped) return false;
     await this.clock.resume();
     let usedAudio = false;
     if (encodedAudio) {
@@ -245,18 +264,27 @@ export class GameSession {
       const buffer = makeClickTrack(this.clock.ctx, this.clicks, this.endSeconds + 0.5);
       this.clock.setBuffer(buffer);
     }
+    this.pendingPrewarm = freshField;
+    return !this.stopped;
+  }
+
+  /** Schedule playback and run the frame loop; call only after prepare(). */
+  begin(): void {
+    if (this.stopped || this.running) return;
     // Practice starts just before the section; song time < the section start
     // during the pre-roll (like the negative time of a normal lead-in).
     this.clock.start(this.startOffsetSeconds(), LEAD_IN_SECONDS);
     this.running = true;
     // Bake the atlas + compile pipelines now — AFTER the audio-decode await
-    // above, not before it. prewarm() paints two synthetic warm-up frames; when
-    // it ran ahead of the (multi-second) decode those phantom arrows sat on the
-    // swapchain the whole time. Running it here and immediately painting the
-    // real starting field in the SAME task overwrites the warm-up frames in the
-    // current swapchain texture before it is ever presented — no phantom flash.
+    // in prepare(), not before it. prewarm() paints two synthetic warm-up
+    // frames; when it ran ahead of the (multi-second) decode those phantom
+    // arrows sat on the swapchain the whole time. Running it here and
+    // immediately painting the real starting field in the SAME task overwrites
+    // the warm-up frames in the current swapchain texture before it is ever
+    // presented — no phantom flash.
     const gpu = this.gpuField;
-    if (freshField && gpu) {
+    if (this.pendingPrewarm && gpu) {
+      this.pendingPrewarm = false;
       gpu.prewarm();
       const visualNow = this.clock.songSecondsNow() - this.visualOffsetSeconds;
       const beat = this.timing.getBeatFromElapsedTime(visualNow);
@@ -321,6 +349,22 @@ export class GameSession {
     }
 
     this.judge.update(now, this.held);
+
+    // Ghost sample (after judging, so the frame reflects everything at `now`).
+    if (
+      !this.practice &&
+      now >= 0 &&
+      now >= this.lastGhostAt + 0.5 &&
+      this.ghostFrames.length < MAX_GHOST_FRAMES
+    ) {
+      this.lastGhostAt = now;
+      this.ghostFrames.push({
+        atSong: Math.round(now * 100) / 100,
+        percent: Math.max(0, Math.min(1, Math.round(this.judge.percentDancePoints * 1e4) / 1e4)),
+        combo: this.judge.combo,
+        life: Math.max(0, Math.min(1, Math.round(this.judge.life * 1e3) / 1e3)),
+      });
+    }
 
     if (this.judge.judgmentSeq !== this.lastSeq) {
       this.lastSeq = this.judge.judgmentSeq;

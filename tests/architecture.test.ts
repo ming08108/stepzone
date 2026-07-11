@@ -13,7 +13,17 @@ import { describe, expect, it } from 'vitest';
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
 
 /** Engine layers that must stay free of React / UI dependencies. */
-const ENGINE_DIRS = ['notes', 'timing', 'parse', 'song', 'gameplay', 'audio', 'input', 'game'];
+const ENGINE_DIRS = [
+  'notes',
+  'timing',
+  'parse',
+  'song',
+  'gameplay',
+  'audio',
+  'input',
+  'game',
+  'net',
+];
 
 function tsFiles(dir: string): string[] {
   const out: string[] = [];

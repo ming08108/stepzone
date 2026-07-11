@@ -6,7 +6,12 @@ import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
-import { recordPlay, type ChartScore } from '../app/scores';
+import { chartKey, recordPlay, type ChartScore } from '../app/scores';
+import { getIdentity } from '../net/identity';
+import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
+import type { VersusMatch } from '../net/versusMatch';
+import { GhostRace, type GhostInfo } from './GhostRace';
+import { VersusBar } from './VersusBar';
 import { addSongPlay, addSteps } from '../app/stats';
 import type { PlayRequest } from './playRequest';
 import { useControls } from './useControls';
@@ -160,8 +165,43 @@ function FpsMeter() {
   );
 }
 
+/** Versus standings on the results screen — WIN/LOSE once the rival's result
+ *  arrives (the parent re-renders on match updates), waiting/DNF before. */
+function VersusOutcome({
+  match,
+  name,
+  yourPercent,
+}: {
+  match: VersusMatch;
+  name: string;
+  yourPercent: number;
+}) {
+  const o = match.opponent;
+  if (o.result) {
+    const win = yourPercent > o.result.percent;
+    const tie = yourPercent === o.result.percent;
+    return (
+      <div
+        className="text-[16px] font-bold tracking-[0.18em]"
+        style={{ color: tie ? '#ffd94b' : win ? '#59f07f' : '#ff5d47' }}
+      >
+        {tie ? 'DRAW' : win ? 'YOU WIN' : `${name} WINS`} · YOU {(yourPercent * 100).toFixed(2)}% —{' '}
+        {name} {(o.result.percent * 100).toFixed(2)}%
+      </div>
+    );
+  }
+  return (
+    <div className="text-[13px] tracking-[0.16em] text-[#ececec]/50">
+      {o.left ? `${name} DISCONNECTED` : `WAITING FOR ${name} TO FINISH…`}
+    </div>
+  );
+}
+
 export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
   const { settings } = useSettings();
+  // Versus locks the room's music rate; everything (session, ranking, the
+  // results rate note) follows the rate the play actually ran at.
+  const effRate = req.versus?.musicRate ?? settings.musicRate;
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<GameSession | null>(null);
@@ -191,6 +231,66 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   // (which calls start() twice in dev) can't double-count; re-armed on the
   // results screen so RETRY counts as a fresh play.
   const playCountedRef = useRef(false);
+
+  // Versus: re-render on match updates (opponent ready/snaps/finish), and take
+  // over the update hook from the versus panel (which has unmounted by now).
+  const [, setVsTick] = useState(0);
+  const [vsWaiting, setVsWaiting] = useState(false);
+  const versusRef = useRef(req.versus);
+  versusRef.current = req.versus;
+  useEffect(() => {
+    const m = req.versus?.match;
+    if (!m) return;
+    m.onLoadRequested = undefined; // the panel's handoff already ran
+    m.onUpdate = () => setVsTick((t) => t + 1);
+    return () => {
+      m.onUpdate = undefined;
+    };
+  }, [req.versus]);
+
+  // Stream the live scoreboard to the rival while playing (a few Hz; the
+  // payload is derived stats only — judging never crosses the wire).
+  useEffect(() => {
+    const m = req.versus?.match;
+    if (!m || phase !== 'playing') return;
+    const timer = window.setInterval(() => {
+      const s = sessionRef.current;
+      if (!s) return;
+      m.sendSnap({
+        atSong: s.songNow,
+        percent: Math.max(0, Math.min(1, s.judge.percentDancePoints)),
+        combo: s.judge.combo,
+        life: s.judge.life,
+        failed: s.judge.failed,
+      });
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [phase, req.versus]);
+
+  // Race-the-ghost: the best stored timeline on this board (world best with a
+  // ghost, which may be your own PB). Fetched once per song; absent offline.
+  // Versus plays race the live rival instead.
+  const [ghost, setGhost] = useState<GhostInfo | null>(null);
+  useEffect(() => {
+    setGhost(null);
+    if (req.practice != null || req.versus) return;
+    let alive = true;
+    const hash = chartKey(req.song, req.chart);
+    void (async () => {
+      const board = await fetchLeaderboard(hash, settings.musicRate, 10);
+      const row = board?.rows.find((r) => r.hasGhost);
+      if (!row || !alive) return;
+      const frames = await fetchGhost(hash, settings.musicRate, row.playerId);
+      if (!frames || frames.length === 0 || !alive) return;
+      const mine = row.playerId === getIdentity().playerId;
+      setGhost({ frames, name: mine ? 'YOUR BEST' : row.playerName });
+    })();
+    return () => {
+      alive = false;
+    };
+    // musicRate is fixed for the lifetime of this screen (set on PLAYER
+    // OPTIONS beforehand), so req is the only real dependency.
+  }, [req, settings.musicRate]);
 
   const cleanupBg = () => {
     const m = bgMediaRef.current;
@@ -260,10 +360,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       return;
     }
     if (!e.pressed || e.repeat) return;
-    // Results screen: ▲▼ chooses CONTINUE vs RETRY.
+    // Results screen: ▲▼ chooses CONTINUE vs RETRY (versus has no RETRY).
     if (phaseRef.current === 'done' && (e.role === 'up' || e.role === 'down')) {
       e.nativeEvent?.preventDefault();
-      setDoneSel(e.role === 'up' ? 0 : 1);
+      setDoneSel(versusRef.current ? 0 : e.role === 'up' ? 0 : 1);
       return;
     }
     if (e.role === 'confirm') {
@@ -324,7 +424,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     const session = new GameSession(req.song, req.chart, canvas, {
       scrollMode: settings.scrollMode,
       scrollValue: settings.scrollValue,
-      musicRate: settings.musicRate,
+      musicRate: effRate,
       audioOffsetMs: settings.audioOffsetMs,
       visualOffsetMs: settings.visualOffsetMs,
       turn: settings.turn,
@@ -346,7 +446,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // Practice runs never reach here (they loop until exit), but make sure a
       // section-only score can never land in the real records. Rate-modded
       // plays aren't comparable to full-speed ones, so they don't count either.
-      const unranked = req.practice != null || settings.musicRate !== 1;
+      const unranked = req.practice != null || effRate !== 1;
       const { best, isNewRecord } = unranked
         ? { best: null, isNewRecord: false }
         : recordPlay(req.song, req.chart, {
@@ -355,6 +455,40 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             maxCombo: judge.maxCombo,
             counts,
           });
+      // Online leaderboard (fire-and-forget; queued offline). Practice
+      // sections never submit; rate-modded plays do — the server partitions
+      // boards by rate, so they land on their own board (never the 1.0x one).
+      if (req.practice == null) {
+        void submitScore({
+          chart: {
+            chartHash: chartKey(req.song, req.chart),
+            title: req.song.displayFullTitle || 'Untitled',
+            artist: req.song.artist,
+            stepsType: req.chart.stepsType,
+            difficulty: req.chart.difficulty,
+            meter: req.chart.meter,
+          },
+          musicRate: effRate,
+          result: {
+            percent: judge.percentDancePoints,
+            grade: judge.grade,
+            maxCombo: judge.maxCombo,
+            failed: judge.failed,
+            counts,
+            holdCounts: { ...judge.holdCounts },
+          },
+          ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
+        });
+      }
+      // Tell the rival how it went; standings render once both results exist.
+      req.versus?.match.finish({
+        percent: Math.max(0, Math.min(1, judge.percentDancePoints)),
+        grade: judge.grade,
+        maxCombo: judge.maxCombo,
+        failed: judge.failed,
+        counts,
+        holdCounts: { ...judge.holdCounts },
+      });
       setResult({
         percent: judge.percentDancePoints,
         grade: judge.grade,
@@ -411,6 +545,26 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     // the field was still blank / mid-prewarm.) The no-WebGPU and device-lost
     // paths flip us to 'error' via onError — don't stomp that.
     setPhase('ready');
+    if (req.versus) {
+      // Versus: prepare (GPU + decode), report loaded, and hold until the
+      // host's latency-compensated 'go' — both machines begin on one instant.
+      const m = req.versus.match;
+      m.onGo = (delayMs) => {
+        window.setTimeout(() => {
+          if (sessionRef.current === session && session.usingGpuRenderer) {
+            setVsWaiting(false);
+            session.begin();
+            setPhase('playing');
+          }
+        }, delayMs);
+      };
+      const ok = await session.prepare(req.encodedAudio);
+      if (ok && sessionRef.current === session && session.usingGpuRenderer) {
+        setVsWaiting(true);
+        m.loaded();
+      }
+      return;
+    }
     await session.start(req.encodedAudio);
     if (sessionRef.current === session && session.usingGpuRenderer) {
       setPhase('playing');
@@ -484,6 +638,18 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         </div>
       )}
 
+      {phase === 'playing' && ghost && sessionRef.current && (
+        <GhostRace session={sessionRef.current} ghost={ghost} />
+      )}
+
+      {phase === 'playing' && req.versus && sessionRef.current && (
+        <VersusBar
+          session={sessionRef.current}
+          match={req.versus.match}
+          name={req.versus.opponentName}
+        />
+      )}
+
       {phase === 'playing' && req.practice && (
         <div
           className="absolute right-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.18em] text-[#ececec]/85"
@@ -517,7 +683,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                 className="mt-4 text-[14px] tracking-[0.22em] text-[#ececec]/60"
                 style={{ animation: 'blinkStart 1.4s infinite' }}
               >
-                LOADING…
+                {req.versus && vsWaiting ? `SYNCING WITH ${req.versus.opponentName}…` : 'LOADING…'}
               </div>
             </>
           )}
@@ -540,14 +706,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           {phase === 'done' && result && (
             <>
               <ResultHeader result={result} />
+              {req.versus && (
+                <VersusOutcome
+                  match={req.versus.match}
+                  name={req.versus.opponentName}
+                  yourPercent={result.percent}
+                />
+              )}
               {result.isNewRecord && (
                 <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
                   ★ NEW RECORD
                 </div>
               )}
-              {settings.musicRate !== 1 && (
+              {effRate !== 1 && (
                 <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
-                  RATE ×{settings.musicRate.toFixed(2)} — SCORE NOT SAVED
+                  RATE ×{effRate.toFixed(2)} — SCORE NOT SAVED
                 </div>
               )}
               <div className="mt-3 w-[400px] max-w-full">
@@ -583,19 +756,22 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                 >
                   CONTINUE
                 </button>
-                <button
-                  ref={retryRef}
-                  onClick={start}
-                  className="text-[16px] tracking-[0.18em] outline-none"
-                  style={{
-                    color: doneSel === 1 ? AC : 'rgba(236,236,236,.45)',
-                    animation: doneSel === 1 ? 'blinkStart 1.4s infinite' : undefined,
-                  }}
-                >
-                  RETRY
-                </button>
+                {/* RETRY would need a fresh room handshake in versus — omit it. */}
+                {!req.versus && (
+                  <button
+                    ref={retryRef}
+                    onClick={start}
+                    className="text-[16px] tracking-[0.18em] outline-none"
+                    style={{
+                      color: doneSel === 1 ? AC : 'rgba(236,236,236,.45)',
+                      animation: doneSel === 1 ? 'blinkStart 1.4s infinite' : undefined,
+                    }}
+                  >
+                    RETRY
+                  </button>
+                )}
                 <div className="mt-1 text-[11px] tracking-[0.16em] text-[#ececec]/35">
-                  ▲▼ SELECT · START — CONFIRM · SELECT — QUIT
+                  {req.versus ? 'START — CONTINUE' : '▲▼ SELECT · START — CONFIRM · SELECT — QUIT'}
                 </div>
               </div>
             </>

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Play } from './Play';
 import { PlayerOptions } from './PlayerOptions';
 import { Inspector } from './Inspector';
@@ -10,6 +10,7 @@ import { InputTest } from './InputTest';
 import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
+import { flushQueue } from '../net/leaderboard';
 import { useMenuNav } from './useMenuNav';
 
 type View =
@@ -51,6 +52,11 @@ export function App() {
   );
   const [req, setReq] = useState<PlayRequest | null>(null);
 
+  // Retry leaderboard submissions parked while offline (net/leaderboard).
+  useEffect(() => {
+    void flushQueue();
+  }, []);
+
   let body: ReactNode;
   if (view === 'playoptions' && req) {
     body = (
@@ -64,7 +70,22 @@ export function App() {
       />
     );
   } else if (view === 'play' && req) {
-    body = <Play req={req} onExit={() => setView('menu')} />;
+    body = (
+      <Play
+        req={req}
+        onExit={() => {
+          // A live versus match ends when the play view goes away — tell the
+          // peer and release the RTCPeerConnection here (not in Play's own
+          // unmount, which StrictMode double-fires in dev).
+          if (req.versus) {
+            req.versus.match.leave();
+            req.versus.connection.close();
+            setReq((r) => (r ? { ...r, versus: undefined } : r));
+          }
+          setView('menu');
+        }}
+      />
+    );
   } else if (view === 'options') {
     body = (
       <Options
@@ -92,7 +113,9 @@ export function App() {
       <SongSelect
         onPlay={(r) => {
           setReq(r);
-          setView('playoptions');
+          // Versus was configured on the versus panel (chart + rate locked by
+          // the room) — go straight to gameplay, no Player Options stop.
+          setView(r.versus ? 'play' : 'playoptions');
         }}
         onOptions={() => setView('options')}
       />

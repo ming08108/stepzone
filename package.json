@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "e2e": "node e2e/songselect.e2e.mjs",
+    "e2e": "node e2e/songselect.e2e.mjs && node e2e/leaderboard.e2e.mjs && node e2e/versus.e2e.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -23,6 +23,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@fontsource/chakra-petch": "^5.2.7",
     "@fontsource/space-grotesk": "^5.2.10",
+    "@neondatabase/serverless": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

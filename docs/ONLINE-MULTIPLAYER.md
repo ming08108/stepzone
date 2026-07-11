@@ -1,6 +1,8 @@
 # Online Multiplayer — design & investigation
 
-Status: investigation / design. No code yet. This document proposes how to add
+Status: M1 (async leaderboards) is implemented — see docs/LEADERBOARDS.md.
+Live synchronized versus is implemented too, as P2P WebRTC rather than the
+WS-relay design below — see docs/VERSUS.md. This document proposes how to add
 online multiplayer to Stepzone, informed by how StepMania/ITGmania did (and now
 does) it, and by Stepzone's own clock/judgment architecture.
 

@@ -10,6 +10,7 @@ import type { Settings } from '../app/settings';
 import { defaultBindings, type Bindings, type ControlRole } from '../input/controls';
 import { connectedPadInfo, pressedGamepadButtons, type PadInfo } from '../input/gamepad';
 import { setBindCaptureActive } from '../input/inputBus';
+import { getIdentity, setPlayerName } from '../net/identity';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useSettings } from './SettingsContext';
 import { useMenuNav } from './useMenuNav';
@@ -88,6 +89,9 @@ export function Options({
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
   const [pads, setPads] = useState<PadInfo[]>([]);
+  // Online display name (net/identity): saved on every keystroke; blur snaps
+  // the field back to the normalized (trimmed, defaulted) stored value.
+  const [playerName, setPlayerNameState] = useState(() => getIdentity().name);
   useMenuNav(onBack);
 
   const bindings = settings.bindings;
@@ -200,6 +204,25 @@ export function Options({
             These settings are system-wide. Play mods — speed, turn, scroll direction, note skin,
             music rate, background — are set per song on the PLAYER OPTIONS screen.
           </div>
+
+          <Section title="ONLINE">
+            <Row label="PLAYER NAME">
+              <input
+                type="text"
+                maxLength={24}
+                value={playerName}
+                onChange={(e) => {
+                  setPlayerNameState(e.target.value);
+                  setPlayerName(e.target.value);
+                }}
+                onBlur={() => setPlayerNameState(getIdentity().name)}
+                className="w-[220px] border border-white/[0.14] bg-transparent px-[10px] py-[6px] text-[14px] tracking-[0.04em] text-[#ececec] outline-none focus:border-[#ff5d47]"
+              />
+              <span className="text-[12px] text-[#ececec]/40">
+                shown on online leaderboards; renames apply from your next play
+              </span>
+            </Row>
+          </Section>
 
           <Section title="SYNC / OFFSET">
             {(

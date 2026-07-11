@@ -25,6 +25,9 @@ import { keyboardRole } from '../input/inputBus';
 import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
+import { GlobalBest } from './GlobalBest';
+import { LeaderboardPanel } from './LeaderboardPanel';
+import { VersusPanel } from './VersusPanel';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 import {
@@ -65,7 +68,7 @@ const ALL_PACK = '__ALL_SONGS__';
 const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
 
 /** A row in the SELECT menu overlay (sort/filter, plus BACK inside a pack). */
-type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset';
+type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset' | 'ranks' | 'versus';
 
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
@@ -135,6 +138,9 @@ export function SongSelect({
   const [packSel, setPackSel] = useState(0);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
+  // RANKS / VERSUS overlays — each owns the keys while open.
+  const [ranksOpen, setRanksOpen] = useState(false);
+  const [versusOpen, setVersusOpen] = useState(false);
   const [osel, setOsel] = useState(0);
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
@@ -443,7 +449,13 @@ export function SongSelect({
       closePack();
       setOverlay(false);
     } else if (kind === 'reset') reset();
-    else setOverlay(false);
+    else if (kind === 'ranks') {
+      setOverlay(false);
+      if (song) setRanksOpen(true);
+    } else if (kind === 'versus') {
+      setOverlay(false);
+      if (song) setVersusOpen(true);
+    } else setOverlay(false);
   };
 
   // Keyboard navigation (arcade model).
@@ -468,6 +480,8 @@ export function SongSelect({
       const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
       if (!keys.includes(e.key) && !isConfirm && !isBack) return;
       const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
+      // The RANKS/VERSUS panels own all keys while open (their own listeners).
+      if (ranksOpen || versusOpen) return;
       if (overlay) {
         if (isBack) {
           e.preventDefault();
@@ -524,6 +538,8 @@ export function SongSelect({
     return () => window.removeEventListener('keydown', onKey);
   }, [
     overlay,
+    ranksOpen,
+    versusOpen,
     osel,
     filtered,
     selClamped,
@@ -567,6 +583,8 @@ export function SongSelect({
   // single "menu" button (options + up-a-level) the whole pad flow needs.
   const overlayRows: { label: string; value: string; kind: OverlayKind }[] = [
     ...(inPack ? [{ label: 'BACK', value: '‹ PACKS', kind: 'back' as OverlayKind }] : []),
+    { label: 'RANKS', value: '▸', kind: 'ranks' },
+    { label: 'VERSUS', value: '▸', kind: 'versus' },
     { label: 'SORT', value: sort.toUpperCase(), kind: 'sort' },
     { label: 'MIN LV', value: String(minLv), kind: 'min' },
     { label: 'MAX LV', value: String(effMaxLv), kind: 'max' },
@@ -833,6 +851,7 @@ export function SongSelect({
                     BEST {(songBest.percent * 100).toFixed(2)}% · {songBest.grade}
                   </span>
                 )}
+                <GlobalBest entry={song?.entry ?? null} diff={diff} />
                 {song != null && song.plays > 0 && <span>{song.plays} PLAYS</span>}
               </div>
             </>
@@ -923,7 +942,12 @@ export function SongSelect({
                 key={o.label}
                 onClick={() => {
                   setOsel(i);
-                  if (o.kind === 'back' || o.kind === 'reset') activateRow(i);
+                  const activates =
+                    o.kind === 'back' ||
+                    o.kind === 'reset' ||
+                    o.kind === 'ranks' ||
+                    o.kind === 'versus';
+                  if (activates) activateRow(i);
                   else adjust(i, 1);
                 }}
                 className={cls}
@@ -1175,6 +1199,19 @@ export function SongSelect({
           </div>
         )}
       </div>
+
+      {ranksOpen && song && (
+        <LeaderboardPanel entry={song.entry} diff={diff} onClose={() => setRanksOpen(false)} />
+      )}
+
+      {versusOpen && song && (
+        <VersusPanel
+          entry={song.entry}
+          diff={diff}
+          onClose={() => setVersusOpen(false)}
+          onPlay={onPlay}
+        />
+      )}
 
       {/* Hint bar — context-aware (pack grid vs song list). */}
       <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/45">
