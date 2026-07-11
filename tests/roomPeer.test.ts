@@ -380,6 +380,22 @@ describe('room choreography', () => {
     expect(reasons).toEqual(['host-left', 'host-left']);
   });
 
+  it('setSong is lobby-only — a pick mid-race waits for the cycle to end', () => {
+    const r = room(1);
+    toPlaying(r);
+    r.host.setSong(song('Too Early'), 1);
+    r.flush();
+    expect(r.host.song?.title).toBe('Song'); // ignored while playing
+    r.host.finish(result(0.9));
+    r.guests[0].finish(result(0.8));
+    r.flush();
+    expect(r.host.phase).toBe('lobby'); // …the store replays the want here
+    r.host.setSong(song('Next'), 1);
+    r.flush();
+    expect(r.host.song?.title).toBe('Next');
+    expect(r.guests[0].song?.title).toBe('Next');
+  });
+
   it('a lone host cannot start a song', () => {
     const r = room(1);
     r.host.setSong(song(), 1);

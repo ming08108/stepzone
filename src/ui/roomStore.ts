@@ -59,6 +59,10 @@ let guestConnection: VersusConnection | null = null;
 let hostEntry: LibraryEntry | null = null;
 /** Host: what announceSong last broadcast (dedupe re-announces). */
 let announced: { key: string; rate: number } | null = null;
+/** Host: the announce that couldn't apply yet (a racer was still mid-song
+ *  when the host picked — setSong only works in the lobby). Replayed by the
+ *  update hook the moment the room cycles back. */
+let wantSong: { ref: VersusSongRef; key: string; rate: number } | null = null;
 /** Guest: reassembles the in-flight incoming transfer. */
 let sink: TransferSink | null = null;
 let follow: FollowState = { k: 'none' };
@@ -98,8 +102,16 @@ export function currentRoom(): RoomPeer | null {
 export function leaveRoom(): void {
   hosted?.close();
   hosted = null;
-  room?.leave();
+  if (room) {
+    // Detach BEFORE leaving: the channel's async close event must not fire
+    // onClosed and paint a "CONNECTION LOST" error over a deliberate exit.
+    room.onClosed = undefined;
+    room.onUpdate = undefined;
+    room.onSong = undefined;
+    room.leave();
+  }
   room = null;
+  wantSong = null;
   for (const conn of connections.values()) conn.close();
   connections.clear();
   guestConnection?.close();
@@ -131,7 +143,11 @@ export async function hostRoom(): Promise<void> {
   const host = new RoomHost(channel.code, { name: getIdentity().name });
   hosted = channel;
   room = host;
-  host.onUpdate = notify;
+  host.onUpdate = () => {
+    // A cycle ending may unblock a song the host picked while it ran.
+    applyWantSong();
+    notify();
+  };
   host.onFileReq = (guestId) => void serveSongTransfer(host, guestId);
   channel.onPeer = (conn) => {
     const id = host.attachGuest({
@@ -176,7 +192,20 @@ export function announceSong(song: Song, musicRate: number, entry?: LibraryEntry
   if (!raced && announced && announced.key === key && announced.rate === musicRate) return;
   announced = { key, rate: musicRate };
   hostEntry = entry ?? null;
+  // setSong only applies in the lobby; if a straggler is still mid-song the
+  // want is remembered and replayed by the update hook when the cycle ends.
+  wantSong = { ref, key, rate: musicRate };
   r.setSong(ref, musicRate);
+}
+
+/** Replay a pending host announce once the room is back in its lobby. */
+function applyWantSong(): void {
+  const r = currentRoom();
+  if (!r || !r.isHost || !(r instanceof RoomHost) || !wantSong) return;
+  if (r.phase !== 'lobby') return;
+  const currentKey = r.song?.charts.map((c) => c.chartHash).join(',');
+  if (currentKey === wantSong.key && r.musicRate === wantSong.rate) return; // applied
+  r.setSong(wantSong.ref, wantSong.rate);
 }
 
 /** Host backed out of PLAYER OPTIONS — no song on the table. */
@@ -185,6 +214,7 @@ export function clearAnnouncedSong(): void {
   if (!r || !(r instanceof RoomHost)) return;
   announced = null;
   hostEntry = null;
+  wantSong = null;
   r.clearSong();
 }
 
