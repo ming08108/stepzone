@@ -1,20 +1,34 @@
 /**
- * Live versus over WebRTC — the shared vocabulary (docs/VERSUS.md).
+ * Rooms over WebRTC — the shared vocabulary (docs/VERSUS.md).
  *
- * Topology: the server only does HTTP signaling (net/signalApi.ts) — room
- * code + SDP offer/answer through /api/versus. The match itself runs
- * peer-to-peer on an RTCDataChannel; every message here travels on that
- * channel, never through the server. The HOST is the coordinator: it decides
- * when both sides load and when the match starts (half-RTT-compensated 'go'),
- * per the authoritative-local model (docs/ONLINE-MULTIPLAYER.md) — each side
- * still judges only its own input and shares derived stats.
+ * Topology: a STAR. The host is the hub: every guest holds one RTCDataChannel
+ * to the host and nothing else; the host relays per-player streams and
+ * broadcasts the shared room state (roster, song, phase). The only server
+ * involvement is HTTP signaling (net/signalApi.ts) — room code + per-joiner
+ * SDP offer/answer through /api/versus; after a channel opens the server is
+ * out of the loop for that pair.
  *
- * Pure TypeScript: no DOM, no WebRTC objects — versusMatch.ts runs this over
- * fake channels in Node tests.
+ * A room is PERSISTENT: it outlives songs. The cycle is
+ *   lobby (host picks a song) -> everyone readies a difficulty ->
+ *   loading -> synchronized go -> playing -> all finished -> lobby again
+ * and repeats until players leave. Judging never crosses the wire — each
+ * player judges their own input on their own audio clock and shares derived
+ * stats (snaps) and judged-note display events (notes), the
+ * authoritative-local model from docs/ONLINE-MULTIPLAYER.md.
+ *
+ * Pure TypeScript: no DOM, no WebRTC objects — net/roomPeer.ts runs this over
+ * fake channels in Node tests. Every parser here treats peer input as hostile
+ * (malformed -> null, never throw).
  */
 
 import type { PlayResult } from './protocol';
 import { parsePlayResult } from './protocol';
+
+/** Wire protocol revision — both ends must match (host rejects mismatches). */
+export const ROOM_PROTOCOL = 2;
+
+/** Hub-and-spoke fan-out is per-guest work for the host — keep parties small. */
+export const MAX_PLAYERS = 8;
 
 // ---- room codes ---------------------------------------------------------------
 
@@ -40,7 +54,7 @@ export function codeToArrows(code: string): string {
 
 // ---- song / chart identity --------------------------------------------------------
 
-/** One chart's identity + display meta inside a room's song descriptor. */
+/** One chart's identity + display meta inside a song descriptor. */
 export interface VersusChartMeta {
   /** chartContentHash — binds the pick to exact note/timing content. */
   chartHash: string;
@@ -51,9 +65,9 @@ export interface VersusChartMeta {
 }
 
 /**
- * A room identifies a SONG, not one chart: every chart hash the host's copy
- * has, so a joiner can resolve their local copy by ANY hash match and each
- * player then picks their own difficulty (arcade style).
+ * A song is identified by EVERY chart hash the host's copy has, so a guest
+ * resolves their local copy by ANY hash match (never by title — titles
+ * collide) and each player then picks their own difficulty (arcade style).
  */
 export interface VersusSongRef {
   title: string;
@@ -93,9 +107,9 @@ export function parseVersusSongRef(v: unknown): VersusSongRef | null {
   return { title: v.title, artist: v.artist, charts };
 }
 
-// ---- data-channel messages ------------------------------------------------------
+// ---- live play streams ------------------------------------------------------
 
-/** Live scoreboard sample, sent both ways at a few Hz while playing. */
+/** Live scoreboard sample, streamed at a few Hz while playing. */
 export interface VersusSnap {
   /** Monotonic per-sender sequence for ordering/dedupe. */
   seq: number;
@@ -108,41 +122,13 @@ export interface VersusSnap {
 }
 
 /** One judged note (index into the sender's time-sorted note list + result) —
- *  drives the rival-playfield display; judging itself never crosses the wire. */
+ *  drives rival-playfield display; judging itself never crosses the wire. */
 export interface VersusNote {
   i: number;
   tns: number;
 }
 
 export const MAX_NOTE_INDEX = 200_000;
-
-export type PeerMsg =
-  | { t: 'hello'; name: string }
-  | { t: 'pick'; pick: VersusChartMeta } // advisory — lobby display while browsing
-  | { t: 'ready'; pick: VersusChartMeta } // readying PINS the pick (same frame — no race)
-  | { t: 'load' } // host -> joiner: both ready, prepare your session
-  | { t: 'loaded' }
-  | { t: 'ping'; at: number } // host RTT probe (echoed timestamps, host clock)
-  | { t: 'pong'; at: number }
-  | { t: 'go'; delayMs: number } // begin after delayMs (half-RTT compensated)
-  | { t: 'snap'; snap: VersusSnap }
-  | { t: 'notes'; notes: VersusNote[] } // judged since the last batch (display only)
-  // P2P song transfer (joiner lacks the song): request -> meta (simfile text
-  // inline; audio follows as binary chunks on the same channel) -> done.
-  | { t: 'fileReq' }
-  | { t: 'fileMeta'; simfileName: string; simfile: string; audioName: string; audioBytes: number }
-  | { t: 'fileDone' }
-  | { t: 'fileErr'; message: string }
-  | { t: 'finish'; result: PlayResult }
-  | { t: 'bye' };
-
-/** Caps for the transfer payload — anything past these is not a simfile. */
-export const MAX_SIMFILE_CHARS = 2_000_000;
-export const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
-
-const isObj = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
-const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
 export function parseSnap(v: unknown): VersusSnap | null {
   if (!isObj(v)) return null;
@@ -159,8 +145,124 @@ export function parseSnap(v: unknown): VersusSnap | null {
   };
 }
 
-/** Parse one channel frame; unknown/malformed -> null (peer input is untrusted). */
-export function parsePeerMsg(raw: string): PeerMsg | null {
+function parseNotes(v: unknown): VersusNote[] | null {
+  if (!Array.isArray(v) || v.length > 512) return null;
+  const notes: VersusNote[] = [];
+  for (const n of v) {
+    if (!isObj(n)) return null;
+    if (!num(n.i) || !Number.isInteger(n.i) || n.i < 0 || n.i > MAX_NOTE_INDEX) return null;
+    if (!num(n.tns) || !Number.isInteger(n.tns) || n.tns < 0 || n.tns > 16) return null;
+    notes.push({ i: n.i, tns: n.tns });
+  }
+  return notes;
+}
+
+// ---- room state (host-broadcast) ---------------------------------------------
+
+/** lobby: picking song/difficulty · loading: sessions preparing · playing. */
+export type RoomPhase = 'lobby' | 'loading' | 'playing';
+
+const ROOM_PHASES: readonly RoomPhase[] = ['lobby', 'loading', 'playing'];
+
+/** One roster entry as the host broadcasts it (id 0 is always the host). */
+export interface RosterPlayer {
+  id: number;
+  name: string;
+  pick: VersusChartMeta | null;
+  ready: boolean;
+  done: boolean;
+  /** Disconnected/left; kept on the roster mid-song so DNF can render. */
+  left: boolean;
+}
+
+function parseRosterPlayer(v: unknown): RosterPlayer | null {
+  if (!isObj(v)) return null;
+  if (!num(v.id) || !Number.isInteger(v.id) || v.id < 0 || v.id > 1_000_000) return null;
+  if (!str(v.name, 24)) return null;
+  const pick = v.pick == null ? null : parseVersusChartMeta(v.pick);
+  if (v.pick != null && !pick) return null;
+  if (typeof v.ready !== 'boolean' || typeof v.done !== 'boolean' || typeof v.left !== 'boolean')
+    return null;
+  return { id: v.id, name: v.name, pick, ready: v.ready, done: v.done, left: v.left };
+}
+
+// ---- song transfer -------------------------------------------------------------
+
+/** Caps for the transfer payload — anything past these is not shared. */
+export const MAX_SIMFILE_CHARS = 2_000_000;
+export const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+/** Background art rides along when it fits: images always dwarf this, videos
+ *  only sometimes — an oversized background is simply omitted, never fatal. */
+export const MAX_BG_BYTES = 32 * 1024 * 1024;
+
+/** One binary file announced by fileMeta; bytes stream in list order. */
+export interface TransferBinary {
+  name: string;
+  kind: 'audio' | 'bg';
+  bytes: number;
+}
+
+const fileName = (n: unknown): n is string =>
+  typeof n === 'string' && n.length > 0 && n.length <= 128 && !n.includes('/');
+
+function parseTransferBinaries(v: unknown): TransferBinary[] | null {
+  if (!Array.isArray(v) || v.length === 0 || v.length > 4) return null;
+  const out: TransferBinary[] = [];
+  for (const f of v) {
+    if (!isObj(f)) return null;
+    if (!fileName(f.name)) return null;
+    if (f.kind !== 'audio' && f.kind !== 'bg') return null;
+    const cap = f.kind === 'audio' ? MAX_AUDIO_BYTES : MAX_BG_BYTES;
+    if (!num(f.bytes) || !Number.isInteger(f.bytes) || f.bytes < 0 || f.bytes > cap) return null;
+    out.push({ name: f.name, kind: f.kind, bytes: f.bytes });
+  }
+  return out;
+}
+
+// ---- data-channel messages ------------------------------------------------------
+
+/**
+ * Guest -> host. `seq` fields echo the host's song sequence so a stale action
+ * (readying just as the host swaps songs) can't cross cycles.
+ */
+export type GuestMsg =
+  | { t: 'hello'; v: number; name: string }
+  | { t: 'pick'; seq: number; pick: VersusChartMeta } // advisory — lobby display
+  | { t: 'ready'; seq: number; pick: VersusChartMeta } // PINS the pick (same frame)
+  | { t: 'loaded'; seq: number }
+  | { t: 'snap'; snap: VersusSnap }
+  | { t: 'notes'; notes: VersusNote[] }
+  | { t: 'finish'; seq: number; result: PlayResult }
+  | { t: 'pong'; at: number }
+  | { t: 'fileReq' }
+  | { t: 'bye' };
+
+/** Host -> guest. Roster is the single source of shared room state. */
+export type HostMsg =
+  | { t: 'welcome'; v: number; you: number; code: string }
+  | { t: 'err'; reason: 'full' | 'version' }
+  | { t: 'roster'; phase: RoomPhase; players: RosterPlayer[] }
+  | { t: 'song'; seq: number; song: VersusSongRef | null; musicRate: number }
+  | { t: 'load' } // all ready — prepare your session
+  | { t: 'ping'; at: number } // per-guest RTT probe (host clock, echoed)
+  | { t: 'go'; delayMs: number } // begin after delayMs (half-RTT compensated)
+  | { t: 'psnap'; id: number; snap: VersusSnap } // relayed player streams
+  | { t: 'pnotes'; id: number; notes: VersusNote[] }
+  | { t: 'pfinish'; id: number; result: PlayResult }
+  // Song transfer to THIS guest: simfile text inline; binaries follow as
+  // chunked binary frames in `files` order (net/versusTransfer.ts).
+  | { t: 'fileMeta'; simfileName: string; simfile: string; files: TransferBinary[] }
+  | { t: 'fileDone' }
+  | { t: 'fileErr'; message: string }
+  | { t: 'bye' };
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const seqNum = (v: unknown): v is number => num(v) && Number.isInteger(v) && v >= 0;
+
+/** Parse one guest frame (host side; guest input is untrusted). */
+export function parseGuestMsg(raw: string): GuestMsg | null {
   let v: unknown;
   try {
     v = JSON.parse(raw);
@@ -170,65 +272,110 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
   if (!isObj(v)) return null;
   switch (v.t) {
     case 'hello':
-      return typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 24
-        ? { t: 'hello', name: v.name }
-        : null;
+      return num(v.v) && str(v.name, 24) ? { t: 'hello', v: v.v, name: v.name } : null;
     case 'pick':
     case 'ready': {
+      if (!seqNum(v.seq)) return null;
       const pick = parseVersusChartMeta(v.pick);
-      return pick ? { t: v.t, pick } : null;
+      return pick ? { t: v.t, seq: v.seq, pick } : null;
     }
-    case 'load':
     case 'loaded':
-    case 'fileReq':
-    case 'fileDone':
-    case 'bye':
-      return { t: v.t };
-    case 'fileErr':
-      return typeof v.message === 'string' && v.message.length <= 200
-        ? { t: 'fileErr', message: v.message }
-        : null;
-    case 'fileMeta': {
-      const name = (n: unknown): n is string =>
-        typeof n === 'string' && n.length > 0 && n.length <= 128 && !n.includes('/');
-      if (!name(v.simfileName) || !name(v.audioName)) return null;
-      if (typeof v.simfile !== 'string' || v.simfile.length > MAX_SIMFILE_CHARS) return null;
-      if (!num(v.audioBytes) || !Number.isInteger(v.audioBytes)) return null;
-      if (v.audioBytes < 0 || v.audioBytes > MAX_AUDIO_BYTES) return null;
-      return {
-        t: 'fileMeta',
-        simfileName: v.simfileName,
-        simfile: v.simfile,
-        audioName: v.audioName,
-        audioBytes: v.audioBytes,
-      };
-    }
-    case 'ping':
-    case 'pong':
-      return num(v.at) ? { t: v.t, at: v.at } : null;
-    case 'go':
-      return num(v.delayMs) && v.delayMs >= 0 && v.delayMs <= 10_000
-        ? { t: 'go', delayMs: v.delayMs }
-        : null;
+      return seqNum(v.seq) ? { t: 'loaded', seq: v.seq } : null;
     case 'snap': {
       const snap = parseSnap(v.snap);
       return snap ? { t: 'snap', snap } : null;
     }
     case 'notes': {
-      if (!Array.isArray(v.notes) || v.notes.length > 512) return null;
-      const notes: VersusNote[] = [];
-      for (const n of v.notes) {
-        if (!isObj(n)) return null;
-        if (!num(n.i) || !Number.isInteger(n.i) || n.i < 0 || n.i > MAX_NOTE_INDEX) return null;
-        if (!num(n.tns) || !Number.isInteger(n.tns) || n.tns < 0 || n.tns > 16) return null;
-        notes.push({ i: n.i, tns: n.tns });
-      }
-      return { t: 'notes', notes };
+      const notes = parseNotes(v.notes);
+      return notes ? { t: 'notes', notes } : null;
     }
     case 'finish': {
+      if (!seqNum(v.seq)) return null;
       const result = parsePlayResult(v.result);
-      return result ? { t: 'finish', result } : null;
+      return result ? { t: 'finish', seq: v.seq, result } : null;
     }
+    case 'pong':
+      return num(v.at) ? { t: 'pong', at: v.at } : null;
+    case 'fileReq':
+    case 'bye':
+      return { t: v.t };
+    default:
+      return null;
+  }
+}
+
+/** Parse one host frame (guest side; still validated — hosts can be hostile too). */
+export function parseHostMsg(raw: string): HostMsg | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isObj(v)) return null;
+  switch (v.t) {
+    case 'welcome':
+      return num(v.v) && seqNum(v.you) && isRoomCode(v.code)
+        ? { t: 'welcome', v: v.v, you: v.you, code: v.code }
+        : null;
+    case 'err':
+      return v.reason === 'full' || v.reason === 'version' ? { t: 'err', reason: v.reason } : null;
+    case 'roster': {
+      if (!ROOM_PHASES.includes(v.phase as RoomPhase)) return null;
+      if (!Array.isArray(v.players) || v.players.length === 0 || v.players.length > MAX_PLAYERS)
+        return null;
+      const players: RosterPlayer[] = [];
+      for (const p of v.players) {
+        const parsed = parseRosterPlayer(p);
+        if (!parsed) return null;
+        players.push(parsed);
+      }
+      return { t: 'roster', phase: v.phase as RoomPhase, players };
+    }
+    case 'song': {
+      if (!seqNum(v.seq)) return null;
+      const song = v.song == null ? null : parseVersusSongRef(v.song);
+      if (v.song != null && !song) return null;
+      if (!num(v.musicRate) || v.musicRate < 0.5 || v.musicRate > 3) return null;
+      return { t: 'song', seq: v.seq, song, musicRate: v.musicRate };
+    }
+    case 'load':
+    case 'fileDone':
+    case 'bye':
+      return { t: v.t };
+    case 'ping':
+      return num(v.at) ? { t: 'ping', at: v.at } : null;
+    case 'go':
+      return num(v.delayMs) && v.delayMs >= 0 && v.delayMs <= 10_000
+        ? { t: 'go', delayMs: v.delayMs }
+        : null;
+    case 'psnap': {
+      if (!seqNum(v.id)) return null;
+      const snap = parseSnap(v.snap);
+      return snap ? { t: 'psnap', id: v.id, snap } : null;
+    }
+    case 'pnotes': {
+      if (!seqNum(v.id)) return null;
+      const notes = parseNotes(v.notes);
+      return notes ? { t: 'pnotes', id: v.id, notes } : null;
+    }
+    case 'pfinish': {
+      if (!seqNum(v.id)) return null;
+      const result = parsePlayResult(v.result);
+      return result ? { t: 'pfinish', id: v.id, result } : null;
+    }
+    case 'fileMeta': {
+      if (!fileName(v.simfileName)) return null;
+      if (typeof v.simfile !== 'string' || v.simfile.length > MAX_SIMFILE_CHARS) return null;
+      const files = parseTransferBinaries(v.files);
+      return files
+        ? { t: 'fileMeta', simfileName: v.simfileName, simfile: v.simfile, files }
+        : null;
+    }
+    case 'fileErr':
+      return typeof v.message === 'string' && v.message.length <= 200
+        ? { t: 'fileErr', message: v.message }
+        : null;
     default:
       return null;
   }
@@ -236,46 +383,61 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
 
 // ---- signaling payloads (HTTP /api/versus) ---------------------------------------
 
-/** A room row while the handshake is in flight; expires quickly. */
-export interface SignalRoom {
-  code: string;
-  hostName: string;
-  song: VersusSongRef;
-  musicRate: number;
-  offer: string; // complete (non-trickle) SDP
-  answer: string | null;
-  joinerName: string | null;
-  createdAt: number;
-}
+/**
+ * Signaling v2 — joiner-initiated offers so ONE room accepts MANY joiners:
+ * the room row is just "this code has a live host"; each joiner posts an
+ * offer row and the host (polling) answers it. The host's poll doubles as a
+ * heartbeat: a room is live while its host keeps polling, so a party can
+ * last hours while abandoned rooms vanish in a minute.
+ */
 
-export const ROOM_TTL_MS = 10 * 60_000;
+/** A room is joinable while the host polled within this window. */
+export const ROOM_LIVE_MS = 60_000;
+/** A pending join (offer waiting for its answer) expires after this. */
+export const JOIN_TTL_MS = 2 * 60_000;
 /** SDP blobs are a few KB; anything bigger is not a session description. */
 export const MAX_SDP_LENGTH = 64 * 1024;
 
+export interface SignalRoom {
+  code: string;
+  hostName: string;
+  createdAt: number;
+  /** Last host poll (heartbeat) — liveness is measured from this. */
+  lastSeen: number;
+}
+
+export interface SignalJoin {
+  code: string;
+  joinId: string;
+  joinerName: string;
+  offer: string; // complete (non-trickle) SDP from the JOINER
+  answer: string | null; // host's SDP once it accepted
+  createdAt: number;
+}
+
 export type SignalRequest =
-  | {
-      t: 'create';
-      hostName: string;
-      song: VersusSongRef;
-      musicRate: number;
-      offer: string;
-    }
-  | { t: 'answer'; code: string; joinerName: string; answer: string };
+  | { t: 'create'; hostName: string }
+  | { t: 'join'; code: string; joinerName: string; offer: string }
+  | { t: 'answer'; code: string; joinId: string; answer: string };
+
+const playerName = (n: unknown): n is string =>
+  typeof n === 'string' && n.length > 0 && n.length <= 24;
+const sdp = (s: unknown): s is string =>
+  typeof s === 'string' && s.length > 0 && s.length <= MAX_SDP_LENGTH;
+const joinId = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9-]{8,64}$/.test(s);
 
 export function parseSignalRequest(v: unknown): SignalRequest | null {
   if (!isObj(v)) return null;
-  const name = (n: unknown): n is string => typeof n === 'string' && n.length > 0 && n.length <= 24;
-  const sdp = (s: unknown): s is string =>
-    typeof s === 'string' && s.length > 0 && s.length <= MAX_SDP_LENGTH;
   if (v.t === 'create') {
-    const song = parseVersusSongRef(v.song);
-    if (!song || !name(v.hostName) || !sdp(v.offer)) return null;
-    if (!num(v.musicRate) || v.musicRate < 0.5 || v.musicRate > 3) return null;
-    return { t: 'create', hostName: v.hostName, song, musicRate: v.musicRate, offer: v.offer };
+    return playerName(v.hostName) ? { t: 'create', hostName: v.hostName } : null;
+  }
+  if (v.t === 'join') {
+    if (!isRoomCode(v.code) || !playerName(v.joinerName) || !sdp(v.offer)) return null;
+    return { t: 'join', code: v.code, joinerName: v.joinerName, offer: v.offer };
   }
   if (v.t === 'answer') {
-    if (!isRoomCode(v.code) || !name(v.joinerName) || !sdp(v.answer)) return null;
-    return { t: 'answer', code: v.code, joinerName: v.joinerName, answer: v.answer };
+    if (!isRoomCode(v.code) || !joinId(v.joinId) || !sdp(v.answer)) return null;
+    return { t: 'answer', code: v.code, joinId: v.joinId, answer: v.answer };
   }
   return null;
 }

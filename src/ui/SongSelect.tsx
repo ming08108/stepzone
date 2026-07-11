@@ -30,7 +30,9 @@ import { LeaderboardSide } from './LeaderboardSide';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
 import { isRoomCode } from '../net/versus';
-import { VersusJoin } from './VersusJoin';
+import { MultiplayerPanel } from './MultiplayerPanel';
+import { RoomDock } from './RoomDock';
+import { roomState, subscribeRoom } from './roomStore';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 import {
@@ -165,6 +167,10 @@ export function SongSelect({
     () => shouldPromptForName() && joinCode === undefined,
   );
   const [osel, setOsel] = useState(0);
+
+  // Live room (roomStore) — drives the party dock and the guest song guard.
+  const vsRoom = useSyncExternalStore(subscribeRoom, roomState);
+  const isRoomGuest = vsRoom.k === 'in-room' && !vsRoom.room.isHost;
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
   const stats = useMemo(() => loadStats(), []);
@@ -433,6 +439,9 @@ export function SongSelect({
   );
 
   const start = useCallback(async () => {
+    // In a room the HOST picks the song; guests browse but the party dock
+    // explains why START does nothing here (their pick happens on options).
+    if (isRoomGuest) return;
     const s = shownSongs[Math.min(sel, Math.max(0, shownSongs.length - 1))];
     if (!s || s.levels[diff] == null) return;
     const entry = await ensureLoaded(s.entry); // no-op unless a catalog row
@@ -443,7 +452,7 @@ export function SongSelect({
     // (which also queues a background conversion for next time).
     const bg = await resolveBackground(entry);
     onPlay({ song: entry.song, chart, encodedAudio: audio, backgroundFile: bg, entry });
-  }, [shownSongs, sel, diff, onPlay]);
+  }, [shownSongs, sel, diff, onPlay, isRoomGuest]);
 
   // RESET clears the FILTERS only — sort, search, level range, faves. It must
   // not touch navigation (which pack is open / the grid cursor); resetting your
@@ -1234,14 +1243,31 @@ export function SongSelect({
       </div>
 
       {versusOpen && (
-        <VersusJoin
-          initialCode={joinCode}
-          onClose={() => setVersusOpen(false)}
-          onJoined={(r) => {
-            setVersusOpen(false);
-            onPlay(r);
-          }}
-        />
+        <MultiplayerPanel initialCode={joinCode} onClose={() => setVersusOpen(false)} />
+      )}
+
+      {/* The party dock — the room floats over song select between songs.
+          Guests watch the host's pick resolve here; the App routes them to
+          PLAYER OPTIONS when it's ready (roomStore follow state). */}
+      {!versusOpen && vsRoom.k !== 'idle' && (
+        <div className="absolute bottom-[56px] right-4 z-[20] w-[420px] max-w-[92%]">
+          <RoomDock
+            vs={vsRoom}
+            status={
+              vsRoom.k === 'in-room'
+                ? vsRoom.room.isHost
+                  ? 'PICK A SONG FOR THE ROOM'
+                  : vsRoom.follow.k === 'resolving'
+                    ? vsRoom.follow.message
+                    : vsRoom.follow.k === 'error'
+                      ? vsRoom.follow.message
+                      : vsRoom.room.phase !== 'lobby'
+                        ? 'A SONG IS IN PROGRESS — YOU JOIN THE NEXT ONE'
+                        : 'THE HOST IS PICKING A SONG…'
+                : undefined
+            }
+          />
+        </div>
       )}
 
       {namePromptOpen && <NamePrompt onDone={() => setNamePromptOpen(false)} />}
@@ -1252,7 +1278,7 @@ export function SongSelect({
           <>
             <span>◀▶▲▼ PACK</span>
             <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>START — OPEN</span>
-            <button onClick={() => setVersusOpen(true)}>SELECT — JOIN VERSUS</button>
+            <button onClick={() => setVersusOpen(true)}>SELECT — MULTIPLAYER</button>
           </>
         ) : (
           <>

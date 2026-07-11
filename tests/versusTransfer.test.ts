@@ -1,29 +1,49 @@
 /**
- * P2P song transfer plumbing: the fileReq/fileMeta/fileDone handshake over
- * the match protocol, and the binary chunk sink that reassembles the audio.
+ * P2P song transfer plumbing: the multi-file binary sink that reassembles the
+ * announced files (audio + optional background art) from ordered chunks, and
+ * the hostile-frame rejections of the fileMeta parser.
  */
 import { describe, expect, it } from 'vitest';
-import { ChunkSink } from '../src/net/versusTransfer';
-import { parsePeerMsg } from '../src/net/versus';
+import { TransferSink } from '../src/net/versusTransfer';
+import { parseHostMsg, type TransferBinary } from '../src/net/versus';
 
-describe('ChunkSink', () => {
+const files = (...sizes: number[]): TransferBinary[] =>
+  sizes.map((bytes, i) => ({
+    name: i === 0 ? 'song.ogg' : 'bg.png',
+    kind: i === 0 ? ('audio' as const) : ('bg' as const),
+    bytes,
+  }));
+
+describe('TransferSink', () => {
   it('reassembles ordered chunks and reports progress', () => {
-    const seen: number[] = [];
-    const sink = new ChunkSink(6, (n) => seen.push(n));
+    const seen: Array<[number, number]> = [];
+    const sink = new TransferSink(files(6), (n, total) => seen.push([n, total]));
     sink.push(new Uint8Array([1, 2, 3]).buffer);
     expect(sink.complete).toBe(false);
     sink.push(new Uint8Array([4, 5, 6]).buffer);
     expect(sink.complete).toBe(true);
-    expect([...sink.bytes()]).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(seen).toEqual([3, 6]);
+    expect([...sink.bytes(0)]).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(seen).toEqual([
+      [3, 6],
+      [6, 6],
+    ]);
   });
 
-  it('ignores over-send past the announced size', () => {
-    const sink = new ChunkSink(2);
+  it('splits a chunk spanning a file boundary across both files', () => {
+    const sink = new TransferSink(files(3, 2));
+    sink.push(new Uint8Array([1, 2]).buffer);
+    sink.push(new Uint8Array([3, 7, 8]).buffer); // 3 finishes the audio; 7,8 are the bg
+    expect(sink.complete).toBe(true);
+    expect([...sink.bytes(0)]).toEqual([1, 2, 3]);
+    expect([...sink.bytes(1)]).toEqual([7, 8]);
+  });
+
+  it('ignores over-send past the announced total', () => {
+    const sink = new TransferSink(files(2));
     sink.push(new Uint8Array([9, 9]).buffer);
     sink.push(new Uint8Array([7]).buffer); // hostile extra
     expect(sink.received).toBe(2);
-    expect([...sink.bytes()]).toEqual([9, 9]);
+    expect([...sink.bytes(0)]).toEqual([9, 9]);
   });
 });
 
@@ -33,15 +53,21 @@ describe('transfer frames', () => {
       t: 'fileMeta',
       simfileName: 'song.ssc',
       simfile: '#TITLE:x;',
-      audioName: 'song.ogg',
-      audioBytes: 1234,
+      files: [
+        { name: 'song.ogg', kind: 'audio', bytes: 1234 },
+        { name: 'bg.mp4', kind: 'bg', bytes: 999 },
+      ],
     };
-    expect(parsePeerMsg(JSON.stringify(ok))).toEqual(ok);
+    expect(parseHostMsg(JSON.stringify(ok))).toEqual(ok);
     expect(
-      parsePeerMsg(JSON.stringify({ ...ok, simfileName: '../escape.ssc' })), // path smuggling
+      parseHostMsg(JSON.stringify({ ...ok, simfileName: '../escape.ssc' })), // path smuggling
     ).toBeNull();
-    expect(parsePeerMsg(JSON.stringify({ ...ok, audioBytes: -1 }))).toBeNull();
-    expect(parsePeerMsg(JSON.stringify({ ...ok, audioBytes: 1e12 }))).toBeNull();
-    expect(parsePeerMsg(JSON.stringify({ t: 'fileErr', message: 'x'.repeat(300) }))).toBeNull();
+    const withFiles = (f: unknown) => JSON.stringify({ ...ok, files: f });
+    expect(parseHostMsg(withFiles([{ name: 'a.ogg', kind: 'audio', bytes: -1 }]))).toBeNull();
+    expect(parseHostMsg(withFiles([{ name: 'a.ogg', kind: 'audio', bytes: 1e12 }]))).toBeNull();
+    expect(parseHostMsg(withFiles([{ name: 'b.mp4', kind: 'bg', bytes: 1e9 }]))).toBeNull(); // bg over cap
+    expect(parseHostMsg(withFiles([{ name: 'x/y.ogg', kind: 'audio', bytes: 1 }]))).toBeNull();
+    expect(parseHostMsg(withFiles([]))).toBeNull();
+    expect(parseHostMsg(JSON.stringify({ t: 'fileErr', message: 'x'.repeat(300) }))).toBeNull();
   });
 });

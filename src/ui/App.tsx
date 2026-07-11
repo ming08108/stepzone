@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Play } from './Play';
 import { PlayerOptions } from './PlayerOptions';
 import { Inspector } from './Inspector';
@@ -12,7 +12,7 @@ import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
 import { flushQueue } from '../net/leaderboard';
 import { useMenuNav } from './useMenuNav';
-import { abandonVersus, takeVersusForPlay } from './versusSession';
+import { consumeFollow, roomState, subscribeRoom, takeRoomForPlay } from './roomStore';
 
 type View =
   'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
@@ -58,26 +58,41 @@ export function App() {
     void flushQueue();
   }, []);
 
+  // Room routing (docs/VERSUS.md): a GUEST follows the host's song picks.
+  // When the store resolves a broadcast song (local by hash, or transferred
+  // P2P) it stages a play request here; when the host clears their pick, a
+  // guest parked on PLAYER OPTIONS returns to the songs. Never yanks anyone
+  // out of live gameplay — 'play' finishes on its own.
+  const vs = useSyncExternalStore(subscribeRoom, roomState);
+  useEffect(() => {
+    if (vs.k !== 'in-room' || vs.room.isHost) return;
+    if (vs.follow.k === 'ready' && view !== 'play') {
+      const staged = consumeFollow();
+      if (staged) {
+        setReq(staged);
+        setView('playoptions');
+      }
+    } else if (!vs.room.song && view === 'playoptions') {
+      setView('menu');
+    }
+  }, [vs, view]);
+
   let body: ReactNode;
   if (view === 'playoptions' && req) {
     body = (
       <PlayerOptions
         req={req}
         onStart={(chart, practice) => {
-          // A live versus session (versusSession store) rides into gameplay
-          // here — App is the single place that attaches it to the request.
+          // A live room race (roomStore) rides into gameplay here — App is
+          // the single place that attaches it to the request.
           setReq((r) => {
             if (!r) return r;
-            const song = r.song;
-            const versus = takeVersusForPlay(song) ?? undefined;
+            const versus = takeRoomForPlay(r.song) ?? undefined;
             return { ...r, chart: chart ?? r.chart, practice: practice ?? null, versus };
           });
           setView('play');
         }}
-        onBack={() => {
-          abandonVersus(); // safety net — SELECT in-screen already left the room
-          setView('menu');
-        }}
+        onBack={() => setView('menu')}
       />
     );
   } else if (view === 'play' && req) {
@@ -85,13 +100,9 @@ export function App() {
       <Play
         req={req}
         onExit={() => {
-          // A live versus match ends when the play view goes away — tell the
-          // peer and release the RTCPeerConnection here (not in Play's own
-          // unmount, which StrictMode double-fires in dev).
-          if (req.versus) {
-            abandonVersus();
-            setReq((r) => (r ? { ...r, versus: undefined } : r));
-          }
+          // The ROOM persists across plays — only this request's ride-along
+          // handle is dropped. Play already reported our result (or DNF).
+          if (req.versus) setReq((r) => (r ? { ...r, versus: undefined } : r));
           setView('menu');
         }}
       />
@@ -123,7 +134,7 @@ export function App() {
       <SongSelect
         onPlay={(r) => {
           setReq(r);
-          // Everyone goes through PLAYER OPTIONS — versus joiners included
+          // Everyone goes through PLAYER OPTIONS — room guests included
           // (they pick their own difficulty there before readying up).
           setView('playoptions');
         }}

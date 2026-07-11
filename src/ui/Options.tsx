@@ -5,8 +5,10 @@
  * the PLAYER OPTIONS screen before each song — nothing appears on both
  * screens.
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Settings } from '../app/settings';
+import { dayKey, loadStats } from '../app/stats';
+import { HoldNoteScore, TapNoteScore } from '../notes/noteTypes';
 import { defaultBindings, type Bindings, type ControlRole } from '../input/controls';
 import { connectedPadInfo, pressedGamepadButtons, type PadInfo } from '../input/gamepad';
 import { setBindCaptureActive } from '../input/inputBus';
@@ -71,6 +73,27 @@ const chipBtn =
 const bindBtn =
   'border border-white/10 px-2 py-0.5 text-[12px] tracking-wide text-[#ececec]/60 hover:border-[#ff5d47] hover:text-[#ececec]';
 
+// Lifetime-stats display constants. Judgment names/colors mirror Play.tsx's
+// JUDGMENT_ROWS (kept as a small local copy so the settings screen doesn't pull
+// in the gameplay UI); holds get their own two-outcome row.
+const LIFETIME_JUDGMENTS: Array<[TapNoteScore, string, string]> = [
+  [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
+  [TapNoteScore.W2, 'EXCELLENT', '#ffd23d'],
+  [TapNoteScore.W3, 'GREAT', '#59f07f'],
+  [TapNoteScore.W4, 'DECENT', '#c86bff'],
+  [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
+  [TapNoteScore.Miss, 'MISS', '#ff5d47'],
+];
+
+/** Whole-number `Xh Ym` (or `Ym`, or `Ys` under a minute). */
+function formatPlayTime(seconds: number): string {
+  const total = Math.floor(seconds);
+  if (total < 60) return `${total}s`;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 type Capture = { role: ControlRole; device: 'keyboard' | 'gamepad' };
 
 export function Options({
@@ -92,6 +115,24 @@ export function Options({
   // Online display name (net/identity): saved on every keystroke; blur snaps
   // the field back to the normalized (trimmed, defaulted) stored value.
   const [playerName, setPlayerNameState] = useState(() => getIdentity().name);
+  // Lifetime stats are read once on entry — they only change during a play, on a
+  // different screen, so there's nothing to keep live here.
+  const [stats] = useState(loadStats);
+  const days = useMemo(() => {
+    const out: Array<{ key: string; steps: number }> = [];
+    const now = new Date();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const key = dayKey(d);
+      out.push({ key, steps: stats.dailySteps[key] ?? 0 });
+    }
+    return out;
+  }, [stats]);
+  const maxDay = Math.max(1, ...days.map((d) => d.steps));
+  const holdsHeld = stats.holds[HoldNoteScore.Held] ?? 0;
+  const holdsDropped =
+    (stats.holds[HoldNoteScore.LetGo] ?? 0) + (stats.holds[HoldNoteScore.Missed] ?? 0);
   useMenuNav(onBack);
 
   const bindings = settings.bindings;
@@ -204,6 +245,70 @@ export function Options({
             These settings are system-wide. Play mods — speed, turn, scroll direction, note skin,
             music rate, background — are set per song on the PLAYER OPTIONS screen.
           </div>
+
+          <Section title="LIFETIME STATS">
+            <Row label="TOTAL STEPS">
+              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                {stats.steps.toLocaleString()}
+              </span>
+            </Row>
+            <Row label="PLAY TIME">
+              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                {formatPlayTime(stats.playTimeSeconds)}
+              </span>
+            </Row>
+            <Row label="PLAYS">
+              <span className="text-[13px] tracking-[0.06em] text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                <span className="font-bold text-[#59f07f]">{stats.songsCompleted}</span> cleared
+                <span className="mx-2 text-[#ececec]/25">/</span>
+                <span className="font-bold text-[#ff5d47]">{stats.songsFailed}</span> failed
+              </span>
+            </Row>
+            <Row label="BEST COMBO">
+              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                {stats.bestCombo.toLocaleString()}
+              </span>
+            </Row>
+            <Row label="JUDGMENTS">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                {LIFETIME_JUDGMENTS.map(([tns, label, color]) => (
+                  <span key={tns} className="text-[12px] tracking-[0.08em]">
+                    <span style={{ color }}>{label}</span>{' '}
+                    <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                      {(stats.taps[tns] ?? 0).toLocaleString()}
+                    </span>
+                  </span>
+                ))}
+                <span className="text-[12px] tracking-[0.08em]">
+                  <span className="text-[#ececec]/55">HOLDS</span>{' '}
+                  <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                    {holdsHeld.toLocaleString()}
+                  </span>
+                  <span className="text-[#ececec]/30">/{holdsDropped.toLocaleString()}</span>
+                </span>
+              </div>
+            </Row>
+            <Row label="STEPS · LAST 14 DAYS">
+              <div className="flex h-[42px] flex-1 items-end gap-[3px]">
+                {days.map((d) => (
+                  <div
+                    key={d.key}
+                    title={`${d.key} — ${d.steps.toLocaleString()} steps`}
+                    className="flex h-full flex-1 items-end"
+                  >
+                    <div
+                      className="w-full"
+                      style={{
+                        height: `${Math.max(d.steps > 0 ? 6 : 2, (d.steps / maxDay) * 100)}%`,
+                        background: d.steps > 0 ? '#ff5d47' : undefined,
+                        borderTop: d.steps > 0 ? undefined : '1px solid rgba(255,255,255,0.12)',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Row>
+          </Section>
 
           <Section title="ONLINE">
             <Row label="PLAYER NAME">

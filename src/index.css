@@ -129,6 +129,18 @@
       transform: scaleX(1);
     }
   }
+
+  /* Standings reveal (RoomRace): rows land last-place-first. */
+  @keyframes standingsIn {
+    from {
+      transform: translateX(-28px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
 }
 
 @layer components {

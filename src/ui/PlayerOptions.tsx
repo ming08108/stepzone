@@ -35,9 +35,17 @@ import type { PlayRequest } from './playRequest';
 import { useSettings } from './SettingsContext';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
-import { VersusLobby } from './VersusLobby';
+import { RoomDock } from './RoomDock';
 import { pickOf } from './versusResolve';
-import { abandonVersus, hostVersus, subscribeVersus, versusState } from './versusSession';
+import {
+  announceSong,
+  clearAnnouncedSong,
+  dismissRoomError,
+  hostRoom,
+  leaveRoom,
+  roomState,
+  subscribeRoom,
+} from './roomStore';
 
 /** Step to the next/previous entry of a const union array, wrapping. */
 function cycle<T>(list: readonly T[], cur: T, dir: number): T {
@@ -111,13 +119,20 @@ export function PlayerOptions({
   const [practice, setPractice] = useState({ on: false, start: 1, end: 8 });
   useGamepadKeys();
 
-  // Live versus session (versusSession store — survives screen transitions).
-  const vs = useSyncExternalStore(subscribeVersus, versusState);
+  // Live room (roomStore — global state, survives screen transitions).
+  const vs = useSyncExternalStore(subscribeRoom, roomState);
   const versusActive = vs.k !== 'idle';
-  const vsMatch = vs.k === 'connected' ? vs.session.match : null;
-  const selfReady = vsMatch?.selfIsReady ?? false;
-  // The room locks the rate: the host's setting at creation, the joiner's room value.
-  const effRate = vs.k === 'connected' ? vs.session.musicRate : settings.musicRate;
+  const room = vs.k === 'in-room' ? vs.room : null;
+  const selfReady = room?.self?.ready ?? false;
+  // Guests play at the room's rate (the host's setting when announcing); the
+  // host's own rate row IS the room rate — changing it re-announces.
+  const effRate = room && !room.isHost ? room.musicRate : settings.musicRate;
+
+  // The host announces this song (and rate) to the room; guests were routed
+  // here BY that announcement. Deduped in the store, so re-renders are safe.
+  useEffect(() => {
+    if (room?.isHost) announceSong(req.song, settings.musicRate, req.entry);
+  }, [room, req.song, req.entry, settings.musicRate]);
 
   // Charts available for this song, one per difficulty slot, ordered by slot (#8).
   const charts = useMemo(
@@ -219,30 +234,32 @@ export function PlayerOptions({
   const go = () => {
     if (versusActive) {
       // START = ready up (pins the difficulty pick in the same frame); the
-      // actual start comes from the match's load/go choreography below.
-      if (vsMatch && !selfReady) vsMatch.ready(pickOf(req.song, chart));
+      // actual start comes from the room's load/go choreography below.
+      if (room && !selfReady && room.phase === 'lobby' && room.song) {
+        room.ready(pickOf(req.song, chart));
+      }
       return;
     }
     onStart(chart, practiceSection);
   };
 
-  // Browsing the DIFFICULTY row shows live in the rival's lobby (until ready).
+  // Browsing the DIFFICULTY row shows live on everyone's roster (until ready).
   useEffect(() => {
-    if (vsMatch && !selfReady) vsMatch.sendPick(pickOf(req.song, chart));
-  }, [vsMatch, selfReady, req.song, chart]);
+    if (room && !selfReady) room.sendPick(pickOf(req.song, chart));
+  }, [room, selfReady, req.song, chart]);
 
-  // Both players ready -> the match asks for the session; hand the chosen
-  // chart up (App attaches the live session from the store). Attach/detach
-  // only — never create anything in an effect (StrictMode runs this twice).
+  // Everyone ready -> the room asks for the session; hand the chosen chart up
+  // (App attaches the live room from the store). Attach/detach only — never
+  // create anything in an effect (StrictMode runs this twice).
   const handoffRef = useRef<() => void>(() => {});
   handoffRef.current = () => onStart(chart, null);
   useEffect(() => {
-    if (!vsMatch) return;
-    vsMatch.onLoadRequested = () => handoffRef.current();
+    if (!room) return;
+    room.onLoadRequested = () => handoffRef.current();
     return () => {
-      vsMatch.onLoadRequested = undefined;
+      room.onLoadRequested = undefined;
     };
-  }, [vsMatch]);
+  }, [room]);
 
   type OptionRow = {
     label: string;
@@ -373,37 +390,39 @@ export function PlayerOptions({
     },
     {
       label: 'MUSIC RATE',
-      value: `${effRate.toFixed(2)}×${versusActive ? ' · LOCKED' : ''}`,
-      help: versusActive
-        ? 'Locked for versus — both machines must play the same audio speed (the rate the room was created with).'
-        : 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
+      value: `${effRate.toFixed(2)}×${room && !room.isHost ? ' · ROOM' : ''}`,
+      help:
+        room && !room.isHost
+          ? 'Set by the host — every machine in the room plays the same audio speed.'
+          : room
+            ? 'Playback speed for the WHOLE room — changing it un-readies everyone (the race must run one speed).'
+            : 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
       adjust: (dir) => {
-        if (versusActive) return;
+        if (room && !room.isHost) return;
         update({
           musicRate: Math.max(0.5, Math.min(2, +(settings.musicRate + dir * 0.05).toFixed(2))),
         });
       },
     },
     {
-      label: 'LIVE VERSUS',
+      label: 'MULTIPLAYER',
       kind: 'action',
       value:
         vs.k === 'idle'
           ? 'HOST A ROOM ▸'
           : vs.k === 'busy'
             ? 'CREATING…'
-            : vs.k === 'hosting'
-              ? 'HOSTING — LEAVE ✕'
-              : vs.k === 'error'
-                ? 'TRY AGAIN ▸'
-                : 'CONNECTED — LEAVE ✕',
-      valueColor: vs.k === 'connected' ? '#59f07f' : undefined,
+            : vs.k === 'error'
+              ? 'TRY AGAIN ▸'
+              : 'IN ROOM — LEAVE ✕',
+      valueColor: vs.k === 'in-room' ? '#59f07f' : undefined,
       help: versusActive
-        ? 'Press again (or SELECT) to leave the room — your rival is told. The room details live in the LIVE VERSUS block below.'
-        : 'Race a friend live on this song: press to create a room — you get a 6-arrow code and an invite link they join with, and you each pick your own difficulty.',
+        ? 'Press to leave the room — everyone else is told, and they keep playing without you.'
+        : 'Race friends live on this song: press to open a room — you get a 6-arrow code and an invite link they join with. The room lasts across songs; everyone picks their own difficulty.',
       adjust: () => {
-        if (versusActive) abandonVersus();
-        else void hostVersus(req.song, settings.musicRate, req.entry);
+        if (vs.k === 'in-room') leaveRoom();
+        else if (vs.k === 'error') dismissRoomError();
+        else if (vs.k === 'idle') void hostRoom();
       },
     },
     {
@@ -445,10 +464,17 @@ export function PlayerOptions({
       else if (e.key === 'ArrowRight') curRow.adjust(1);
       else if (e.key === 'Enter' || role === 'confirm') go();
       else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') {
-        // One level per press: with a versus session live, SELECT leaves the
-        // room (back to solo options); otherwise it leaves the screen.
-        if (versusActive) abandonVersus();
-        else onBack();
+        // One level per press. Host: back to the songs — the ROOM persists,
+        // only the song pick is withdrawn. Guest: leave the room but keep the
+        // screen (the song is loaded — play on solo); next press backs out.
+        if (room?.isHost) {
+          clearAnnouncedSong();
+          onBack();
+        } else if (versusActive) {
+          leaveRoom();
+        } else {
+          onBack();
+        }
       } else return;
       e.preventDefault();
     };
@@ -481,19 +507,32 @@ export function PlayerOptions({
           <span>▲▼ OPTION</span>
           <span>◀▶ CHANGE</span>
           <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>
-            {vs.k === 'connected'
+            {vs.k === 'in-room'
               ? selfReady
-                ? 'WAITING FOR RIVAL…'
+                ? 'WAITING FOR PLAYERS…'
                 : 'START — READY'
               : versusActive
-                ? 'WAITING FOR RIVAL…'
+                ? 'WAITING…'
                 : 'START — PLAY'}
           </span>
           <button
-            onClick={() => (versusActive ? abandonVersus() : onBack())}
+            onClick={() => {
+              if (room?.isHost) {
+                clearAnnouncedSong();
+                onBack();
+              } else if (versusActive) {
+                leaveRoom();
+              } else {
+                onBack();
+              }
+            }}
             className="hover:text-[#ececec]"
           >
-            {versusActive ? 'SELECT — LEAVE VERSUS' : 'SELECT — BACK TO SONGS'}
+            {room?.isHost
+              ? 'SELECT — BACK (ROOM STAYS)'
+              : versusActive
+                ? 'SELECT — LEAVE ROOM'
+                : 'SELECT — BACK TO SONGS'}
           </button>
         </>
       }
@@ -667,24 +706,45 @@ export function PlayerOptions({
             <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/45">
               {curRow.help}
             </div>
-            <VersusLobby
-              vs={vs}
-              selfPick={pickOf(req.song, chart)}
-              selfReady={selfReady}
-              onReady={go}
-            />
+            {versusActive && (
+              <div className="mt-1">
+                <RoomDock
+                  vs={vs}
+                  status={
+                    room
+                      ? room.players.filter((p) => !p.left).length < 2
+                        ? 'WAITING FOR PLAYERS — SHARE THE CODE OR LINK'
+                        : selfReady
+                          ? 'WAITING FOR EVERYONE TO READY UP…'
+                          : 'PICK YOUR DIFFICULTY, THEN START'
+                      : undefined
+                  }
+                  action={
+                    room && !selfReady && room.song ? (
+                      <button
+                        onClick={go}
+                        className="border px-3 py-[3px] text-[11px] font-bold tracking-[0.14em]"
+                        style={{ borderColor: AC }}
+                      >
+                        READY UP
+                      </button>
+                    ) : undefined
+                  }
+                />
+              </div>
+            )}
             <button
               onClick={go}
-              disabled={versusActive && (vs.k !== 'connected' || selfReady)}
+              disabled={versusActive && (vs.k !== 'in-room' || selfReady || !room?.song)}
               className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em] disabled:opacity-40"
               style={{ background: AC, color: '#0b0c0e' }}
             >
-              {vs.k === 'connected'
+              {vs.k === 'in-room'
                 ? selfReady
-                  ? 'WAITING FOR RIVAL…'
+                  ? 'WAITING FOR PLAYERS…'
                   : 'READY ▸'
                 : versusActive
-                  ? 'WAITING FOR RIVAL…'
+                  ? 'WAITING…'
                   : practice.on
                     ? 'START PRACTICE ▸'
                     : 'START ▸'}

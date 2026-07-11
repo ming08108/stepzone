@@ -13,13 +13,15 @@ import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
-import type { VersusMatch } from '../net/versusMatch';
+import type { PlayResult } from '../net/protocol';
 import { GhostRace, type GhostInfo } from './GhostRace';
-import { VersusBar } from './VersusBar';
-import { addSongPlay, addSteps } from '../app/stats';
+import { RivalBars, RoomStandings } from './RoomRace';
+import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
 import type { PlayRequest } from './playRequest';
+import { roomState, subscribeRoom } from './roomStore';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
+import { useSyncExternalStore } from 'react';
 
 type Phase = 'ready' | 'playing' | 'done' | 'error';
 
@@ -169,38 +171,6 @@ function FpsMeter() {
   );
 }
 
-/** Versus standings on the results screen — WIN/LOSE once the rival's result
- *  arrives (the parent re-renders on match updates), waiting/DNF before. */
-function VersusOutcome({
-  match,
-  name,
-  yourPercent,
-}: {
-  match: VersusMatch;
-  name: string;
-  yourPercent: number;
-}) {
-  const o = match.opponent;
-  if (o.result) {
-    const win = yourPercent > o.result.percent;
-    const tie = yourPercent === o.result.percent;
-    return (
-      <div
-        className="text-[16px] font-bold tracking-[0.18em]"
-        style={{ color: tie ? '#ffd94b' : win ? '#59f07f' : '#ff5d47' }}
-      >
-        {tie ? 'DRAW' : win ? 'YOU WIN' : `${name} WINS`} · YOU {(yourPercent * 100).toFixed(2)}% —{' '}
-        {name} {(o.result.percent * 100).toFixed(2)}%
-      </div>
-    );
-  }
-  return (
-    <div className="text-[13px] tracking-[0.16em] text-[#ececec]/50">
-      {o.left ? `${name} DISCONNECTED` : `WAITING FOR ${name} TO FINISH…`}
-    </div>
-  );
-}
-
 export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
   const { settings } = useSettings();
   // Versus locks the room's music rate; everything (session, ranking, the
@@ -236,27 +206,34 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   // results screen so RETRY counts as a fresh play.
   const playCountedRef = useRef(false);
 
-  // Versus: re-render on match updates (opponent ready/snaps/finish), and take
-  // over the update hook from the versus panel (which has unmounted by now).
-  const [, setVsTick] = useState(0);
+  // Room race: re-render on room updates (rivals readying/snapping/finishing)
+  // via the store subscription; the room itself outlives this screen.
+  useSyncExternalStore(subscribeRoom, roomState);
   const [vsWaiting, setVsWaiting] = useState(false);
   const versusRef = useRef(req.versus);
   versusRef.current = req.versus;
+  // Report our race result exactly once (natural finish, fail, or quit-DNF).
+  const finishSentRef = useRef(false);
+  const sendFinish = (r: PlayResult) => {
+    const room = versusRef.current?.room;
+    if (!room || finishSentRef.current) return;
+    finishSentRef.current = true;
+    room.finish(r);
+  };
+  // Wall-clock gameplay time for the lifetime stats.
+  const playStartedAtRef = useRef(0);
   useEffect(() => {
-    const m = req.versus?.match;
-    if (!m) return;
-    m.onLoadRequested = undefined; // the panel's handoff already ran
-    m.onUpdate = () => setVsTick((t) => t + 1);
-    return () => {
-      m.onUpdate = undefined;
-    };
-  }, [req.versus]);
+    if (phase === 'playing') playStartedAtRef.current = performance.now();
+  }, [phase]);
+  // Standings reveal (results screen): first confirm skips, later ones continue.
+  const [skipSignal, setSkipSignal] = useState(0);
+  const standingsRevealedRef = useRef(false);
 
-  // Stream to the rival while playing: freshly-judged notes (their copy of
+  // Stream to the rivals while playing: freshly-judged notes (their copy of
   // our playfield) every tick, the scoreboard snap every other tick. Derived
   // stats and display events only — judging never crosses the wire.
   useEffect(() => {
-    const m = req.versus?.match;
+    const m = req.versus?.room;
     if (!m || phase !== 'playing') return;
     // Judgments resolve near-chronologically (misses age via a forward
     // cursor), so a scan pointer over the time-sorted notes finds new ones in
@@ -282,8 +259,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // Paint the rival mirror from their judged-note feed (display only —
       // mirror the judge's own rule: consumed by input unless it was a Miss).
       const rv = rivalRef.current;
-      if (rv) {
-        const feed = m.opponentNotes;
+      const rival = rv ? m.players.find((p) => p.id === rv.id) : undefined;
+      if (rv && rival) {
+        const feed = rival.notes;
         const nowS = s.songNow;
         while (rv.cursor < feed.length) {
           const { i, tns } = feed[rv.cursor++];
@@ -300,7 +278,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             rv.feedback.lastJudgment = { tns, atSeconds: nowS, white: false };
           }
         }
-        const snap = m.opponent.snap;
+        const snap = rival.snap;
         if (snap) {
           rv.judge.combo = snap.combo;
           rv.judge.life = snap.life;
@@ -320,8 +298,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   }, [phase, req.versus]);
 
   // The rival's mirror judge/feedback (painted from the streamed feed above,
-  // drawn by the session as a second field view on the same canvas).
-  const rivalRef = useRef<{ judge: Judge; feedback: Feedback; cursor: number } | null>(null);
+  // drawn by the session as a second field view on the same canvas). Only a
+  // 1v1 race mounts it — with more rivals the bars carry the race.
+  const rivalRef = useRef<{
+    id: number;
+    judge: Judge;
+    feedback: Feedback;
+    cursor: number;
+  } | null>(null);
 
   // Race-the-ghost: the best stored timeline on this board (world best with a
   // ghost, which may be your own PB). Fetched once per song; absent offline.
@@ -423,6 +407,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       return;
     }
     if (e.role === 'confirm') {
+      // While the standings are still revealing, the first confirm SKIPS the
+      // show (before the focused CONTINUE can swallow the press).
+      if (phaseRef.current === 'done' && versusRef.current && !standingsRevealedRef.current) {
+        e.nativeEvent?.preventDefault();
+        setSkipSignal((s) => s + 1);
+        return;
+      }
       // A focused button already activates on the native Enter keydown — only
       // route to a button when nothing else will handle it.
       if (e.device === 'keyboard' && document.activeElement?.tagName === 'BUTTON') return;
@@ -437,6 +428,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   useEffect(
     () => () => {
       bankSteps(sessionRef.current);
+      // Quitting a race mid-song is a DNF — tell the room before the session
+      // dies (the room itself lives on; only this play's ride-along ends).
+      const s = sessionRef.current;
+      const room = versusRef.current?.room;
+      if (s && room && phaseRef.current === 'playing') {
+        sendFinish({
+          percent: Math.max(0, Math.min(1, s.judge.percentDancePoints)),
+          grade: s.judge.grade,
+          maxCombo: s.judge.maxCombo,
+          failed: true,
+          counts: { ...s.judge.tapCounts },
+          holdCounts: { ...s.judge.holdCounts },
+        });
+      }
+      if (room) room.onGo = undefined;
       sessionRef.current?.stop();
       cleanupBg();
       if (quitTimerRef.current !== null) clearTimeout(quitTimerRef.current);
@@ -454,10 +460,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   }, [phase]);
 
   // Ready/done overlays: focus the primary button so Enter/confirm activate it.
-  // Entering results resets the selection to CONTINUE.
+  // Entering results resets the selection to CONTINUE and re-arms the
+  // standings reveal (a race's first confirm skips the show, not the screen).
   useEffect(() => {
     if (phase !== 'playing') ctaRef.current?.focus();
-    if (phase === 'done') setDoneSel(0);
+    if (phase === 'done') {
+      setDoneSel(0);
+      standingsRevealedRef.current = !versusRef.current;
+    }
   }, [phase]);
 
   // On the results screen, keep DOM focus on the ▲▼-selected button so a
@@ -494,8 +504,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     // view on the session's own canvas. The 100 ms streamer below paints it
     // from their judged-note feed; the session just draws what's there.
     rivalRef.current = null;
-    if (req.versus?.opponentChart) {
-      const rc = req.versus.opponentChart;
+    const soloRival = req.versus?.opponents.length === 1 ? req.versus.opponents[0] : null;
+    if (soloRival?.chart) {
+      const rc = soloRival.chart;
       const rnd = rc.getNoteData();
       const rTiming = rc.getTimingData(req.song.timing);
       const rivalJudge = new Judge(rnd, rTiming, DEFAULT_WINDOWS, effRate, null);
@@ -508,13 +519,18 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         numTracks: rnd.numTracks,
         columnAngles: columnAnglesFor(rc.stepsType, rnd.numTracks),
         meta: {
-          title: req.versus.opponentName,
+          title: soloRival.name,
           subtitle: 'LIVE RIVAL',
           difficulty: `${rc.stepsType}  ·  ${difficultyToString(rc.difficulty).toUpperCase()} ${rc.meter}`,
         },
       });
       session.rivalSource = { judge: rivalJudge, feedback: rivalFeedback };
-      rivalRef.current = { judge: rivalJudge, feedback: rivalFeedback, cursor: 0 };
+      rivalRef.current = {
+        id: soloRival.id,
+        judge: rivalJudge,
+        feedback: rivalFeedback,
+        cursor: 0,
+      };
     }
     setLoopNum(1);
     session.onLoop = setLoopNum;
@@ -562,8 +578,16 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
         });
       }
-      // Tell the rival how it went; standings render once both results exist.
-      req.versus?.match.finish({
+      // Lifetime stats: fold the finished play in (steps bank separately).
+      recordPlayEnd({
+        seconds: Math.max(0, (performance.now() - playStartedAtRef.current) / 1000),
+        failed: judge.failed,
+        counts,
+        holdCounts: { ...judge.holdCounts },
+        maxCombo: judge.maxCombo,
+      });
+      // Tell the room how it went; standings fill in as results arrive.
+      sendFinish({
         percent: Math.max(0, Math.min(1, judge.percentDancePoints)),
         grade: judge.grade,
         maxCombo: judge.maxCombo,
@@ -628,9 +652,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     // paths flip us to 'error' via onError — don't stomp that.
     setPhase('ready');
     if (req.versus) {
-      // Versus: prepare (GPU + decode), report loaded, and hold until the
-      // host's latency-compensated 'go' — both machines begin on one instant.
-      const m = req.versus.match;
+      // Room race: prepare (GPU + decode), report loaded, and hold until the
+      // host's latency-compensated 'go' — every machine begins on one instant.
+      const m = req.versus.room;
+      finishSentRef.current = false;
       m.onGo = (delayMs) => {
         window.setTimeout(() => {
           if (sessionRef.current === session && session.usingGpuRenderer) {
@@ -727,11 +752,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       )}
 
       {phase === 'playing' && req.versus && sessionRef.current && (
-        <VersusBar
-          session={sessionRef.current}
-          match={req.versus.match}
-          name={`${req.versus.opponentName} · LV${req.versus.opponentPick.meter}`}
-        />
+        <RivalBars session={sessionRef.current} versus={req.versus} />
       )}
 
       {phase === 'playing' && req.practice && (
@@ -767,7 +788,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                 className="mt-4 text-[14px] tracking-[0.22em] text-[#ececec]/60"
                 style={{ animation: 'blinkStart 1.4s infinite' }}
               >
-                {req.versus && vsWaiting ? `SYNCING WITH ${req.versus.opponentName}…` : 'LOADING…'}
+                {req.versus && vsWaiting ? 'SYNCING WITH THE ROOM…' : 'LOADING…'}
               </div>
             </>
           )}
@@ -791,10 +812,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             <>
               <ResultHeader result={result} />
               {req.versus && (
-                <VersusOutcome
-                  match={req.versus.match}
-                  name={`${req.versus.opponentName} (LV${req.versus.opponentPick.meter})`}
-                  yourPercent={result.percent}
+                <RoomStandings
+                  versus={req.versus}
+                  skipSignal={skipSignal}
+                  onRevealed={(done) => (standingsRevealedRef.current = done)}
                 />
               )}
               {result.isNewRecord && (
@@ -807,21 +828,25 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
                   RATE ×{effRate.toFixed(2)} — SCORE NOT SAVED
                 </div>
               )}
-              <div className="mt-3 w-[400px] max-w-full">
-                {JUDGMENT_ROWS.map(([tns, label, color]) => (
-                  <div
-                    key={tns}
-                    className="flex justify-between border-b border-white/[0.06] py-1 text-[18px] tracking-[0.1em]"
-                  >
-                    <span style={{ color }}>{label}</span>
-                    <span className="font-bold tabular-nums">{result.counts[tns] ?? 0}</span>
+              {/* A race's results screen is the standings — the per-judgment
+                  table would push a full party off-screen; solo keeps it. */}
+              {!req.versus && (
+                <div className="mt-3 w-[400px] max-w-full">
+                  {JUDGMENT_ROWS.map(([tns, label, color]) => (
+                    <div
+                      key={tns}
+                      className="flex justify-between border-b border-white/[0.06] py-1 text-[18px] tracking-[0.1em]"
+                    >
+                      <span style={{ color }}>{label}</span>
+                      <span className="font-bold tabular-nums">{result.counts[tns] ?? 0}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between border-t border-white/20 py-1 text-[18px] tracking-[0.1em]">
+                    <span className="text-[#ececec]/60">MAX COMBO</span>
+                    <span className="font-bold tabular-nums">{result.maxCombo}</span>
                   </div>
-                ))}
-                <div className="flex justify-between border-t border-white/20 py-1 text-[18px] tracking-[0.1em]">
-                  <span className="text-[#ececec]/60">MAX COMBO</span>
-                  <span className="font-bold tabular-nums">{result.maxCombo}</span>
                 </div>
-              </div>
+              )}
               <OffsetGraph offsets={result.offsets} />
               {result.best && (
                 <div className="text-[13px] tracking-[0.1em] text-[#ececec]/50">

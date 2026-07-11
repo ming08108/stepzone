@@ -4,11 +4,16 @@
  * it brokers the room code and the WebRTC SDP offer/answer, then gets out of
  * the way — the match runs peer-to-peer (docs/VERSUS.md).
  *
+ * Signaling v2 is joiner-initiated (one room, many joiners) — the host polls
+ * for joins and that poll doubles as its heartbeat.
+ *
  * Routes:
- *   POST {t:'create', hostName, chart, musicRate, offer} -> { code }
- *   POST {t:'answer', code, joinerName, answer}          -> { ok } | 404/409
- *   GET  ?code=XXXXXX          (joiner) -> { hostName, chart, musicRate, offer }
- *   GET  ?code=XXXXXX&role=host (host poll) -> { answer, joinerName } (nulls until joined)
+ *   POST {t:'create', hostName}            -> { code }
+ *   POST {t:'join', code, joinerName, offer} -> { joinId } | 404 not_found
+ *   POST {t:'answer', code, joinId, answer}  -> { ok: true } | 404 not_found
+ *   GET  ?code=XXXXXX             (lookup)     -> { hostName } | 404
+ *   GET  ?code=XXXXXX&role=host   (host poll)  -> { joins: [...] } (heartbeats) | 404
+ *   GET  ?code=XXXXXX&joinId=YYY  (join poll)  -> { answer } | 404
  */
 
 import { error, json } from './httpResponse';
@@ -31,17 +36,30 @@ export function createSignalHandlers(
       const url = new URL(req.url);
       const code = url.searchParams.get('code');
       if (!isRoomCode(code)) return error(400, 'bad_request', 'invalid room code');
-      const room = await store.get(code, now());
-      if (!room) return error(404, 'not_found', 'no such room (or it expired)');
-      if (url.searchParams.get('role') === 'host') {
-        return json(200, { answer: room.answer, joinerName: room.joinerName });
+
+      // Joiner polling for its answer.
+      const joinId = url.searchParams.get('joinId');
+      if (joinId !== null) {
+        const join = await store.getJoin(code, joinId, now());
+        if (!join) return error(404, 'not_found', 'no such join (or it expired)');
+        return json(200, { answer: join.answer });
       }
-      return json(200, {
-        hostName: room.hostName,
-        song: room.song,
-        musicRate: room.musicRate,
-        offer: room.offer,
-      });
+
+      // Host polling for joins — also refreshes the room heartbeat.
+      if (url.searchParams.get('role') === 'host') {
+        if (!(await store.heartbeat(code, now()))) {
+          return error(404, 'not_found', 'no such room (or it expired)');
+        }
+        const joins = await store.pendingJoins(code, now());
+        return json(200, {
+          joins: joins.map((j) => ({ joinId: j.joinId, joinerName: j.joinerName, offer: j.offer })),
+        });
+      }
+
+      // Plain lookup before joining.
+      const room = await store.getRoom(code, now());
+      if (!room) return error(404, 'not_found', 'no such room (or it expired)');
+      return json(200, { hostName: room.hostName });
     },
 
     async POST(req: Request): Promise<Response> {
@@ -60,24 +78,36 @@ export function createSignalHandlers(
         // Codes are 4^6 — collisions are rare; retry a few times then give up.
         for (let attempt = 0; attempt < 5; attempt++) {
           const code = randomRoomCode();
-          const ok = await store.create({
+          const at = now();
+          const ok = await store.createRoom({
             code,
             hostName: msg.hostName,
-            song: msg.song,
-            musicRate: msg.musicRate,
-            offer: msg.offer,
-            answer: null,
-            joinerName: null,
-            createdAt: now(),
+            createdAt: at,
+            lastSeen: at,
           });
           if (ok) return json(200, { code });
         }
         return error(503, 'busy', 'could not allocate a room code');
       }
 
-      const outcome = await store.answer(msg.code, msg.joinerName, msg.answer, now());
-      if (outcome === 'not_found') return error(404, 'not_found', 'no such room (or it expired)');
-      if (outcome === 'taken') return error(409, 'taken', 'room already has a player');
+      if (msg.t === 'join') {
+        const joinId = crypto.randomUUID();
+        const outcome = await store.addJoin({
+          code: msg.code,
+          joinId,
+          joinerName: msg.joinerName,
+          offer: msg.offer,
+          answer: null,
+          createdAt: now(),
+        });
+        if (outcome === 'no_room') return error(404, 'not_found', 'no such room (or it expired)');
+        return json(200, { joinId });
+      }
+
+      // msg.t === 'answer'
+      if (!(await store.answerJoin(msg.code, msg.joinId, msg.answer, now()))) {
+        return error(404, 'not_found', 'no such pending join');
+      }
       return json(200, { ok: true });
     },
   };

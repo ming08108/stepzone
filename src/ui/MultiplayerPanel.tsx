@@ -1,0 +1,239 @@
+/**
+ * The multiplayer panel — host or join a persistent room from SONG SELECT,
+ * no song required (docs/VERSUS.md). Opened from the pack grid's SELECT, the
+ * hint-bar button, or a ?join= share link. Pad-operable throughout: ▲▼ picks
+ * HOST/JOIN, START confirms, the join code is pressed as 6 arrows, SELECT
+ * backs out. Mouse mirrors on everything. Once in a room the panel shows the
+ * roster (the dock takes over after closing); the room itself lives in the
+ * roomStore and survives every screen change.
+ */
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { keyboardRole } from '../input/inputBus';
+import { CODE_ARROWS, CODE_LENGTH, codeToArrows } from '../net/versus';
+import { dismissRoomError, hostRoom, joinRoomByCode, roomState, subscribeRoom } from './roomStore';
+import { RoomDock } from './RoomDock';
+
+const AC = '#ff5d47';
+const ARROW_GLYPH: Record<string, string> = { L: '←', D: '↓', U: '↑', R: '→' };
+
+/** Auto-join dedupe across StrictMode's dev double-mount — only the first
+ *  instance starts the join; its store writes outlive the remount. */
+const autoJoined = new Set<string>();
+
+type Step = { k: 'menu'; sel: number } | { k: 'enter'; code: string };
+
+export function MultiplayerPanel({
+  initialCode,
+  onClose,
+}: {
+  /** Room code from a ?join= share link — auto-joins on open. */
+  initialCode?: string;
+  onClose: () => void;
+}) {
+  const vs = useSyncExternalStore(subscribeRoom, roomState);
+  const [step, setStep] = useState<Step>({ k: 'menu', sel: 0 });
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  const vsRef = useRef(vs);
+  vsRef.current = vs;
+
+  // A ?join= share link goes straight to connecting (once — see autoJoined).
+  useEffect(() => {
+    if (initialCode && !autoJoined.has(initialCode)) {
+      autoJoined.add(initialCode);
+      void joinRoomByCode(initialCode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const activate = (sel: number) => {
+    if (sel === 0) void hostRoom();
+    else setStep({ k: 'enter', code: '' });
+  };
+
+  const pressArrow = (a: string) => {
+    const s = stepRef.current;
+    if (s.k !== 'enter') return;
+    const code = s.code + a;
+    if (code.length >= CODE_LENGTH) {
+      setStep({ k: 'menu', sel: 1 });
+      void joinRoomByCode(code);
+    } else {
+      setStep({ k: 'enter', code });
+    }
+  };
+
+  useEffect(() => {
+    const ARROW_KEY: Record<string, string> = {
+      ArrowLeft: 'L',
+      ArrowDown: 'D',
+      ArrowUp: 'U',
+      ArrowRight: 'R',
+    };
+    const onKey = (e: KeyboardEvent) => {
+      // confirm/back honor custom keybinds (e.g. Slash → confirm), not just Enter.
+      const role = keyboardRole(e.code);
+      const isConfirm = e.key === 'Enter' || role === 'confirm';
+      const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
+      const arrow = ARROW_KEY[e.key];
+      if (!isConfirm && !isBack && !arrow) return;
+      e.preventDefault();
+      const s = stepRef.current;
+      const state = vsRef.current;
+      if (isBack) {
+        if (state.k === 'error') dismissRoomError();
+        else if (s.k === 'enter') setStep({ k: 'menu', sel: 1 });
+        else onClose();
+        return;
+      }
+      if (state.k === 'error') {
+        if (isConfirm) dismissRoomError();
+        return;
+      }
+      if (state.k === 'in-room' || state.k === 'busy') {
+        if (isConfirm && state.k === 'in-room') onClose(); // roster seen — go browse
+        return;
+      }
+      if (s.k === 'menu') {
+        if (arrow === 'U' || arrow === 'D') {
+          setStep({ k: 'menu', sel: s.sel === 0 ? 1 : 0 });
+        } else if (isConfirm) {
+          activate(s.sel);
+        }
+      } else if (arrow) {
+        pressArrow(arrow);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const menuRows = [
+    { label: 'HOST A ROOM', hint: 'Get a 6-arrow code and an invite link friends join with.' },
+    { label: 'JOIN WITH CODE', hint: 'Press the 6 arrows from the host’s screen.' },
+  ];
+
+  return (
+    <div className="absolute inset-0 z-[30] flex items-center justify-center bg-black/60">
+      <div className="flex w-[560px] max-w-[92%] flex-col border border-white/15 bg-[#0b0c0e] shadow-2xl">
+        <div className="flex flex-none items-baseline gap-3 border-b border-white/[0.09] px-5 py-3">
+          <span className="text-[13px] font-bold tracking-[0.22em]" style={{ color: AC }}>
+            MULTIPLAYER
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-bold">
+            {vs.k === 'in-room' ? 'YOUR ROOM' : 'PLAY WITH FRIENDS'}
+          </span>
+          <button
+            onClick={onClose}
+            title="Close"
+            className="flex-none px-1 text-[15px] text-[#ececec]/50 hover:text-[#ececec]"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="min-h-[170px] px-6 py-5">
+          {vs.k === 'busy' && (
+            <div className="py-10 text-center text-[13px] tracking-[0.16em] text-[#ececec]/70">
+              {vs.message}
+            </div>
+          )}
+
+          {vs.k === 'error' && (
+            <div className="flex flex-col items-center gap-4 py-6">
+              <div className="text-center text-[13px] tracking-[0.14em] text-[#ffd94b]">
+                {vs.message}
+              </div>
+              <button
+                onClick={dismissRoomError}
+                className="border px-5 py-1.5 text-[12px] tracking-[0.16em]"
+                style={{ borderColor: AC }}
+              >
+                TRY AGAIN
+              </button>
+            </div>
+          )}
+
+          {vs.k === 'in-room' && (
+            <div className="flex flex-col gap-3">
+              <RoomDock
+                vs={vs}
+                status="Close this panel and pick songs together — the room stays."
+              />
+              <div className="text-[12px] leading-relaxed text-[#ececec]/55">
+                The room lasts as long as the host stays — play as many songs as you like.
+                {vs.room.isHost
+                  ? ' You pick the songs; everyone picks their own difficulty.'
+                  : ' The host picks the songs; you pick your own difficulty.'}
+              </div>
+            </div>
+          )}
+
+          {vs.k === 'idle' && step.k === 'menu' && (
+            <div className="flex flex-col gap-2 py-1">
+              {menuRows.map((row, i) => {
+                const on = step.sel === i;
+                return (
+                  <div
+                    key={row.label}
+                    onClick={() => activate(i)}
+                    className="flex cursor-pointer items-center gap-4 border border-l-[3px] px-4 py-3"
+                    style={{
+                      borderColor: on ? AC : 'rgba(255,255,255,.12)',
+                      borderLeftColor: on ? AC : 'transparent',
+                      background: on ? AC + '14' : 'transparent',
+                    }}
+                  >
+                    <span
+                      className="flex-none text-[14px] font-bold tracking-[0.16em]"
+                      style={{ color: on ? AC : '#ececec' }}
+                    >
+                      {row.label}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-right text-[12px] text-[#ececec]/50">
+                      {row.hint}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {vs.k === 'idle' && step.k === 'enter' && (
+            <div className="flex flex-col items-center gap-3 py-2">
+              <div className="text-[12px] tracking-[0.2em] text-[#ececec]/55">ENTER ROOM CODE</div>
+              <div className="text-[42px] font-bold tracking-[0.18em]">
+                {codeToArrows(step.code)}
+                <span className="text-[#ececec]/30">
+                  {' · '.repeat(Math.max(0, CODE_LENGTH - step.code.length)).trimEnd()}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                {CODE_ARROWS.map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => pressArrow(a)}
+                    className="border border-white/15 px-4 py-2 text-[20px] leading-none text-[#ececec]/85 hover:border-[#ff5d47] hover:text-[#ececec]"
+                  >
+                    {ARROW_GLYPH[a]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-none justify-end border-t border-white/[0.09] px-5 py-2">
+          <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
+            {vs.k === 'in-room'
+              ? 'START — BROWSE SONGS · SELECT — CLOSE'
+              : step.k === 'enter'
+                ? 'PRESS THE 6 ARROWS · SELECT — BACK'
+                : '▲▼ CHOOSE · START — CONFIRM · SELECT — CLOSE'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
