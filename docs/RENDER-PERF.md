@@ -35,9 +35,14 @@ Per scenario it reports:
 Scenarios: a typical hard chart (175BPM 16ths, X2.5) and a beyond-worst-case
 stress chart (200BPM 16ths + jumps + overlapping freezes/rolls + mines at X1 ≈
 74 arrows + 7 holds + 17 mines on screen, DANGER chrome forced), across
-backends and with a background image composited. `gpu-versus-dual` renders TWO
-stress fields on the one canvas (a second autoplayed mirror judge) — the live
-1v1 room-race path, so versus regressions show up here, not in production.
+backends and with a background image composited. The `gpu-versus-2p/3p/4p`
+scenarios render 2, 3 and 4 stress fields side by side on the one canvas (each
+an extra autoplayed mirror judge) — the live room-race path with up to 3
+rivals, so versus regressions show up here, not in production. Extra views cost
+the field only width: each is `canvasW / viewCount` wide, so the design scale
+shrinks and each column shows a narrower lane cluster (`fieldLeft` re-centres
+its lanes) — never height, and everything shares one full-canvas background/dim
+in a single render pass.
 
 ## Numbers (2026-07-11, worktree, 1920×1080 headless, vsync off)
 
@@ -57,6 +62,29 @@ headroom inside one 60 Hz refresh, ~18 inside a 240 Hz one. Frame p99 stays
 under 1 ms in every scenario; the residual risk is GC (28–55 pauses per 5 s
 window from ~8–58 KB allocated per frame), which has yet to show up in any
 p99.
+
+## Multi-player versus (2026-07-11, RTX 3080, 1920×1080@1dpr headless, vsync off)
+
+Up to 3 rivals share one canvas beside the main field (4 players max rendered;
+extra rivals ride the RivalBars overlay). Every view is the beyond-worst-case
+stress chart (200 BPM 16ths + jumps + freezes/rolls + mines) autoplayed, so all
+N fields animate at full note density at once. Uncapped,
+`--disable-gpu-vsync --disable-frame-rate-limit`:
+
+| scenario         | fps  | missed | draw CPU avg | draw CPU p99 | GPU avg  | frame p99 |
+| ---------------- | ---- | ------ | ------------ | ------------ | -------- | --------- |
+| versus 2 players | 3248 | 0%     | 0.18 ms      | 0.40 ms      | 0.087 ms | 0.70 ms   |
+| versus 3 players | 1901 | 0%     | 0.29 ms      | 0.50 ms      | 0.071 ms | 0.90 ms   |
+| versus 4 players | 1618 | 0%     | 0.37 ms      | 0.60 ms      | 0.062 ms | 1.10 ms   |
+
+CPU scales with view count (more instances to build per frame), but GPU time
+per frame actually _drops_ as players are added: extra views shrink the design
+scale, so each column rasterizes fewer/smaller pixels and total fill stays flat.
+The 4-field worst case binds at ~0.37 ms CPU / frame — ~45 frames of headroom
+inside one 60 Hz refresh (16.7 ms), frame p99 ~1.1 ms, and **0% missed frames**
+across 2/3/4 players. There is huge headroom; a full 4-player race never drops a
+frame at 60 Hz. (One-time atlas bake shows as `bakes=1` at the measure-window
+boundary; no mid-run bakes or buffer regrows.)
 
 ## Numbers (RTX 3080, 238Hz display, 1600×900@1dpr, Chrome 149)
 

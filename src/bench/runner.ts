@@ -42,9 +42,10 @@ export interface BenchScenario {
   /** Composite a moving background VIDEO — exercises the per-frame external-
    *  texture import + bind-group rebuild the image path never touches. */
   bgVideo?: boolean;
-  /** Render TWO field views on the one canvas (a second autoplayed mirror
-   *  judge) — the live-versus rival path (docs/VERSUS.md). */
-  dual?: boolean;
+  /** Render this many extra rival field views on the one canvas (0..3), each a
+   *  separate autoplayed mirror judge — the live-versus path (docs/VERSUS.md).
+   *  1 = 2 players, 3 = a full 4-player race. */
+  rivals?: number;
   /** Seconds of measured rAF time (default 5). */
   seconds?: number;
 }
@@ -100,12 +101,28 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
     scrollValue: 1,
   },
   {
-    id: 'gpu-versus-dual',
-    label: 'WEBGPU · VERSUS · TWO FIELDS',
+    id: 'gpu-versus-2p',
+    label: 'WEBGPU · VERSUS · 2 PLAYERS',
     noteSkin: 'arcade',
     chart: STRESS_CHART,
     scrollValue: 1,
-    dual: true,
+    rivals: 1,
+  },
+  {
+    id: 'gpu-versus-3p',
+    label: 'WEBGPU · VERSUS · 3 PLAYERS',
+    noteSkin: 'arcade',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+    rivals: 2,
+  },
+  {
+    id: 'gpu-versus-4p',
+    label: 'WEBGPU · VERSUS · 4 PLAYERS',
+    noteSkin: 'arcade',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+    rivals: 3,
   },
 ];
 
@@ -472,30 +489,46 @@ async function buildScene(
   field.setBeatTimes(beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), lastBeat));
   if (bg) field.setBackground(bg);
   else if (video) field.setBackground(video.el);
-  // Dual view: a second autoplayed mirror judge rendered as the rival field
-  // on the SAME canvas — exactly what a 1v1 room race draws every frame.
-  let rival: { judge: Judge; fb: Feedback; auto: Autoplayer } | null = null;
-  if (scn.dual) {
-    const rivalJudge = new Judge(chart.getNoteData(), timing);
-    const rivalFb: Feedback = {
-      lastJudgment: null,
-      laneFlash: new Array<number>(4).fill(-999),
-      laneHit: new Array<Feedback['laneHit'][number]>(4).fill(null),
-    };
-    rival = { judge: rivalJudge, fb: rivalFb, auto: new Autoplayer(rivalJudge, 4, rivalFb) };
-    field.setRival({
-      numTracks: 4,
-      columnAngles: columnAnglesFor('dance-single', 4),
-      meta: { title: 'RIVAL', subtitle: 'LIVE RIVAL', difficulty: BENCH_META.difficulty },
-    });
+  // Rival views: N autoplayed mirror judges rendered as extra fields on the
+  // SAME canvas — exactly what an N+1-player room race draws every frame.
+  const rivals: { judge: Judge; fb: Feedback; auto: Autoplayer }[] = [];
+  const rivalCount = scn.rivals ?? 0;
+  if (rivalCount > 0) {
+    for (let i = 0; i < rivalCount; i++) {
+      const rivalJudge = new Judge(chart.getNoteData(), timing);
+      const rivalFb: Feedback = {
+        lastJudgment: null,
+        laneFlash: new Array<number>(4).fill(-999),
+        laneHit: new Array<Feedback['laneHit'][number]>(4).fill(null),
+      };
+      rivals.push({ judge: rivalJudge, fb: rivalFb, auto: new Autoplayer(rivalJudge, 4, rivalFb) });
+    }
+    field.setRivals(
+      rivals.map((_, i) => ({
+        numTracks: 4,
+        columnAngles: columnAnglesFor('dance-single', 4),
+        meta: {
+          title: `RIVAL ${i + 1}`,
+          subtitle: 'LIVE RIVAL',
+          difficulty: BENCH_META.difficulty,
+        },
+      })),
+    );
   }
   field.prewarm(); // bake atlas + compile pipelines before the measured window
   return {
     ...common,
     render: (now, beat, progress) => {
-      if (rival) {
-        rival.auto.tick(now);
-        field.draw(judge, now, beat, progress, fb, { judge: rival.judge, feedback: rival.fb });
+      if (rivals.length) {
+        for (const rv of rivals) rv.auto.tick(now);
+        field.draw(
+          judge,
+          now,
+          beat,
+          progress,
+          fb,
+          rivals.map((rv) => ({ judge: rv.judge, feedback: rv.fb })),
+        );
       } else {
         field.draw(judge, now, beat, progress, fb);
       }

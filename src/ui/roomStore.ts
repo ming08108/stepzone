@@ -37,10 +37,11 @@ import type { PlayRequest, RoomPlayInfo } from './playRequest';
 import { addFiles, ensureLoaded, libraryState } from './libraryStore';
 import { chartForPick, findSongByAnyHash, pickOf } from './versusResolve';
 
-/** What a guest's auto-follow of the host's song pick is currently doing. */
+/** What a guest's auto-follow of the host's song pick is currently doing.
+ *  `progress` (0..1) is set during the P2P transfer for a progress bar. */
 export type FollowState =
   | { k: 'none' }
-  | { k: 'resolving'; message: string }
+  | { k: 'resolving'; message: string; progress?: number }
   | { k: 'ready'; req: PlayRequest }
   | { k: 'error'; message: string };
 
@@ -308,13 +309,14 @@ async function followSong(guest: RoomGuest, songRef: VersusSongRef | null): Prom
     setFollow({ k: 'none' });
     return;
   }
-  setFollow({ k: 'resolving', message: 'FINDING YOUR COPY…' });
+  setFollow({ k: 'resolving', message: 'FINDING YOUR COPY OF THE SONG…' });
   let local = findSongByAnyHash(libraryState().entries, songRef.charts);
   if (!local) {
     const got = await requestSongTransfer(guest, (received, total) =>
       setFollow({
         k: 'resolving',
-        message: `GETTING THE SONG FROM THE HOST… ${total > 0 ? Math.round((received / total) * 100) : 0}%`,
+        message: `DOWNLOADING THE SONG FROM THE HOST…`,
+        progress: total > 0 ? received / total : 0,
       }),
     );
     if (token !== followToken) return; // a newer broadcast superseded us
@@ -322,6 +324,7 @@ async function followSong(guest: RoomGuest, songRef: VersusSongRef | null): Prom
       setFollow({ k: 'error', message: 'SONG TRANSFER FAILED (HOST CANNOT SHARE IT)' });
       return;
     }
+    setFollow({ k: 'resolving', message: 'ADDING THE SONG TO YOUR LIBRARY…' });
     const dir = `Room Received/${songRef.title.replace(/[/\\]/g, '-')}`;
     const at = (name: string, content: BlobPart) => {
       const f = new File([content], name);

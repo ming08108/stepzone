@@ -97,6 +97,27 @@ function makeSkin(noteSkin: NoteSkin): GpuSkin {
   return noteSkin === 'itg' ? new SimplyLoveGpuSkin() : new DdrA3GpuSkin();
 }
 
+/** One side-by-side rival field view (live versus). Its chrome/notes/HUD draw
+ *  view-locally; the batch originX places it. Cursor/combo state persists across
+ *  frames here, one instance per rival, so views don't share a cursor. */
+interface RivalView {
+  numTracks: number;
+  columnAngles: readonly number[];
+  meta: RenderMeta;
+  fieldLeft: number;
+  firstVisibleIdx: number;
+  lastCombo: number;
+  comboPopAt: number;
+}
+
+/** Config the UI/bench pass to setRivals() (per-frame judged state rides in
+ *  draw()'s rivals argument, parallel by index). */
+export interface RivalConfig {
+  numTracks: number;
+  columnAngles: number[];
+  meta: RenderMeta;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
 }
@@ -148,19 +169,12 @@ export class GpuNoteField {
   private firstVisibleIdx = 0;
   private lastCombo = 0;
   private comboPopAt = -10;
-  /** Logical width of one field view: full canvas, or half with a rival. */
+  /** Logical width of one field view: full canvas, or canvasW / viewCount when
+   *  rivals share it (main + N rivals laid out side by side). */
   private viewW = 0;
-  /** The second, side-by-side field (live versus rival) sharing this canvas,
-   *  device and background — one render, uniform backdrop. */
-  private rival: {
-    numTracks: number;
-    columnAngles: readonly number[];
-    meta: RenderMeta;
-    fieldLeft: number;
-    firstVisibleIdx: number;
-    lastCombo: number;
-    comboPopAt: number;
-  } | null = null;
+  /** The side-by-side rival field views (live versus) sharing this canvas,
+   *  device and background — one render, uniform backdrop. Empty for solo. */
+  private rivals: RivalView[] = [];
   /** Per-beat elapsed times for the guide-line pass (null = no beat lines). */
   private beatLineTimes: Float64Array | null = null;
   private readonly scroll: ScrollState;
@@ -480,7 +494,11 @@ export class GpuNoteField {
   }
 
   private layout(): void {
-    this.viewW = this.rival ? this.width / 2 : this.width;
+    // Main + one column per rival, each an equal slice of the canvas. A narrower
+    // slice shrinks the design scale, so extra views cost the field only width,
+    // not height (fieldLeft re-centres each view's lanes within its column).
+    const viewCount = 1 + this.rivals.length;
+    this.viewW = this.width / viewCount;
     const ds = Math.max(
       MIN_DESIGN_SCALE,
       Math.min(this.height / DESIGN_SIZE, this.viewW / DESIGN_SIZE),
@@ -491,14 +509,8 @@ export class GpuNoteField {
     const off = this.skin.receptorOffset * ds;
     this.receptorY = this.cfg.reverse ? this.height - off : off;
     this.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.viewW, this.numTracks, this.colW, ds);
-    if (this.rival) {
-      this.rival.fieldLeft = this.skin.fieldLeft(
-        this.cfg.bare,
-        this.viewW,
-        this.rival.numTracks,
-        this.colW,
-        ds,
-      );
+    for (const rv of this.rivals) {
+      rv.fieldLeft = this.skin.fieldLeft(this.cfg.bare, this.viewW, rv.numTracks, this.colW, ds);
     }
     const s = this.scroll;
     s.mode = this.cfg.scrollMode;
@@ -509,13 +521,23 @@ export class GpuNoteField {
     s.height = this.height;
   }
 
-  /** Attach/detach the rival's side-by-side field view (live versus). The
-   *  rival's judged state is passed per frame via draw()'s rival argument. */
-  setRival(rival: { numTracks: number; columnAngles: number[]; meta: RenderMeta } | null): void {
-    this.rival = rival
-      ? { ...rival, fieldLeft: 0, firstVisibleIdx: 0, lastCombo: 0, comboPopAt: -10 }
-      : null;
+  /** Set the side-by-side rival field views (live versus); pass [] for solo.
+   *  Each rival's judged state is passed per frame via draw()'s rivals argument,
+   *  matched by index. Layout re-slices the canvas into 1 + rivals.length views. */
+  setRivals(cfgs: RivalConfig[]): void {
+    this.rivals = cfgs.map((c) => ({
+      ...c,
+      fieldLeft: 0,
+      firstVisibleIdx: 0,
+      lastCombo: 0,
+      comboPopAt: -10,
+    }));
     this.layout();
+  }
+
+  /** Number of rival views currently laid out (0 = solo full-width field). */
+  get rivalCount(): number {
+    return this.rivals.length;
   }
 
   /** A shared 4×4 white sprite for solid fills / gradient-tinted quads. */
@@ -568,7 +590,7 @@ export class GpuNoteField {
     beat: number,
     progress: number,
     fb: Feedback,
-    rival?: { judge: Judge; feedback: Feedback },
+    rivals?: { judge: Judge; feedback: Feedback }[],
   ): void {
     if (this.lost) return;
     const { width, height, ds } = this;
@@ -623,21 +645,29 @@ export class GpuNoteField {
     this.firstVisibleIdx = main.firstVisibleIdx;
     this.lastCombo = main.lastCombo;
     this.comboPopAt = main.comboPopAt;
-    if (this.rival && rival) {
-      const r = this.drawView(
-        { viewKey: 'rival', ...this.rival },
-        this.viewW,
-        rival.judge,
-        rival.feedback,
-        now,
-        beat,
-        progress,
-        beatPulse,
-        white,
-      );
-      this.rival.firstVisibleIdx = r.firstVisibleIdx;
-      this.rival.lastCombo = r.lastCombo;
-      this.rival.comboPopAt = r.comboPopAt;
+    // Each rival view is one canvas slice to the right of main, drawn from its
+    // own judged state (rivals[i]) and its own persisted cursor (this.rivals[i]).
+    if (rivals) {
+      const count = Math.min(this.rivals.length, rivals.length);
+      for (let i = 0; i < count; i++) {
+        const view = this.rivals[i];
+        const src = rivals[i];
+        if (!src) continue;
+        const r = this.drawView(
+          { viewKey: `rival${i}`, ...view },
+          (i + 1) * this.viewW,
+          src.judge,
+          src.feedback,
+          now,
+          beat,
+          progress,
+          beatPulse,
+          white,
+        );
+        view.firstVisibleIdx = r.firstVisibleIdx;
+        view.lastCombo = r.lastCombo;
+        view.comboPopAt = r.comboPopAt;
+      }
     }
     b.originX = 0;
     this.hudBatch.originX = 0;

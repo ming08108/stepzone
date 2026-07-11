@@ -50,6 +50,7 @@ export const DEFAULT_KEYBOARD_BINDINGS: Readonly<Record<string, ControlRole>> = 
   KeyK: 'right',
   Enter: 'confirm',
   NumpadEnter: 'confirm',
+  Slash: 'confirm', // "/" as a handy select key everywhere
   Escape: 'back',
   Backspace: 'back',
 };

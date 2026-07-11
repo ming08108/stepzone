@@ -84,6 +84,15 @@ export function NoteFieldPreview({
   liveRef.current = { scrollMode, scrollValue };
   const clockRef = useRef(clock);
   clockRef.current = clock;
+  // The chart (notes/timing/loop) is read through a ref so it can be SWAPPED on
+  // the existing GPU field without recreating the device — changing difficulty
+  // must NOT destroy+recreate the WebGPU device (that churn crashes Firefox and
+  // is wasteful everywhere). reloadRef, set by the create effect below, rebuilds
+  // the judge + beat lines in place; a second effect calls it when the data
+  // changes. Only a genuinely different device need (stepsType/skin) recreates.
+  const dataRef = useRef({ noteData, timing, loopWindow });
+  dataRef.current = { noteData, timing, loopWindow };
+  const reloadRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const canvas = ref.current;
@@ -93,8 +102,9 @@ export function NoteFieldPreview({
     let ro: ResizeObserver | null = null;
     let gpuField: GpuNoteField | null = null;
 
-    const maxBpm = songMaxBpm(timing.bpms);
-    const angles = columnAnglesFor(stepsType, noteData.numTracks);
+    const angles = columnAnglesFor(stepsType, dataRef.current.noteData.numTracks);
+    const maxBpm = songMaxBpm(dataRef.current.timing.bpms);
+    const numTracks = dataRef.current.noteData.numTracks;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const LOOP = 9; // seconds of chart shown before looping
 
@@ -158,6 +168,7 @@ export function NoteFieldPreview({
     };
 
     const rebuild = () => {
+      const { noteData, timing, loopWindow } = dataRef.current;
       judge = new Judge(noteData, timing, DEFAULT_WINDOWS, 1);
       resize();
       feedback = {
@@ -245,17 +256,17 @@ export function NoteFieldPreview({
       livePatch.scrollMode = liveRef.current.scrollMode;
       livePatch.scrollValue = liveRef.current.scrollValue;
       gpuField?.applyConfig(livePatch);
-      const beat = timing.getBeatFromElapsedTime(now);
+      const loop = dataRef.current.loopWindow;
+      const beat = dataRef.current.timing.getBeatFromElapsedTime(now);
       // HUD progress hairline: the loop for a practice section, else the song.
       const progress = !hud
         ? 0
-        : loopWindow
+        : loop
           ? Math.min(
               1,
               Math.max(
                 0,
-                (now - loopWindow.startSeconds) /
-                  Math.max(0.001, loopWindow.endSeconds - loopWindow.startSeconds),
+                (now - loop.startSeconds) / Math.max(0.001, loop.endSeconds - loop.startSeconds),
               ),
             )
           : songEnd > 0
@@ -264,6 +275,20 @@ export function NoteFieldPreview({
       gpuField?.draw(judge, now, beat, progress, feedback);
       raf = requestAnimationFrame(frame);
     };
+
+    // Load (or swap) the chart on the live field: rebuild the judge + beat lines
+    // from the current data WITHOUT recreating the device. Called on create and
+    // whenever the chart data changes (difficulty switch).
+    const reload = () => {
+      if (!gpuField) return;
+      rebuild();
+      const { timing, noteData } = dataRef.current;
+      gpuField.setBeatTimes(
+        beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), noteRowToBeat(noteData.lastRow())),
+      );
+      songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
+    };
+    reloadRef.current = reload;
 
     // Both skins preview on the WebGPU field (async device init). If WebGPU is
     // unavailable the preview simply stays blank — the app requires it to play.
@@ -279,18 +304,14 @@ export function NoteFieldPreview({
       ...(hud && meta ? { meta } : {}),
     };
     void (async () => {
-      gpuField = await GpuNoteField.create(canvas, noteData.numTracks, fieldConfig);
+      gpuField = await GpuNoteField.create(canvas, numTracks, fieldConfig);
       if (cancelled || !gpuField) {
         gpuField?.destroy();
         gpuField = null;
         return;
       }
-      gpuField.setBeatTimes(
-        beatTimes((bt) => timing.getElapsedTimeFromBeat(bt), noteRowToBeat(noteData.lastRow())),
-      );
       gpuField.setBackground(bgMedia);
-      rebuild();
-      songEnd = judge.notes[judge.notes.length - 1]?.time ?? 0;
+      reload(); // rebuild + beat lines from the current chart
       ro = new ResizeObserver(() => resize());
       ro.observe(canvas);
       raf = requestAnimationFrame(frame);
@@ -298,6 +319,7 @@ export function NoteFieldPreview({
 
     return () => {
       cancelled = true;
+      reloadRef.current = () => {};
       cancelAnimationFrame(raf);
       ro?.disconnect();
       gpuField?.destroy();
@@ -308,15 +330,14 @@ export function NoteFieldPreview({
       }
       if (bgUrl) URL.revokeObjectURL(bgUrl);
     };
-    // Primitive deps for the window/meta so fresh objects each render are fine.
+    // The chart (noteData/timing/loopWindow) is DELIBERATELY not a dep — it is
+    // swapped on the live field by the effect below, so a difficulty change
+    // never recreates the WebGPU device (Firefox-crash fix). Only stepsType (a
+    // different lane count needs a fresh field) and the create-time chrome are.
   }, [
-    noteData,
-    timing,
     stepsType,
     noteSkin,
     reverse,
-    loopWindow?.startSeconds,
-    loopWindow?.endSeconds,
     hud,
     bgDim,
     background,
@@ -325,6 +346,11 @@ export function NoteFieldPreview({
     meta?.subtitle,
     meta?.difficulty,
   ]);
+
+  // Chart swap (difficulty change): reload the notes on the EXISTING field.
+  useEffect(() => {
+    reloadRef.current();
+  }, [noteData, timing, loopWindow?.startSeconds, loopWindow?.endSeconds]);
 
   // Fresh element per skin: a canvas can hold only one context type/device, so
   // swapping skins swaps the element rather than reconfiguring in place.

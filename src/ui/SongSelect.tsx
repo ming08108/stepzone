@@ -68,6 +68,21 @@ const FAV_CLR = '#ffcf3d';
 const BANNER_RATIO = 256 / 80;
 
 const ROW_H = 44;
+
+/** A distinctive, deterministic gradient for a pack/song that has no art, so
+ *  the ones "without bg images" look intentional and varied (each name gets its
+ *  own hue) instead of the same flat stripes. */
+function artGradient(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) >>> 0;
+  const a = h % 360;
+  const b = (a + 42) % 360;
+  return (
+    `radial-gradient(135% 130% at 16% -10%, hsl(${a} 62% 34%) 0%, transparent 58%),` +
+    `linear-gradient(140deg, hsl(${a} 44% 21%) 0%, hsl(${b} 50% 11%) 100%)`
+  );
+}
+
 /** Sentinel "pack" that opens the flat all-songs view from the pack wheel. */
 const ALL_PACK = '__ALL_SONGS__';
 const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
@@ -118,6 +133,15 @@ export function SongSelect({
   );
   const [viewH, setViewH] = useState(400);
   const [viewW, setViewW] = useState(1200);
+  // Suppress the list's scroll transition for the first moment after mount, so
+  // returning to song select doesn't re-animate the list sliding into place
+  // (the row offset recomputes once the list height is measured). Real
+  // navigation after that animates normally.
+  const [scrollAnim, setScrollAnim] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setScrollAnim(true), 160);
+    return () => window.clearTimeout(t);
+  }, []);
   const gridRef = useRef<HTMLDivElement>(null);
   const selCardRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -803,7 +827,7 @@ export function SongSelect({
               <div
                 className="flex h-full w-full items-center justify-center text-[42px] font-bold tracking-[0.06em] text-white/90"
                 style={{
-                  background: `repeating-linear-gradient(135deg, #1d3a5e 0 20px, #205a6e 20px 40px)`,
+                  background: artGradient(selPack === ALL_PACK ? 'ALL SONGS' : (selPack ?? '')),
                 }}
               >
                 {selPack === ALL_PACK ? 'ALL' : selPack ? initials(selPack) : ''}
@@ -834,9 +858,7 @@ export function SongSelect({
           ) : (
             <div
               className="flex h-full w-full items-center justify-center text-[48px] font-bold tracking-[0.06em] text-white/90"
-              style={{
-                background: `repeating-linear-gradient(135deg, #3a1d5e 0 20px, #57206e 20px 40px)`,
-              }}
+              style={{ background: artGradient(song?.title ?? '') }}
             >
               {song ? initials(song.title) : ''}
             </div>
@@ -1112,10 +1134,7 @@ export function SongSelect({
                           <div
                             className="flex h-full w-full items-center justify-center text-[24px] font-bold tracking-[0.08em] text-white/85"
                             style={{
-                              background:
-                                p.pack === ALL_PACK
-                                  ? 'repeating-linear-gradient(135deg, #5e1a3a 0 22px, #6e2050 22px 44px)'
-                                  : 'repeating-linear-gradient(135deg, #2a1d5e 0 22px, #3a2470 22px 44px)',
+                              background: artGradient(p.pack === ALL_PACK ? 'ALL SONGS' : p.pack),
                             }}
                           >
                             {p.pack === ALL_PACK ? '★ ALL' : initials(p.pack)}
@@ -1155,7 +1174,7 @@ export function SongSelect({
                 style={{
                   height: total * ROW_H,
                   transform: `translateY(${off}px)`,
-                  transition: 'transform .16s ease-out',
+                  transition: scrollAnim ? 'transform .16s ease-out' : 'none',
                 }}
               >
                 {shownSongs.slice(first, last).map((s, k) => {

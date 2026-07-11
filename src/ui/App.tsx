@@ -1,7 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Play } from './Play';
 import { PlayerOptions } from './PlayerOptions';
-import { Inspector } from './Inspector';
 import { SongSelect } from './SongSelect';
 import { Options } from './Options';
 import { Calibrate } from './Calibrate';
@@ -19,9 +18,9 @@ import {
   type RoomUiState,
 } from './roomStore';
 import { RoomDock } from './RoomDock';
+import { RoomJoinOverlay } from './RoomJoinOverlay';
 
-type View =
-  'menu' | 'playoptions' | 'play' | 'inspect' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
+type View = 'menu' | 'playoptions' | 'play' | 'options' | 'calibrate' | 'benchmark' | 'inputtest';
 
 /** The one-line "what's happening / what to do" for the room dock, given the
  *  current screen — makes a GUEST's inability to pick songs explicit. */
@@ -114,7 +113,6 @@ export function App() {
         onCalibrate={() => setView('calibrate')}
         onBenchmark={() => setView('benchmark')}
         onInputTest={() => setView('inputtest')}
-        onInspect={() => setView('inspect')}
       />
     );
   } else if (view === 'benchmark') {
@@ -123,8 +121,6 @@ export function App() {
     body = <InputTest onBack={() => setView('options')} />;
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
-  } else if (view === 'inspect') {
-    body = <Inspector onBack={() => setView('options')} />;
   } else {
     body = (
       <SongSelect
@@ -153,6 +149,9 @@ export function App() {
           <RoomDock vs={vs} status={roomDockStatus(view, vs)} />
         </div>
       )}
+      {/* Prominent "connecting / getting the song" overlay so joining a room —
+          especially one whose host already picked a song — never looks stuck. */}
+      <RoomJoinOverlay />
       <BgConvertBadge />
       {view !== 'play' && <RawGamepadHint />}
     </>

@@ -271,13 +271,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         sent++;
       }
       m.sendNotes(fresh);
-      // Paint the rival mirror from their judged-note feed (display only —
-      // mirror the judge's own rule: consumed by input unless it was a Miss).
-      const rv = rivalRef.current;
-      const rival = rv ? m.players.find((p) => p.id === rv.id) : undefined;
-      if (rv && rival) {
+      // Paint each rival mirror from ITS player's judged-note feed (display only
+      // — mirror the judge's own rule: consumed by input unless it was a Miss).
+      const nowS = s.songNow;
+      for (const rv of rivalsRef.current) {
+        const rival = m.players.find((p) => p.id === rv.id);
+        if (!rival) continue;
         const feed = rival.notes;
-        const nowS = s.songNow;
         while (rv.cursor < feed.length) {
           const { i, tns } = feed[rv.cursor++];
           const n = rv.judge.notes[i];
@@ -312,15 +312,11 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     return () => window.clearInterval(timer);
   }, [phase, req.versus]);
 
-  // The rival's mirror judge/feedback (painted from the streamed feed above,
-  // drawn by the session as a second field view on the same canvas). Only a
-  // 1v1 race mounts it — with more rivals the bars carry the race.
-  const rivalRef = useRef<{
-    id: number;
-    judge: Judge;
-    feedback: Feedback;
-    cursor: number;
-  } | null>(null);
+  // The rivals' mirror judges/feedback (painted from the streamed feed above,
+  // drawn by the session as extra field views on the same canvas). Up to 3
+  // rivals are shown as fields; the rest ride the RivalBars overlay. Each keeps
+  // its own scan cursor into its player's note feed.
+  const rivalsRef = useRef<{ id: number; judge: Judge; feedback: Feedback; cursor: number }[]>([]);
 
   // Race-the-ghost: the best stored timeline on this board (world best with a
   // ghost, which may be your own PB). Fetched once per song; absent offline.
@@ -544,13 +540,24 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // pre-mark it banked so every bankSteps() path (unmount, next start) skips it.
       bankedRef.current.add(session);
     }
-    // Live versus: a mirror judge over the RIVAL'S chart renders as a second
-    // view on the session's own canvas. The 100 ms streamer below paints it
-    // from their judged-note feed; the session just draws what's there.
-    rivalRef.current = null;
-    const soloRival = req.versus?.opponents.length === 1 ? req.versus.opponents[0] : null;
-    if (soloRival?.chart) {
-      const rc = soloRival.chart;
+    // Live versus: a mirror judge over EACH rival's chart renders as an extra
+    // view on the session's own canvas. The 100 ms streamer below paints each
+    // from its player's judged-note feed; the session just draws what's there.
+    // Cap the RENDERED fields at 3 rivals (4 players) so the layout stays
+    // readable and fast — rivals past the cap, or whose exact chart revision
+    // isn't local, are covered by the RivalBars overlay instead.
+    rivalsRef.current = [];
+    const MAX_RIVAL_FIELDS = 3;
+    const renderable = (req.versus?.opponents ?? []).filter((o) => o.chart);
+    if (renderable.length > MAX_RIVAL_FIELDS) {
+      console.log(
+        `[versus] ${renderable.length} rivals have local charts; rendering the first ${MAX_RIVAL_FIELDS} as fields, the rest ride the RivalBars overlay`,
+      );
+    }
+    const rivalCfgs: Parameters<GameSession['setRivalFields']>[0] = [];
+    const rivalSrcs: GameSession['rivalSources'] = [];
+    for (const opp of renderable.slice(0, MAX_RIVAL_FIELDS)) {
+      const rc = opp.chart!;
       const rnd = rc.getNoteData();
       const rTiming = rc.getTimingData(req.song.timing);
       const rivalJudge = new Judge(rnd, rTiming, DEFAULT_WINDOWS, effRate, null);
@@ -559,23 +566,25 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         laneFlash: new Array<number>(rnd.numTracks).fill(-999),
         laneHit: new Array<Feedback['laneHit'][number]>(rnd.numTracks).fill(null),
       };
-      session.setRivalField({
+      rivalCfgs.push({
         numTracks: rnd.numTracks,
         columnAngles: columnAnglesFor(rc.stepsType, rnd.numTracks),
         meta: {
-          title: soloRival.name,
+          title: opp.name,
           subtitle: 'LIVE RIVAL',
           difficulty: `${rc.stepsType}  ·  ${difficultyToString(rc.difficulty).toUpperCase()} ${rc.meter}`,
         },
       });
-      session.rivalSource = { judge: rivalJudge, feedback: rivalFeedback };
-      rivalRef.current = {
-        id: soloRival.id,
+      rivalSrcs.push({ judge: rivalJudge, feedback: rivalFeedback });
+      rivalsRef.current.push({
+        id: opp.id,
         judge: rivalJudge,
         feedback: rivalFeedback,
         cursor: 0,
-      };
+      });
     }
+    session.setRivalFields(rivalCfgs);
+    session.rivalSources = rivalSrcs;
     setLoopNum(1);
     session.onLoop = setLoopNum;
     session.onError = () => {

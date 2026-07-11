@@ -87,16 +87,18 @@ export class GameSession {
   private replayEvents: ReplayEvent[] | null = null;
   private replayCursor = 0;
 
-  /** Rival field layout (live versus): a second view on the SAME canvas —
-   *  one render, one shared background. Set before/after start(). */
-  private rivalConfig: {
+  /** Rival field layouts (live versus): extra views on the SAME canvas — one
+   *  render, one shared background. Up to 3 rivals (4 players). Set before/after
+   *  start(); empty for solo play. */
+  private rivalConfigs: {
     numTracks: number;
     columnAngles: number[];
     meta: NoteFieldConfig['meta'];
-  } | null = null;
-  /** The rival's mirror judge + feedback, maintained by the UI from the
-   *  streamed judgment feed; the loop just hands it to the field each frame. */
-  rivalSource: { judge: Judge; feedback: Feedback } | null = null;
+  }[] = [];
+  /** The rivals' mirror judges + feedback (parallel to rivalConfigs), maintained
+   *  by the UI from each rival's streamed judgment feed; the loop just hands the
+   *  array to the field each frame. */
+  rivalSources: { judge: Judge; feedback: Feedback }[] = [];
 
   private dpr = 1;
   private raf = 0;
@@ -219,15 +221,20 @@ export class GameSession {
     this.replayCursor = 0;
   }
 
-  /** True when a rival view is being drawn (dev/testing hook). */
+  /** True when at least one rival view is being drawn (dev/testing hook). */
   get hasRival(): boolean {
-    return this.rivalSource !== null && this.rivalConfig !== null;
+    return this.rivalSources.length > 0 && this.rivalConfigs.length > 0;
   }
 
-  /** Attach/detach the rival's side-by-side field view (live versus). */
-  setRivalField(cfg: typeof this.rivalConfig): void {
-    this.rivalConfig = cfg;
-    this.gpuField?.setRival(cfg);
+  /** Number of rival views on the canvas (dev/testing hook). */
+  get rivalCount(): number {
+    return this.rivalConfigs.length;
+  }
+
+  /** Set the rivals' side-by-side field views (live versus); [] for solo. */
+  setRivalFields(cfgs: typeof this.rivalConfigs): void {
+    this.rivalConfigs = cfgs;
+    this.gpuField?.setRivals(cfgs);
   }
 
   /** Set (or clear) the background video/image drawn behind the field. */
@@ -293,7 +300,7 @@ export class GameSession {
       };
       gpu.resize(this.logicalW, this.logicalH, this.dpr);
       gpu.setBeatTimes(this.beatLineTimes);
-      if (this.rivalConfig) gpu.setRival(this.rivalConfig);
+      if (this.rivalConfigs.length) gpu.setRivals(this.rivalConfigs);
       if (this.bgMedia) gpu.setBackground(this.bgMedia);
       freshField = true;
     }
@@ -481,7 +488,7 @@ export class GameSession {
       beat,
       progress,
       this.feedback,
-      this.rivalSource ?? undefined,
+      this.rivalSources.length ? this.rivalSources : undefined,
     );
 
     if (this.practice) {

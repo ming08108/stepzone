@@ -42,12 +42,21 @@ function keyLabel(code: string): string {
   return named[code] ?? code;
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({
+  title,
+  right,
+  children,
+}: {
+  title: string;
+  right?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="mb-8">
       <div className="mb-3 flex items-center gap-4">
         <span className="text-[11px] tracking-[0.2em] text-[#ececec]/55">{title}</span>
         <span className="h-px flex-1 bg-white/[0.09]" />
+        {right}
       </div>
       {children}
     </div>
@@ -101,13 +110,11 @@ export function Options({
   onCalibrate,
   onBenchmark,
   onInputTest,
-  onInspect,
 }: {
   onBack: () => void;
   onCalibrate: () => void;
   onBenchmark: () => void;
   onInputTest: () => void;
-  onInspect: () => void;
 }) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -116,8 +123,10 @@ export function Options({
   // the field back to the normalized (trimmed, defaulted) stored value.
   const [playerName, setPlayerNameState] = useState(() => getIdentity().name);
   // Lifetime stats are read once on entry — they only change during a play, on a
-  // different screen, so there's nothing to keep live here.
+  // different screen, so there's nothing to keep live here. Hidden behind a
+  // button so the settings screen leads with the actual settings.
   const [stats] = useState(loadStats);
+  const [statsOpen, setStatsOpen] = useState(false);
   const days = useMemo(() => {
     const out: Array<{ key: string; steps: number }> = [];
     const now = new Date();
@@ -246,68 +255,83 @@ export function Options({
             music rate, background — are set per song on the PLAYER OPTIONS screen.
           </div>
 
-          <Section title="LIFETIME STATS">
-            <Row label="TOTAL STEPS">
-              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
-                {stats.steps.toLocaleString()}
-              </span>
-            </Row>
-            <Row label="PLAY TIME">
-              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
-                {formatPlayTime(stats.playTimeSeconds)}
-              </span>
-            </Row>
-            <Row label="PLAYS">
-              <span className="text-[13px] tracking-[0.06em] text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
-                <span className="font-bold text-[#59f07f]">{stats.songsCompleted}</span> cleared
-                <span className="mx-2 text-[#ececec]/25">/</span>
-                <span className="font-bold text-[#ff5d47]">{stats.songsFailed}</span> failed
-              </span>
-            </Row>
-            <Row label="BEST COMBO">
-              <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
-                {stats.bestCombo.toLocaleString()}
-              </span>
-            </Row>
-            <Row label="JUDGMENTS">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                {LIFETIME_JUDGMENTS.map(([tns, label, color]) => (
-                  <span key={tns} className="text-[12px] tracking-[0.08em]">
-                    <span style={{ color }}>{label}</span>{' '}
-                    <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
-                      {(stats.taps[tns] ?? 0).toLocaleString()}
+          <Section
+            title="LIFETIME STATS"
+            right={
+              <button
+                onClick={() => setStatsOpen((o) => !o)}
+                className="border px-3 py-1 text-[11px] font-bold tracking-[0.14em]"
+                style={{ borderColor: AC, background: AC + '12', color: '#ececec' }}
+              >
+                {statsOpen ? 'HIDE ▴' : 'VIEW STATS ▸'}
+              </button>
+            }
+          >
+            {statsOpen && (
+              <>
+                <Row label="TOTAL STEPS">
+                  <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                    {stats.steps.toLocaleString()}
+                  </span>
+                </Row>
+                <Row label="PLAY TIME">
+                  <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                    {formatPlayTime(stats.playTimeSeconds)}
+                  </span>
+                </Row>
+                <Row label="PLAYS">
+                  <span className="text-[13px] tracking-[0.06em] text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                    <span className="font-bold text-[#59f07f]">{stats.songsCompleted}</span> cleared
+                    <span className="mx-2 text-[#ececec]/25">/</span>
+                    <span className="font-bold text-[#ff5d47]">{stats.songsFailed}</span> failed
+                  </span>
+                </Row>
+                <Row label="BEST COMBO">
+                  <span className="text-[15px] font-bold [font-variant-numeric:tabular-nums] text-[#ececec]">
+                    {stats.bestCombo.toLocaleString()}
+                  </span>
+                </Row>
+                <Row label="JUDGMENTS">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                    {LIFETIME_JUDGMENTS.map(([tns, label, color]) => (
+                      <span key={tns} className="text-[12px] tracking-[0.08em]">
+                        <span style={{ color }}>{label}</span>{' '}
+                        <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                          {(stats.taps[tns] ?? 0).toLocaleString()}
+                        </span>
+                      </span>
+                    ))}
+                    <span className="text-[12px] tracking-[0.08em]">
+                      <span className="text-[#ececec]/55">HOLDS</span>{' '}
+                      <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
+                        {holdsHeld.toLocaleString()}
+                      </span>
+                      <span className="text-[#ececec]/50">/{holdsDropped.toLocaleString()}</span>
                     </span>
-                  </span>
-                ))}
-                <span className="text-[12px] tracking-[0.08em]">
-                  <span className="text-[#ececec]/55">HOLDS</span>{' '}
-                  <span className="font-bold text-[#ececec]/85 [font-variant-numeric:tabular-nums]">
-                    {holdsHeld.toLocaleString()}
-                  </span>
-                  <span className="text-[#ececec]/50">/{holdsDropped.toLocaleString()}</span>
-                </span>
-              </div>
-            </Row>
-            <Row label="STEPS · LAST 14 DAYS">
-              <div className="flex h-[42px] flex-1 items-end gap-[3px]">
-                {days.map((d) => (
-                  <div
-                    key={d.key}
-                    title={`${d.key} — ${d.steps.toLocaleString()} steps`}
-                    className="flex h-full flex-1 items-end"
-                  >
-                    <div
-                      className="w-full"
-                      style={{
-                        height: `${Math.max(d.steps > 0 ? 6 : 2, (d.steps / maxDay) * 100)}%`,
-                        background: d.steps > 0 ? '#ff5d47' : undefined,
-                        borderTop: d.steps > 0 ? undefined : '1px solid rgba(255,255,255,0.12)',
-                      }}
-                    />
                   </div>
-                ))}
-              </div>
-            </Row>
+                </Row>
+                <Row label="STEPS · LAST 14 DAYS">
+                  <div className="flex h-[42px] flex-1 items-end gap-[3px]">
+                    {days.map((d) => (
+                      <div
+                        key={d.key}
+                        title={`${d.key} — ${d.steps.toLocaleString()} steps`}
+                        className="flex h-full flex-1 items-end"
+                      >
+                        <div
+                          className="w-full"
+                          style={{
+                            height: `${Math.max(d.steps > 0 ? 6 : 2, (d.steps / maxDay) * 100)}%`,
+                            background: d.steps > 0 ? '#ff5d47' : undefined,
+                            borderTop: d.steps > 0 ? undefined : '1px solid rgba(255,255,255,0.12)',
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </Row>
+              </>
+            )}
           </Section>
 
           <Section title="ONLINE">
@@ -387,16 +411,6 @@ export function Options({
               <span className="text-[12px] text-[#ececec]/55">
                 controller update rate + timing granularity
               </span>
-            </Row>
-            <Row label="INSPECTOR">
-              <button
-                onClick={onInspect}
-                className="border px-4 py-1.5 text-[13px] tracking-wide"
-                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
-              >
-                Open engine inspector ▸
-              </button>
-              <span className="text-[12px] text-[#ececec]/55">live render/session internals</span>
             </Row>
           </Section>
 
