@@ -125,27 +125,16 @@ try {
   const header = await bodyText(page);
   step('WORLD best appears in the header', /WORLD\s*97\.00% RIVAL/.test(header));
 
-  // 4. SELECT menu → RANKS (BACK is row 0, RANKS row 1) → panel lists rows.
-  // Wait on the overlay-only hint text — the row labels are always-rendered
-  // filter-strip buttons, so their presence doesn't mean the menu is open.
-  await page.keyboard.press('Escape'); // SELECT — open the menu
-  await page.waitForFunction(() => document.body.innerText.includes('SELECT — CLOSE'), null, {
-    timeout: 5_000,
+  // 4. The full board renders in the side panel beside the list — no menu
+  //    navigation needed (the panel is always visible on wide viewports).
+  await page.waitForFunction(() => /#1\s*RIVAL/.test(document.body.innerText), null, {
+    timeout: 10_000,
   });
-  await page.keyboard.press('ArrowRight'); // BACK → RANKS
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => /#1/.test(document.body.innerText), null, { timeout: 10_000 });
   const panel = await bodyText(page);
-  step('RANKS panel lists the seeded board', /#1\s*RIVAL/.test(panel) && /#2\s*BRONZE/.test(panel));
+  step('side panel lists the seeded board', /#1\s*RIVAL/.test(panel) && /#2\s*BRONZE/.test(panel));
   step('percent/grade render', /97\.00%/.test(panel) && /80\.00%/.test(panel));
   step('ghost marker shows on the racable row', panel.includes('▶'));
-
-  // 5. SELECT closes the panel and the list is navigable again.
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !/START \/ SELECT — CLOSE/.test(document.body.innerText), null, {
-    timeout: 5_000,
-  });
-  step('panel closes back to the song list', /▲▼ SONG/.test(await bodyText(page)));
+  step('list stays navigable alongside the panel', /▲▼ SONG/.test(panel));
 
   step('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {

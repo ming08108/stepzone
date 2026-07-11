@@ -69,13 +69,14 @@ Options → ONLINE → PLAYER NAME (src/ui/Options.tsx), backed by
 `setPlayerName`. Renames propagate to all your rows on the next accepted
 submission.
 
-## RANKS panel
+## RANKS side panel
 
-The full board for the highlighted chart: song list → SELECT menu → RANKS
-(src/ui/LeaderboardPanel.tsx). ▲▼ scrolls, START/SELECT closes — fully
-pad-operable per the pad-controls invariant. Rows show rank, name (YOU
-highlighted), percent, grade, max combo, and a ▶ marker on racable (ghost)
-rows.
+The board for the highlighted chart renders beside the song list
+(src/ui/LeaderboardSide.tsx): top rows with rank, name (yours highlighted),
+percent, grade, and a ▶ marker on racable (ghost) rows. Purely informational
+(no focus, no input — pad-only untouched); collapses when offline and hides
+on narrow viewports. It shares one debounced/cached fetch with the header's
+WORLD readout (src/ui/useLeaderboard.ts).
 
 ## Dev & tests
 

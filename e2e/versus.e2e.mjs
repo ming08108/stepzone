@@ -47,16 +47,15 @@ async function playerPage(browser, base, name) {
   return page;
 }
 
-/** SELECT menu -> VERSUS row (BACK 0, RANKS 1, VERSUS 2) -> panel. The menu
- *  rows are always-rendered filter-strip buttons, so wait on the hint text
- *  that ONLY renders while the overlay is open — otherwise the arrow presses
- *  can race the overlay and land on the song list instead. */
+/** SELECT menu -> VERSUS row (BACK 0, VERSUS 1) -> panel. The menu rows are
+ *  always-rendered filter-strip buttons, so wait on the hint text that ONLY
+ *  renders while the overlay is open — otherwise the arrow presses can race
+ *  the overlay and land on the song list instead. */
 async function openVersusPanel(page) {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.body.innerText.includes('SELECT — CLOSE'), null, {
     timeout: 5_000,
   });
-  await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.body.innerText.includes('CREATE ROOM'), null, {

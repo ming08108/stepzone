@@ -26,7 +26,6 @@ import { loadScores } from '../app/scores';
 import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import { GlobalBest } from './GlobalBest';
-import { LeaderboardPanel } from './LeaderboardPanel';
 import { LeaderboardSide } from './LeaderboardSide';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
@@ -72,7 +71,7 @@ const ALL_PACK = '__ALL_SONGS__';
 const packLabel = (p: string | null): string => (p === ALL_PACK ? 'ALL SONGS' : (p ?? '—'));
 
 /** A row in the SELECT menu overlay (sort/filter, plus BACK inside a pack). */
-type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset' | 'ranks' | 'versus';
+type OverlayKind = 'back' | 'sort' | 'min' | 'max' | 'fav' | 'reset' | 'versus';
 
 // Filter/selection state kept across remounts (e.g. after returning from a song)
 // so the list doesn't reset. Session-scoped (resets on full reload).
@@ -142,8 +141,7 @@ export function SongSelect({
   const [packSel, setPackSel] = useState(0);
   const [favs, setFavs] = useState(() => loadFavorites());
   const [overlay, setOverlay] = useState(false);
-  // RANKS / VERSUS overlays — each owns the keys while open.
-  const [ranksOpen, setRanksOpen] = useState(false);
+  // VERSUS overlay — owns the keys while open.
   // A ?join=CODE share link opens the versus panel mid-join on first mount
   // (consumed immediately so a later remount doesn't re-trigger it).
   const [joinCode] = useState(() => {
@@ -466,10 +464,7 @@ export function SongSelect({
       closePack();
       setOverlay(false);
     } else if (kind === 'reset') reset();
-    else if (kind === 'ranks') {
-      setOverlay(false);
-      if (song) setRanksOpen(true);
-    } else if (kind === 'versus') {
+    else if (kind === 'versus') {
       setOverlay(false);
       if (song) setVersusOpen(true);
     } else setOverlay(false);
@@ -497,8 +492,8 @@ export function SongSelect({
       const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
       if (!keys.includes(e.key) && !isConfirm && !isBack) return;
       const typing = (e.target as HTMLElement)?.tagName === 'INPUT';
-      // The RANKS/VERSUS/name overlays own all keys while open (own listeners).
-      if (ranksOpen || versusOpen || namePromptOpen) return;
+      // The VERSUS/name overlays own all keys while open (own listeners).
+      if (versusOpen || namePromptOpen) return;
       if (overlay) {
         if (isBack) {
           e.preventDefault();
@@ -557,7 +552,6 @@ export function SongSelect({
     return () => window.removeEventListener('keydown', onKey);
   }, [
     overlay,
-    ranksOpen,
     versusOpen,
     namePromptOpen,
     osel,
@@ -603,7 +597,6 @@ export function SongSelect({
   // single "menu" button (options + up-a-level) the whole pad flow needs.
   const overlayRows: { label: string; value: string; kind: OverlayKind }[] = [
     ...(inPack ? [{ label: 'BACK', value: '‹ PACKS', kind: 'back' as OverlayKind }] : []),
-    { label: 'RANKS', value: '▸', kind: 'ranks' },
     { label: 'VERSUS', value: '▸', kind: 'versus' },
     { label: 'SORT', value: sort.toUpperCase(), kind: 'sort' },
     { label: 'MIN LV', value: String(minLv), kind: 'min' },
@@ -919,11 +912,10 @@ export function SongSelect({
         {!inPacks &&
           overlayRows.map((o, i) => {
             const on = overlay && i === osel;
-            // Action rows (BACK/RANKS/VERSUS/RESET) fire on START/click;
+            // Action rows (BACK/VERSUS/RESET) fire on START/click;
             // value rows tune with ▲▼ — style them apart so the difference
             // reads at a glance (buttons get the accent tint, options don't).
-            const isAction =
-              o.kind === 'back' || o.kind === 'reset' || o.kind === 'ranks' || o.kind === 'versus';
+            const isAction = o.kind === 'back' || o.kind === 'reset' || o.kind === 'versus';
             const cls =
               'flex items-center gap-2 border px-[10px] py-[6px] text-[12px] tracking-[0.08em] whitespace-nowrap' +
               (isAction ? ' font-bold' : '');
@@ -990,7 +982,7 @@ export function SongSelect({
           <span className="text-[11px] tracking-[0.14em]" style={{ color: AC }}>
             {(() => {
               const k = overlayRows[Math.min(osel, overlayRows.length - 1)]?.kind;
-              const action = k === 'back' || k === 'reset' || k === 'ranks' || k === 'versus';
+              const action = k === 'back' || k === 'reset' || k === 'versus';
               return action
                 ? '◀▶ MOVE · START — GO · SELECT — CLOSE'
                 : '◀▶ MOVE · ▲▼ ADJUST · SELECT — CLOSE';
@@ -1236,10 +1228,6 @@ export function SongSelect({
 
         {!inPacks && <LeaderboardSide entry={song?.entry ?? null} diff={diff} />}
       </div>
-
-      {ranksOpen && song && (
-        <LeaderboardPanel entry={song.entry} diff={diff} onClose={() => setRanksOpen(false)} />
-      )}
 
       {versusOpen && (
         <VersusPanel

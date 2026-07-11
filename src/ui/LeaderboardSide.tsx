@@ -42,7 +42,7 @@ export function LeaderboardSide({ entry, diff }: { entry: LibraryEntry | null; d
             return (
               <div
                 key={r.playerId}
-                className="grid grid-cols-[30px_1fr_74px_34px] items-center gap-1.5 border-b border-white/[0.05] py-[5px] text-[13px]"
+                className="grid grid-cols-[30px_1fr_70px_28px_12px] items-center gap-1.5 border-b border-white/[0.05] py-[5px] text-[13px]"
                 style={mine ? { color: '#59f07f' } : undefined}
               >
                 <span
@@ -59,6 +59,12 @@ export function LeaderboardSide({ entry, diff }: { entry: LibraryEntry | null; d
                   {(r.percent * 100).toFixed(2)}%
                 </span>
                 <span className="text-right text-[#ececec]/55">{r.grade}</span>
+                <span
+                  className="text-center text-[10px] text-[#ececec]/35"
+                  title={r.hasGhost ? 'ghost available — race it in-song' : ''}
+                >
+                  {r.hasGhost ? '▶' : ''}
+                </span>
               </div>
             );
           })}
