@@ -12,38 +12,10 @@
 
 /**
  * Edge detector over a fixed set of named boolean states (e.g. GamepadRead
- * roles). Feed it one sample per poll; it returns the keys that rose since the
- * previous connected sample, in `keys` order (empty while seeding).
- */
-export function createEdgeDetector<K extends string>(
-  keys: readonly K[],
-): (connected: boolean, current: Readonly<Partial<Record<K, boolean>>>) => K[] {
-  let seeded = false;
-  let prev: Partial<Record<K, boolean>> = {};
-  return (connected, current) => {
-    if (!connected) {
-      seeded = false;
-      prev = {};
-      return [];
-    }
-    const edges: K[] = [];
-    if (seeded) {
-      for (const k of keys) if (current[k] && !prev[k]) edges.push(k);
-    }
-    const next: Partial<Record<K, boolean>> = {};
-    for (const k of keys) next[k] = !!current[k];
-    prev = next;
-    seeded = true;
-    return edges;
-  };
-}
-
-/**
- * Like createEdgeDetector, but reports falling edges too — the input bus needs
- * releases (holds/rolls) as well as presses. Same seeding rules: the first
- * connected sample only primes prev-state (a held button is not a press), and
- * a disconnect reports every previously-down key as released (so nothing is
- * left stuck held) and re-seeds.
+ * roles) that reports rising AND falling edges — the input bus needs releases
+ * (holds/rolls) as well as presses. The first connected sample only primes
+ * prev-state (a held button is not a press), and a disconnect reports every
+ * previously-down key as released (so nothing is left stuck held) and re-seeds.
  */
 export function createTransitionDetector<K extends string>(
   keys: readonly K[],
@@ -73,35 +45,5 @@ export function createTransitionDetector<K extends string>(
     prev = next;
     seeded = true;
     return { pressed, released };
-  };
-}
-
-/** The subset of Gamepad this module reads (tests can pass plain objects). */
-export interface GamepadLike {
-  buttons: ReadonlyArray<{ pressed: boolean } | undefined>;
-}
-
-/**
- * Edge detector over raw button indices. Feed it the current pad (or null when
- * disconnected); it returns the button indices that rose since the previous
- * connected sample (empty while seeding).
- */
-export function createGamepadEdgeDetector(): (pad: GamepadLike | null | undefined) => number[] {
-  let seeded = false;
-  let prev: boolean[] = [];
-  return (pad) => {
-    if (!pad) {
-      seeded = false;
-      prev = [];
-      return [];
-    }
-    const edges: number[] = [];
-    const next = pad.buttons.map((b) => b?.pressed ?? false);
-    if (seeded) {
-      for (let i = 0; i < next.length; i++) if (next[i] && !prev[i]) edges.push(i);
-    }
-    prev = next;
-    seeded = true;
-    return edges;
   };
 }

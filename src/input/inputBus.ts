@@ -42,6 +42,13 @@ export type InputDevice = 'keyboard' | 'gamepad';
  */
 export const RAW_GAMEPAD_EVENTS = ['gamepadrawinputchanged', 'rawgamepadinputchange'] as const;
 
+/** True when the browser exposes the event-driven raw-gamepad API (behind a
+ *  flag). A function, not a const, so it never touches `window` at module load
+ *  (SSR/test safe). */
+export function rawGamepadSupported(): boolean {
+  return typeof window !== 'undefined' && RAW_GAMEPAD_EVENTS.some((n) => `on${n}` in window);
+}
+
 /** The subset of KeyboardEvent the bus reads (tests can pass plain objects). */
 export interface KeyEventLike {
   code: string;
@@ -339,11 +346,6 @@ export function setControlBindings(b: Bindings): void {
 /** Swallow bus events while a press-to-bind capture UI is active. */
 export function setBindCaptureActive(active: boolean): void {
   inputBus.setCaptureActive(active);
-}
-
-/** True if any device currently holds the role. */
-export function isControlDown(role: ControlRole): boolean {
-  return inputBus.isRoleDown(role);
 }
 
 /** Resolve a KeyboardEvent.code to its bound role (or undefined). For menus that

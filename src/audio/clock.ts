@@ -51,7 +51,6 @@ export class WebAudioClock {
 
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
-  private playing = false;
   private disposed = false;
 
   constructor() {
@@ -79,10 +78,6 @@ export class WebAudioClock {
     return this.buffer?.duration ?? 0;
   }
 
-  get isPlaying(): boolean {
-    return this.playing;
-  }
-
   /**
    * Start playback at `offsetSeconds` into the song, `leadSeconds` from now.
    * The small lead lets the graph settle before audio begins.
@@ -102,10 +97,6 @@ export class WebAudioClock {
     // song-second 0 == context time (when - offset/rate).
     this.sync.startContextTime = when - offsetSeconds / this.sync.playbackRate;
     this.source = src;
-    this.playing = true;
-    src.onended = () => {
-      if (this.source === src) this.playing = false;
-    };
 
     this.refresh();
   }
@@ -121,7 +112,6 @@ export class WebAudioClock {
       this.source.disconnect();
       this.source = null;
     }
-    this.playing = false;
   }
 
   /**

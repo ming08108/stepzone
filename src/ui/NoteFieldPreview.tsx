@@ -215,10 +215,6 @@ export function NoteFieldPreview({
       // a clock hand-off — starts a fresh pass: re-arm the judged notes.
       if (now < lastNow - 0.25) rebuild();
       lastNow = now;
-      if (import.meta.env.DEV) {
-        (window as unknown as { __nfPreview?: { now: number; audio: number | null } }).__nfPreview =
-          { now, audio };
-      }
       const notes = judge.notes;
       // Autoplay: hit each note as it reaches the receptor.
       while (cursor < notes.length && notes[cursor].time <= now) hitNote(notes[cursor++], true);

@@ -397,18 +397,10 @@ try {
         () => true,
         () => false,
       );
-    let debugExtra = '';
-    if (!survived) {
-      debugExtra = await alpha.evaluate(() => {
-        const a = document.activeElement;
-        const dbg = window.__playDebug ? JSON.stringify(window.__playDebug()) : 'n/a';
-        return `active=${a?.tagName} "${(a?.textContent ?? '').slice(0, 24)}" playDebug=${dbg}`;
-      });
-    }
     step(
       'the room survives a full race, ready for the next song',
       survived,
-      survived ? '' : `${debugExtra} | ${JSON.stringify((await bodyText(alpha)).slice(0, 200))}`,
+      survived ? '' : JSON.stringify((await bodyText(alpha)).slice(0, 200)),
     );
   }
 

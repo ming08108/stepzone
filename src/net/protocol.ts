@@ -147,30 +147,12 @@ export interface LeaderboardRow {
   at: number;
   /** True when a ghost timeline is stored for this best (racable). */
   hasGhost: boolean;
-  /** True when a replay is stored for this best (watchable). */
-  hasReplay: boolean;
-}
-
-/** GET ?chartHash=..&rate=..&ghostOf=playerId */
-export interface GhostResponse {
-  ghost: GhostFrame[];
-}
-
-/** GET ?chartHash=..&rate=..&replayOf=playerId */
-export interface ReplayResponse {
-  replay: ReplayEvent[];
 }
 
 export interface LeaderboardResponse {
   rows: LeaderboardRow[];
   /** Total players on this board (may exceed rows.length). */
   total: number;
-}
-
-export interface ApiError {
-  ok: false;
-  code: string;
-  message: string;
 }
 
 /** Boards key rates as integer percent (1.0 -> 100, 1.5 -> 150) so float

@@ -95,14 +95,6 @@ export class NoteData {
     return n;
   }
 
-  firstRow(): number {
-    let first = -1;
-    for (const t of this.tracks) {
-      if (t.length > 0 && (first < 0 || t[0].row < first)) first = t[0].row;
-    }
-    return first < 0 ? 0 : first;
-  }
-
   /** Last occupied row, counting hold tails (headRow + durationRows). */
   lastRow(): number {
     let last = 0;

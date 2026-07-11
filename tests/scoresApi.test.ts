@@ -176,22 +176,6 @@ describe('POST /api/scores — anti-cheat', () => {
     }));
     expect((await post(handlers, { ...validSubmit(), replay: crammed })).status).toBe(400);
   });
-
-  it('stores the replay on a personal best and serves it via replayOf', async () => {
-    const res = await post(handlers, play({ playerId: 'a', percent: 0.9 }));
-    expect(res.status).toBe(200);
-    expect((await board(handlers, HASH)).rows[0].hasReplay).toBe(true);
-
-    const got = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&replayOf=a`));
-    expect(got.status).toBe(200);
-    const body = (await got.json()) as { replay: ReplayEvent[] };
-    expect(body.replay).toEqual(validSubmit().replay);
-  });
-
-  it('404s a replay request for a player with none stored', async () => {
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&replayOf=z`));
-    expect(res.status).toBe(404);
-  });
 });
 
 describe('GET /api/scores', () => {

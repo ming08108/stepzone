@@ -6,8 +6,7 @@
  * math derive from, so nothing drifts. Defaults derive from DEFAULT_PLAY_OPTIONS.
  */
 
-import { DEFAULT_PLAY_OPTIONS, type PlayOptions } from '../game/playOptions';
-import { FALLBACK_MAX_BPM } from './scroll';
+import type { PlayOptions } from '../game/playOptions';
 import type { RenderMeta } from './types';
 
 export type { Feedback, RenderMeta } from './types';
@@ -44,16 +43,3 @@ export interface NoteFieldConfig extends Pick<
   columnAngles: readonly number[];
   meta: RenderMeta;
 }
-
-export const DEFAULT_NOTE_FIELD_CONFIG: NoteFieldConfig = {
-  scrollMode: DEFAULT_PLAY_OPTIONS.scrollMode,
-  scrollValue: DEFAULT_PLAY_OPTIONS.scrollValue,
-  reverse: DEFAULT_PLAY_OPTIONS.reverse,
-  noteSkin: DEFAULT_PLAY_OPTIONS.noteSkin,
-  songMaxBpm: FALLBACK_MAX_BPM,
-  bgDim: 0.6,
-  transparentBg: false,
-  bare: false,
-  columnAngles: [],
-  meta: { title: '', subtitle: '', difficulty: '' },
-};

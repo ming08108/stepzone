@@ -6,13 +6,12 @@
  * over the menus (not gameplay).
  */
 import { useEffect, useRef, useState } from 'react';
-import { RAW_GAMEPAD_EVENTS } from '../input/inputBus';
+import { rawGamepadSupported } from '../input/inputBus';
 import { loadJson, saveJson } from '../app/storage';
 import { STEP_AC as AC } from './Stage';
 
 const DISMISS_KEY = 'notefield.rawGamepadHint.dismissed.v1';
-const SUPPORTED =
-  typeof window !== 'undefined' && RAW_GAMEPAD_EVENTS.some((n) => `on${n}` in window);
+const SUPPORTED = rawGamepadSupported();
 
 export function RawGamepadHint() {
   const [show, setShow] = useState(false);

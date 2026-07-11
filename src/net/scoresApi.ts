@@ -7,8 +7,7 @@
  *
  * Routes (mounted at /api/scores):
  *   GET  ?chartHash=..&rate=1&limit=20        -> LeaderboardResponse
- *   GET  ?chartHash=..&rate=1&ghostOf=player  -> GhostResponse (404 if none)
- *   GET  ?chartHash=..&rate=1&replayOf=player -> ReplayResponse (404 if none)
+ *   GET  ?chartHash=..&rate=1&ghostOf=player  -> { ghost } (404 if none)
  *   POST SubmitScoreRequest                   -> SubmitScoreResponse
  */
 
@@ -79,13 +78,6 @@ export function createHandlers(store: ScoreStore, now: () => number = Date.now):
         const ghost = await store.ghost(chartHash, rate, ghostOf);
         if (!ghost) return error(404, 'not_found', 'no ghost stored for this player');
         return json(200, { ghost });
-      }
-      const replayOf = url.searchParams.get('replayOf');
-      if (replayOf) {
-        if (replayOf.length > 64) return error(400, 'bad_request', 'replayOf too long');
-        const replay = await store.replay(chartHash, rate, replayOf);
-        if (!replay) return error(404, 'not_found', 'no replay stored for this player');
-        return json(200, { replay });
       }
       const limit = Math.min(
         MAX_LIMIT,

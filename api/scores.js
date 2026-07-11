@@ -280,13 +280,6 @@ var NoteData = class {
     for (const t of this.tracks) n += t.length;
     return n;
   }
-  firstRow() {
-    let first = -1;
-    for (const t of this.tracks) {
-      if (t.length > 0 && (first < 0 || t[0].row < first)) first = t[0].row;
-    }
-    return first < 0 ? 0 : first;
-  }
   /** Last occupied row, counting hold tails (headRow + durationRows). */
   lastRow() {
     let last = 0;
@@ -581,10 +574,6 @@ var TimingData = class _TimingData {
       else break;
     }
     return bps;
-  }
-  /** BPM at a row. Unused by the engine itself; kept as a trivial convenience. */
-  getBpmAtRow(row) {
-    return this.getBpsAtRow(row) * 60;
   }
   // --- The event scanner (ITGmania FindEvent) ------------------------------
   // Ties are broken by check order (strict `< eventRow`), which is what gives
@@ -1311,13 +1300,6 @@ function createHandlers(store, now = Date.now) {
         if (!ghost) return error(404, "not_found", "no ghost stored for this player");
         return json(200, { ghost });
       }
-      const replayOf = url.searchParams.get("replayOf");
-      if (replayOf) {
-        if (replayOf.length > 64) return error(400, "bad_request", "replayOf too long");
-        const replay = await store.replay(chartHash, rate, replayOf);
-        if (!replay) return error(404, "not_found", "no replay stored for this player");
-        return json(200, { replay });
-      }
       const limit = Math.min(
         MAX_LIMIT,
         Math.max(
@@ -1371,8 +1353,6 @@ function mergeStoredBest(prev, req, now) {
   };
   const ghost = isPersonalBest ? req.ghost : prev?.ghost;
   if (ghost) next.ghost = ghost;
-  const replay = isPersonalBest ? req.replay : prev?.replay;
-  if (replay && replay.length > 0) next.replay = replay;
   return { next, isPersonalBest };
 }
 function compareBests(a2, b2) {
@@ -1428,8 +1408,7 @@ var MemoryScoreStore = class {
         maxCombo: row.result.maxCombo,
         failed: row.result.failed,
         at: row.updatedAt,
-        hasGhost: row.ghost !== void 0 && row.ghost.length > 0,
-        hasReplay: row.replay !== void 0 && row.replay.length > 0
+        hasGhost: row.ghost !== void 0 && row.ghost.length > 0
       };
     });
     return Promise.resolve({ rows, total: board.size });
@@ -1437,10 +1416,6 @@ var MemoryScoreStore = class {
   ghost(chartHash, rate, playerId) {
     const row = this.board(chartHash, rateKey(rate)).get(playerId);
     return Promise.resolve(row?.ghost && row.ghost.length > 0 ? row.ghost : null);
-  }
-  replay(chartHash, rate, playerId) {
-    const row = this.board(chartHash, rateKey(rate)).get(playerId);
-    return Promise.resolve(row?.replay && row.replay.length > 0 ? row.replay : null);
   }
 };
 
@@ -6700,13 +6675,10 @@ var SCHEMA = [
      plays       INT NOT NULL,
      updated_at  BIGINT NOT NULL,
      ghost       JSONB,
-     replay      JSONB,
      PRIMARY KEY (chart_hash, rate_key, player_id)
    )`,
   // Databases bootstrapped before the ghost column existed.
   `ALTER TABLE net_scores ADD COLUMN IF NOT EXISTS ghost JSONB`,
-  // Databases bootstrapped before the replay column existed (anti-cheat, v2).
-  `ALTER TABLE net_scores ADD COLUMN IF NOT EXISTS replay JSONB`,
   `CREATE INDEX IF NOT EXISTS net_scores_board
      ON net_scores (chart_hash, rate_key, percent DESC, updated_at ASC)`
 ];
@@ -6726,7 +6698,6 @@ function toStoredBest(row) {
     updatedAt: Number(row.updated_at)
   };
   if (row.ghost && row.ghost.length > 0) best.ghost = row.ghost;
-  if (row.replay && row.replay.length > 0) best.replay = row.replay;
   return best;
 }
 var PgScoreStore = class {
@@ -6761,7 +6732,7 @@ var PgScoreStore = class {
       ]),
       sql.query(
         `SELECT s.player_id, p.name, s.percent, s.grade, s.max_combo, s.failed,
-                s.counts, s.hold_counts, s.plays, s.updated_at, s.ghost, s.replay
+                s.counts, s.hold_counts, s.plays, s.updated_at, s.ghost
          FROM net_scores s JOIN net_players p USING (player_id)
          WHERE s.chart_hash = $1 AND s.rate_key = $2 AND s.player_id = $3`,
         [req.chart.chartHash, rk, req.playerId]
@@ -6776,15 +6747,14 @@ var PgScoreStore = class {
     await sql.query(
       `INSERT INTO net_scores (chart_hash, rate_key, player_id, percent, grade, max_combo,
                                failed, counts, hold_counts, chart_meta, plays, updated_at,
-                               ghost, replay)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                               ghost)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (chart_hash, rate_key, player_id) DO UPDATE SET
          percent = EXCLUDED.percent, grade = EXCLUDED.grade,
          max_combo = EXCLUDED.max_combo, failed = EXCLUDED.failed,
          counts = EXCLUDED.counts, hold_counts = EXCLUDED.hold_counts,
          chart_meta = EXCLUDED.chart_meta, plays = EXCLUDED.plays,
-         updated_at = EXCLUDED.updated_at, ghost = EXCLUDED.ghost,
-         replay = EXCLUDED.replay`,
+         updated_at = EXCLUDED.updated_at, ghost = EXCLUDED.ghost`,
       [
         req.chart.chartHash,
         rk,
@@ -6798,8 +6768,7 @@ var PgScoreStore = class {
         JSON.stringify(req.chart),
         next.plays,
         next.updatedAt,
-        next.ghost ? JSON.stringify(next.ghost) : null,
-        next.replay ? JSON.stringify(next.replay) : null
+        next.ghost ? JSON.stringify(next.ghost) : null
       ]
     );
     const better = await sql.query(
@@ -6815,8 +6784,7 @@ var PgScoreStore = class {
     const rows = await this.sql.query(
       `SELECT s.player_id, p.name, s.percent, s.grade, s.max_combo, s.failed,
               s.counts, s.hold_counts, s.plays, s.updated_at,
-              (COALESCE(jsonb_array_length(s.ghost), 0) > 0) AS has_ghost,
-              (COALESCE(jsonb_array_length(s.replay), 0) > 0) AS has_replay
+              (COALESCE(jsonb_array_length(s.ghost), 0) > 0) AS has_ghost
        FROM net_scores s JOIN net_players p USING (player_id)
        WHERE s.chart_hash = $1 AND s.rate_key = $2
        ORDER BY s.percent DESC, s.updated_at ASC
@@ -6844,8 +6812,7 @@ var PgScoreStore = class {
           maxCombo: row.max_combo,
           failed: row.failed,
           at: Number(row.updated_at),
-          hasGhost: row.has_ghost,
-          hasReplay: row.has_replay
+          hasGhost: row.has_ghost
         };
       }),
       total: totals[0]?.n ?? 0
@@ -6860,16 +6827,6 @@ var PgScoreStore = class {
     );
     const g = rows[0]?.ghost;
     return g && g.length > 0 ? g : null;
-  }
-  async replay(chartHash, rate, playerId) {
-    await this.ensureSchema();
-    const rows = await this.sql.query(
-      `SELECT replay FROM net_scores
-       WHERE chart_hash = $1 AND rate_key = $2 AND player_id = $3`,
-      [chartHash, rateKey(rate), playerId]
-    );
-    const r = rows[0]?.replay;
-    return r && r.length > 0 ? r : null;
   }
 };
 

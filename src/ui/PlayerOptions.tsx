@@ -243,6 +243,20 @@ export function PlayerOptions({
     onStart(chart, practiceSection);
   };
 
+  /** SELECT/back, one level per press. Host: back to the songs — the ROOM
+   *  persists, only the song pick is withdrawn. Guest: leave the room but keep
+   *  the loaded song (play on solo); a further press backs out. Solo: back. */
+  const back = () => {
+    if (room?.isHost) {
+      clearAnnouncedSong();
+      onBack();
+    } else if (versusActive) {
+      leaveRoom();
+    } else {
+      onBack();
+    }
+  };
+
   // Browsing the DIFFICULTY row shows live on everyone's roster (until ready).
   useEffect(() => {
     if (room && !selfReady) room.sendPick(pickOf(req.song, chart));
@@ -463,19 +477,8 @@ export function PlayerOptions({
       else if (e.key === 'ArrowLeft') curRow.adjust(-1);
       else if (e.key === 'ArrowRight') curRow.adjust(1);
       else if (e.key === 'Enter' || role === 'confirm') go();
-      else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') {
-        // One level per press. Host: back to the songs — the ROOM persists,
-        // only the song pick is withdrawn. Guest: leave the room but keep the
-        // screen (the song is loaded — play on solo); next press backs out.
-        if (room?.isHost) {
-          clearAnnouncedSong();
-          onBack();
-        } else if (versusActive) {
-          leaveRoom();
-        } else {
-          onBack();
-        }
-      } else return;
+      else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') back();
+      else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
@@ -515,19 +518,7 @@ export function PlayerOptions({
                 ? 'WAITING…'
                 : 'START — PLAY'}
           </span>
-          <button
-            onClick={() => {
-              if (room?.isHost) {
-                clearAnnouncedSong();
-                onBack();
-              } else if (versusActive) {
-                leaveRoom();
-              } else {
-                onBack();
-              }
-            }}
-            className="hover:text-[#ececec]"
-          >
+          <button onClick={back} className="hover:text-[#ececec]">
             {room?.isHost
               ? 'SELECT — BACK (ROOM STAYS)'
               : versusActive

@@ -31,8 +31,6 @@ import { makeBenchSsc, type BenchChartOpts } from './benchChart';
 export interface BenchScenario {
   id: string;
   label: string;
-  /** Which note-field renderer draws the scenario (default canvas). */
-  backend?: 'canvas' | 'webgpu';
   noteSkin: NoteSkin;
   chart: BenchChartOpts;
   /** X-mod multiplier (lower = more notes on screen at once). */
@@ -66,7 +64,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-arcade-typical',
     label: 'WEBGPU · TYPICAL CHART',
-    backend: 'webgpu',
     noteSkin: 'arcade',
     chart: { bpm: 175, measures: 28, jumpEveryBeats: 2, holdEveryBeats: 4, holdLenBeats: 1 },
     scrollValue: 2.5,
@@ -74,7 +71,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-arcade-stress',
     label: 'WEBGPU · STRESS + DANGER',
-    backend: 'webgpu',
     noteSkin: 'arcade',
     chart: STRESS_CHART,
     scrollValue: 1,
@@ -83,7 +79,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-arcade-stress-bgimage',
     label: 'WEBGPU · STRESS + BG IMAGE',
-    backend: 'webgpu',
     noteSkin: 'arcade',
     chart: STRESS_CHART,
     scrollValue: 1,
@@ -92,7 +87,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-arcade-stress-bgvideo',
     label: 'WEBGPU · STRESS + BG VIDEO',
-    backend: 'webgpu',
     noteSkin: 'arcade',
     chart: STRESS_CHART,
     scrollValue: 1,
@@ -101,7 +95,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-itg-stress',
     label: 'WEBGPU · ITG · STRESS',
-    backend: 'webgpu',
     noteSkin: 'itg',
     chart: STRESS_CHART,
     scrollValue: 1,
@@ -109,7 +102,6 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
   {
     id: 'gpu-versus-dual',
     label: 'WEBGPU · VERSUS · TWO FIELDS',
-    backend: 'webgpu',
     noteSkin: 'arcade',
     chart: STRESS_CHART,
     scrollValue: 1,
@@ -432,8 +424,8 @@ const BENCH_META = {
   difficulty: 'DANCE-SINGLE · BENCH 20',
 };
 
-/** Build the judge/feedback/autoplay core plus a backend-specific render fn.
- *  Returns null when the scenario's backend can't run here (reason attached). */
+/** Build the judge/feedback/autoplay core plus the WebGPU render fn.
+ *  Returns null when WebGPU can't run here (reason attached). */
 async function buildScene(
   scn: BenchScenario,
   container: HTMLElement,

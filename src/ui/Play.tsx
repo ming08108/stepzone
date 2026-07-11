@@ -13,18 +13,10 @@ import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
-import { saveReplay } from '../app/replays';
 import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
-import {
-  rateKey,
-  type ChartData,
-  type PlayResult,
-  type ReplayEvent,
-  type SubmitInput,
-} from '../net/protocol';
-import type { Song } from '../song/song';
-import type { Steps } from '../song/steps';
+import { type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
+import { chartDataOf } from '../song/chartData';
 import { GhostRace, type GhostInfo } from './GhostRace';
 import { RivalBars, RoomStandings } from './RoomRace';
 import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
@@ -92,25 +84,6 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 const AC = '#ff5d47';
 /** How long `back` must be held mid-song to quit (stray taps don't drop out). */
 const QUIT_HOLD_MS = 900;
-
-/** Serialize the chart the play ran on for server-side replay verification —
- *  the raw note grid + the resolved timing segments the server needs to rebuild
- *  the chart, recompute its content hash, and re-run the Judge. */
-function chartDataOf(song: Song, chart: Steps): ChartData {
-  const t = chart.getTimingData(song.timing);
-  return {
-    stepsType: chart.stepsType,
-    noteData: chart.noteDataString,
-    timing: {
-      offset: t.offsetSeconds,
-      bpms: t.bpms.map((s) => ({ row: s.row, bps: s.bps })),
-      stops: t.stops.map((s) => ({ row: s.row, seconds: s.seconds })),
-      delays: t.delays.map((s) => ({ row: s.row, seconds: s.seconds })),
-      warps: t.warps.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
-      fakes: t.fakes.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
-    },
-  };
-}
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -678,10 +651,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
         });
       }
-      // Persist the best-play replay locally on a solo ranked personal best.
-      if (!req.versus && req.practice == null && isNewRecord) {
-        saveReplay(chartKey(req.song, req.chart), rateKey(effRate), [...session.inputLog]);
-      }
       // Lifetime stats: fold the finished play in (steps bank separately).
       recordPlayEnd({
         seconds: Math.max(0, (performance.now() - playStartedAtRef.current) / 1000),
@@ -749,13 +718,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
     if (import.meta.env.DEV) {
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
-      (window as unknown as { __playDebug?: () => unknown }).__playDebug = () => ({
-        phase: phaseRef.current,
-        versus: !!versusRef.current,
-        revealed: standingsRevealedRef.current,
-        roomPhase: versusRef.current?.room.phase,
-        roomEnded: versusRef.current?.room.ended,
-      });
     }
     setResult(null);
     // Keep the LOADING splash up through GPU init + audio decode + prewarm, and

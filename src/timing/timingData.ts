@@ -130,11 +130,6 @@ export class TimingData {
     return bps;
   }
 
-  /** BPM at a row. Unused by the engine itself; kept as a trivial convenience. */
-  getBpmAtRow(row: number): number {
-    return this.getBpsAtRow(row) * 60;
-  }
-
   // --- The event scanner (ITGmania FindEvent) ------------------------------
   // Ties are broken by check order (strict `< eventRow`), which is what gives
   // DELAY-before-notes and STOP-after-notes their semantics. Do not reorder.

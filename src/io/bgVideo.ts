@@ -17,6 +17,7 @@ import {
   findBackgroundFile,
   findConvertibleBackground,
   isVideoFile,
+  relPath,
   type LibraryEntry,
 } from './songFiles';
 import { getCachedVideo, putCachedVideo, videoCacheKey } from './videoCache';
@@ -141,10 +142,6 @@ async function convert(
     void ff.deleteFile(inName).catch(() => {});
     if (outName) void ff.deleteFile(outName).catch(() => {});
   }
-}
-
-function relPath(f: File): string {
-  return f.webkitRelativePath && f.webkitRelativePath.length > 0 ? f.webkitRelativePath : f.name;
 }
 
 // Serialized conversion queue — ffmpeg.wasm runs one command at a time, and

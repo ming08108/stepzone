@@ -407,10 +407,6 @@ export function consumeFollow(): PlayRequest | null {
   return req;
 }
 
-export function dismissFollowError(): void {
-  if (follow.k === 'error') setFollow({ k: 'none' });
-}
-
 // ---- play handoff --------------------------------------------------------------------
 
 /** Everyone readied — describe the race for Play. The rivals' picks resolve

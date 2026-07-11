@@ -194,25 +194,6 @@ export async function fetchGhost(
   }
 }
 
-/** The stored replay of one player's best on a board; null when absent/offline. */
-export async function fetchReplay(
-  chartHash: string,
-  musicRate: number,
-  playerId: string,
-): Promise<ReplayEvent[] | null> {
-  try {
-    const url =
-      `${API_URL}?chartHash=${encodeURIComponent(chartHash)}` +
-      `&rate=${musicRate}&replayOf=${encodeURIComponent(playerId)}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const body = (await res.json()) as { replay?: unknown };
-    return parseReplay(body.replay);
-  } catch {
-    return null;
-  }
-}
-
 /** Top rows for one board; null when offline/undeployed (callers hide the panel). */
 export async function fetchLeaderboard(
   chartHash: string,

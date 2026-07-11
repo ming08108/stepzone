@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react';
 import {
   RAW_GAMEPAD_EVENTS,
+  rawGamepadSupported,
   subscribeControls,
   subscribeGamepadSamples,
   type ControlEvent,
@@ -27,8 +28,7 @@ import {
 import { Stage, STEP_AC as AC } from './Stage';
 import { useMenuNav } from './useMenuNav';
 
-const RAW_GAMEPAD_SUPPORTED =
-  typeof window !== 'undefined' && RAW_GAMEPAD_EVENTS.some((n) => `on${n}` in window);
+const RAW_GAMEPAD_SUPPORTED = rawGamepadSupported();
 
 const PHASE_BINS = 24;
 const MAX_TS = 300; // timestamps kept per device

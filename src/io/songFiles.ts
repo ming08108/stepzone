@@ -21,7 +21,7 @@ function ext(name: string): string {
   return i >= 0 ? b.slice(i) : '';
 }
 
-function relPath(f: File): string {
+export function relPath(f: File): string {
   return f.webkitRelativePath && f.webkitRelativePath.length > 0 ? f.webkitRelativePath : f.name;
 }
 

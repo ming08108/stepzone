@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { GameSession } from '../game/session';
-import type { PlayerState, RoomPeer } from '../net/roomPeer';
+import type { RoomPeer } from '../net/roomPeer';
 import { diffColor } from './DiffBadge';
 import type { RoomPlayInfo } from './playRequest';
 
@@ -240,13 +240,4 @@ export function RoomStandings({
       )}
     </div>
   );
-}
-
-/** True while any rival is still mid-song (standings are provisional). */
-export function raceStillRunning(room: RoomPeer, opponents: RoomPlayInfo['opponents']): boolean {
-  const players = new Map<number, PlayerState>(room.players.map((p) => [p.id, p]));
-  return opponents.some((o) => {
-    const p = players.get(o.id);
-    return p ? !p.left && p.result === null : false;
-  });
 }

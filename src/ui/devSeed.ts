@@ -14,30 +14,13 @@
 import { parseNoteGrid } from '../notes/noteGrid';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { chartContentHash } from '../song/chartHash';
+import { chartDataOf } from '../song/chartData';
 import { stepsTypeNumTracks } from '../song/stepsType';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 import type { ChartData, ReplayEvent } from '../net/protocol';
 
 const round4 = (x: number): number => Math.round(x * 1e4) / 1e4;
-
-/** Serialize the chart the way Play.tsx does for submission (raw grid + the
- *  timing segments the server rebuilds to recompute the content hash). */
-function chartDataOf(song: Song, chart: Steps): ChartData {
-  const t = chart.getTimingData(song.timing);
-  return {
-    stepsType: chart.stepsType,
-    noteData: chart.noteDataString,
-    timing: {
-      offset: t.offsetSeconds,
-      bpms: t.bpms.map((s) => ({ row: s.row, bps: s.bps })),
-      stops: t.stops.map((s) => ({ row: s.row, seconds: s.seconds })),
-      delays: t.delays.map((s) => ({ row: s.row, seconds: s.seconds })),
-      warps: t.warps.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
-      fakes: t.fakes.map((s) => ({ row: s.row, lengthRows: s.lengthRows })),
-    },
-  };
-}
 
 /** An ideal replay for a chart: press each tap/hold-head at its exact note time
  *  (W1), hold a hold down until its tail, avoid mines. Re-sims to ~100%. */
