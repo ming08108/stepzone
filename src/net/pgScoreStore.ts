@@ -113,18 +113,23 @@ export class PgScoreStore implements ScoreStore {
       req.playerId,
     ])) as { secret_hash: string }[];
     if (players[0]?.secret_hash !== secretHash) return { ok: false, code: 'bad_secret' };
-    await sql.query(`UPDATE net_players SET name = $2 WHERE player_id = $1`, [
-      req.playerId,
-      req.playerName,
-    ]);
 
-    const prevRows = (await sql.query(
-      `SELECT s.player_id, p.name, s.percent, s.grade, s.max_combo, s.failed,
-              s.counts, s.hold_counts, s.plays, s.updated_at, s.ghost
-       FROM net_scores s JOIN net_players p USING (player_id)
-       WHERE s.chart_hash = $1 AND s.rate_key = $2 AND s.player_id = $3`,
-      [req.chart.chartHash, rk, req.playerId],
-    )) as ScoreRow[];
+    // Independent statements (the SELECT's joined p.name is never read below —
+    // mergeStoredBest always takes req.playerName), so they run concurrently.
+    const [, prevRowsRaw] = await Promise.all([
+      sql.query(`UPDATE net_players SET name = $2 WHERE player_id = $1`, [
+        req.playerId,
+        req.playerName,
+      ]),
+      sql.query(
+        `SELECT s.player_id, p.name, s.percent, s.grade, s.max_combo, s.failed,
+                s.counts, s.hold_counts, s.plays, s.updated_at, s.ghost
+         FROM net_scores s JOIN net_players p USING (player_id)
+         WHERE s.chart_hash = $1 AND s.rate_key = $2 AND s.player_id = $3`,
+        [req.chart.chartHash, rk, req.playerId],
+      ),
+    ]);
+    const prevRows = prevRowsRaw as unknown as ScoreRow[];
     const { next, isPersonalBest } = mergeStoredBest(
       prevRows[0] ? toStoredBest(prevRows[0]) : undefined,
       req,

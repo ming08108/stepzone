@@ -35,10 +35,11 @@ export function NamePrompt({ onDone }: { onDone: () => void }) {
       const role = keyboardRole(e.code);
       // The input has focus, so letters/arrows must reach it — only the
       // confirm/back chords act here.
+      const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
       if (e.key === 'Enter' || (role === 'confirm' && e.target !== inputRef.current)) {
         e.preventDefault();
         finish(true);
-      } else if (e.key === 'Escape') {
+      } else if (isBack) {
         e.preventDefault();
         finish(false);
       }

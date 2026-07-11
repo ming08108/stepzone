@@ -55,8 +55,14 @@ relays live to the rival's lobby, and START pins the pick inside the ready
 frame (versusSession store + versusResolve helpers own the session/UI side).
 When both are ready the song starts on both machines together. Music rate is
 room-locked; practice is unavailable in versus; percent compares across
-difficulties (meters are labeled on the bar and standings). During play the
-top-left bar shows the rival's live percent/combo and your lead/deficit;
+difficulties (meters are labeled on the bar and standings). During play **the rival's
+playfield renders beside yours, arcade 2P style** (src/ui/OpponentField.tsx):
+a second GpuNoteField over THEIR chart (resolved locally by hash) on the
+local synced clock, driven by their judged-note stream (`notes` frames, a
+display feed — judging never crosses the wire), with combo/life riding the
+snap feed. When their exact chart revision isn't local the panel is absent
+and the race falls back to the bar. The top-left bar shows the rival's live
+percent/combo and your lead/deficit;
 results show WIN/LOSE/DRAW once both finish. RETRY is hidden (a rematch is a
 fresh room). A mid-song disconnect marks the rival DISCONNECTED and the local
 game plays out normally. Versus plays still submit to the async leaderboard

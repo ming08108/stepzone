@@ -192,6 +192,27 @@ describe('VersusMatch flow', () => {
     expect(pair.joiner.opponent.pick?.meter).toBe(5);
   });
 
+  it('streams judged notes into the rival playfield feed, playing-phase only', () => {
+    const pair = wire();
+    pair.host.sendNotes([{ i: 0, tns: 9 }]); // lobby — must not send
+    expect(pair.joiner.opponentNotes).toHaveLength(0);
+    toPlaying(pair);
+    pair.host.sendNotes([
+      { i: 0, tns: 9 },
+      { i: 1, tns: 4 },
+    ]);
+    pair.host.sendNotes([{ i: 2, tns: 7 }]);
+    expect(pair.joiner.opponentNotes).toEqual([
+      { i: 0, tns: 9 },
+      { i: 1, tns: 4 },
+      { i: 2, tns: 7 },
+    ]);
+    // Hostile frames: bad index / oversized batch are dropped whole.
+    pair.joiner.handleMessage(JSON.stringify({ t: 'notes', notes: [{ i: -1, tns: 9 }] }));
+    pair.joiner.handleMessage(JSON.stringify({ t: 'notes', notes: [{ i: 3, tns: 9.5 }] }));
+    expect(pair.joiner.opponentNotes).toHaveLength(3);
+  });
+
   it('rejects malformed pick/ready frames', () => {
     expect(parsePeerMsg(JSON.stringify({ t: 'ready' }))).toBeNull(); // pick is mandatory
     expect(

@@ -107,6 +107,15 @@ export interface VersusSnap {
   failed: boolean;
 }
 
+/** One judged note (index into the sender's time-sorted note list + result) —
+ *  drives the rival-playfield display; judging itself never crosses the wire. */
+export interface VersusNote {
+  i: number;
+  tns: number;
+}
+
+export const MAX_NOTE_INDEX = 200_000;
+
 export type PeerMsg =
   | { t: 'hello'; name: string }
   | { t: 'pick'; pick: VersusChartMeta } // advisory — lobby display while browsing
@@ -117,6 +126,7 @@ export type PeerMsg =
   | { t: 'pong'; at: number }
   | { t: 'go'; delayMs: number } // begin after delayMs (half-RTT compensated)
   | { t: 'snap'; snap: VersusSnap }
+  | { t: 'notes'; notes: VersusNote[] } // judged since the last batch (display only)
   | { t: 'finish'; result: PlayResult }
   | { t: 'bye' };
 
@@ -172,6 +182,17 @@ export function parsePeerMsg(raw: string): PeerMsg | null {
     case 'snap': {
       const snap = parseSnap(v.snap);
       return snap ? { t: 'snap', snap } : null;
+    }
+    case 'notes': {
+      if (!Array.isArray(v.notes) || v.notes.length > 512) return null;
+      const notes: VersusNote[] = [];
+      for (const n of v.notes) {
+        if (!isObj(n)) return null;
+        if (!num(n.i) || !Number.isInteger(n.i) || n.i < 0 || n.i > MAX_NOTE_INDEX) return null;
+        if (!num(n.tns) || !Number.isInteger(n.tns) || n.tns < 0 || n.tns > 16) return null;
+        notes.push({ i: n.i, tns: n.tns });
+      }
+      return { t: 'notes', notes };
     }
     case 'finish': {
       const result = parsePlayResult(v.result);

@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import type { GameSession } from '../game/session';
 import type { VersusMatch } from '../net/versusMatch';
+import { DiffBadge } from './DiffBadge';
 
 const TICK_MS = 150;
 
@@ -45,25 +46,19 @@ export function VersusBar({
   }, [session, match]);
 
   if (!view) return null;
-  const ahead = view.diff >= 0;
-  const clr = ahead ? '#59f07f' : '#ff5d47';
-  return (
-    <div
-      className="absolute left-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.14em] text-[#ececec]/85"
-      style={{ borderColor: view.left ? 'rgba(255,255,255,.2)' : clr + '66' }}
-    >
-      {view.left ? (
+  if (view.left) {
+    return (
+      <div
+        className="absolute left-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.14em] text-[#ececec]/85"
+        style={{ borderColor: 'rgba(255,255,255,.2)' }}
+      >
         <span className="text-[#ececec]/45">{name} — DISCONNECTED</span>
-      ) : (
-        <>
-          {name} {(view.oppoPercent * 100).toFixed(2)}%
-          {view.finished ? ' · DONE' : ` ×${view.combo}`}{' '}
-          <span className="font-bold" style={{ color: clr }}>
-            {ahead ? '+' : ''}
-            {(view.diff * 100).toFixed(2)}%
-          </span>
-        </>
-      )}
-    </div>
+      </div>
+    );
+  }
+  return (
+    <DiffBadge diff={view.diff}>
+      {name} {(view.oppoPercent * 100).toFixed(2)}%{view.finished ? ' · DONE' : ` ×${view.combo}`}
+    </DiffBadge>
   );
 }

@@ -190,6 +190,17 @@ try {
     }
     step('opponent bars stream live on both machines', barsOk, barDump);
 
+    // 7b. Arcade 2P: the rival's playfield panel renders beside the local
+    // field on both machines (a second canvas driven by the note feed).
+    const [cA, cB] = await Promise.all(
+      [alpha, bravo].map((p) => p.evaluate(() => document.querySelectorAll('canvas').length)),
+    );
+    step(
+      'rival playfields render side by side on both machines',
+      cA >= 2 && cB >= 2,
+      `alpha ${cA} canvases, bravo ${cB}`,
+    );
+
     // 8. BRAVO quits mid-song; ALPHA sees the disconnect and keeps playing.
     await bravo.keyboard.down('Escape');
     await bravo.waitForTimeout(1_500);

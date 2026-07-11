@@ -127,9 +127,10 @@ export function flushQueue(): Promise<void> {
 export async function submitScore(play: PendingPlay): Promise<SubmitScoreResponse | null> {
   // Older parked plays go first so the board sees them in order.
   await flushQueue();
-  if (loadQueue().length > 0) {
+  const queued = loadQueue();
+  if (queued.length > 0) {
     // Still blocked — park this one behind the rest.
-    saveQueue([...loadQueue(), play]);
+    saveQueue([...queued, play]);
     return null;
   }
   const outcome = await send(play);

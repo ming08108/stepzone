@@ -11,21 +11,11 @@
  *   GET  ?code=XXXXXX&role=host (host poll) -> { answer, joinerName } (nulls until joined)
  */
 
+import { error, json } from './httpResponse';
 import { isRoomCode, parseSignalRequest, randomRoomCode } from './versus';
 import type { SignalStore } from './signalStore';
 
 const MAX_BODY_BYTES = 128 * 1024;
-
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-  });
-}
-
-function error(status: number, code: string, message: string): Response {
-  return json(status, { ok: false, code, message });
-}
 
 export interface SignalHandlers {
   GET(req: Request): Promise<Response>;

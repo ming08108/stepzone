@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GameSession } from '../game/session';
 import type { GhostFrame } from '../net/protocol';
+import { DiffBadge } from './DiffBadge';
 
 export interface GhostInfo {
   /** Display label — the opponent's name, or YOUR BEST when racing yourself. */
@@ -42,18 +43,5 @@ export function GhostRace({ session, ghost }: { session: GameSession; ghost: Gho
   }, [session, ghost]);
 
   if (diff === null) return null;
-  const ahead = diff >= 0;
-  const clr = ahead ? '#59f07f' : '#ff5d47';
-  return (
-    <div
-      className="absolute left-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.14em] text-[#ececec]/85"
-      style={{ borderColor: clr + '66' }}
-    >
-      VS {ghost.name}{' '}
-      <span className="font-bold" style={{ color: clr }}>
-        {ahead ? '+' : ''}
-        {(diff * 100).toFixed(2)}%
-      </span>
-    </div>
-  );
+  return <DiffBadge diff={diff}>VS {ghost.name}</DiffBadge>;
 }

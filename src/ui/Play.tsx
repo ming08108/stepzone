@@ -11,6 +11,7 @@ import { getIdentity } from '../net/identity';
 import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
 import type { VersusMatch } from '../net/versusMatch';
 import { GhostRace, type GhostInfo } from './GhostRace';
+import { OpponentField } from './OpponentField';
 import { VersusBar } from './VersusBar';
 import { addSongPlay, addSteps } from '../app/stats';
 import type { PlayRequest } from './playRequest';
@@ -248,22 +249,43 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     };
   }, [req.versus]);
 
-  // Stream the live scoreboard to the rival while playing (a few Hz; the
-  // payload is derived stats only — judging never crosses the wire).
+  // Stream to the rival while playing: freshly-judged notes (their copy of
+  // our playfield) every tick, the scoreboard snap every other tick. Derived
+  // stats and display events only — judging never crosses the wire.
   useEffect(() => {
     const m = req.versus?.match;
     if (!m || phase !== 'playing') return;
+    // Judgments resolve near-chronologically (misses age via a forward
+    // cursor), so a scan pointer over the time-sorted notes finds new ones in
+    // O(new). Unjudgable notes (fakes/warped) never resolve — skip them.
+    let sent = 0;
+    let tick = 0;
     const timer = window.setInterval(() => {
       const s = sessionRef.current;
       if (!s) return;
-      m.sendSnap({
-        atSong: s.songNow,
-        percent: Math.max(0, Math.min(1, s.judge.percentDancePoints)),
-        combo: s.judge.combo,
-        life: s.judge.life,
-        failed: s.judge.failed,
-      });
-    }, 200);
+      const notes = s.judge.notes;
+      const fresh: { i: number; tns: number }[] = [];
+      while (sent < notes.length) {
+        const n = notes[sent];
+        if (!n.judgable) {
+          sent++;
+          continue;
+        }
+        if (n.tns === TapNoteScore.None) break; // pending — resolves shortly
+        fresh.push({ i: sent, tns: n.tns });
+        sent++;
+      }
+      m.sendNotes(fresh);
+      if (tick++ % 2 === 0) {
+        m.sendSnap({
+          atSong: s.songNow,
+          percent: Math.max(0, Math.min(1, s.judge.percentDancePoints)),
+          combo: s.judge.combo,
+          life: s.judge.life,
+          failed: s.judge.failed,
+        });
+      }
+    }, 100);
     return () => window.clearInterval(timer);
   }, [phase, req.versus]);
 
@@ -603,7 +625,19 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       ref={wrapRef}
       className="fixed inset-0 overflow-hidden bg-[#050506] font-grotesk [font-variant-numeric:tabular-nums]"
     >
-      <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
+      <div className="relative z-[1] flex h-full w-full">
+        <canvas ref={canvasRef} className="block h-full min-w-0 flex-1" />
+        {/* Arcade 2P: the rival's live field (their chart, our synced clock).
+            The panel reserves its width for the whole screen lifetime so the
+            main field's canvas never resizes mid-song. */}
+        {req.versus?.opponentChart && (
+          <div className="h-full w-[34%] max-w-[560px] flex-none border-l border-white/10 bg-black/30">
+            {phase === 'playing' && sessionRef.current && (
+              <OpponentField session={sessionRef.current} versus={req.versus} song={req.song} />
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
         <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>

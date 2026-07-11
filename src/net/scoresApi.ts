@@ -11,6 +11,7 @@
  *   POST SubmitScoreRequest                   -> SubmitScoreResponse
  */
 
+import { error, json } from './httpResponse';
 import { parseSubmitScoreRequest } from './protocol';
 import type { ScoreStore } from './scoreStore';
 
@@ -23,17 +24,6 @@ const MAX_BODY_BYTES = 128 * 1024;
 export async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-  });
-}
-
-function error(status: number, code: string, message: string): Response {
-  return json(status, { ok: false, code, message });
 }
 
 export interface ScoresHandlers {

@@ -20,7 +20,13 @@
  */
 
 import type { PlayResult } from './protocol';
-import { parsePeerMsg, type PeerMsg, type VersusChartMeta, type VersusSnap } from './versus';
+import {
+  parsePeerMsg,
+  type PeerMsg,
+  type VersusChartMeta,
+  type VersusNote,
+  type VersusSnap,
+} from './versus';
 
 /** Transport seam: the app passes an RTCDataChannel adapter, tests pass fakes. */
 export interface PeerChannel {
@@ -58,6 +64,11 @@ export class VersusMatch {
   };
   /** Host's measured round trip (0 until probed; joiner never measures). */
   rttMs = 0;
+
+  /** The rival's judged notes in arrival order — the rival-playfield feed.
+   *  Append-only; consumers keep their own read cursor (no callbacks needed:
+   *  the field polls each frame anyway). Capped against hostile flooding. */
+  readonly opponentNotes: VersusNote[] = [];
 
   /** Any observable state changed (phase, opponent fields). */
   onUpdate?: () => void;
@@ -153,6 +164,9 @@ export class VersusMatch {
           this.update();
         }
         break;
+      case 'notes':
+        if (this.opponentNotes.length < 100_000) this.opponentNotes.push(...msg.notes);
+        break; // no update(): the field polls on its own frame loop
       case 'finish':
         this.opponent.result = msg.result;
         this.maybeDone();
@@ -212,6 +226,15 @@ export class VersusMatch {
   sendSnap(snap: Omit<VersusSnap, 'seq'>): void {
     if (this.phase !== 'playing') return;
     this.send({ t: 'snap', snap: { ...snap, seq: ++this.snapSeq } });
+  }
+
+  /** Stream freshly-judged notes (display feed for the rival's playfield). */
+  sendNotes(notes: VersusNote[]): void {
+    if (this.phase !== 'playing' || notes.length === 0) return;
+    // The parser caps a frame at 512 notes; batches are tiny in practice.
+    for (let at = 0; at < notes.length; at += 512) {
+      this.send({ t: 'notes', notes: notes.slice(at, at + 512) });
+    }
   }
 
   /** The local play ended (natural finish or fail). */
