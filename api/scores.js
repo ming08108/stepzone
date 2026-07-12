@@ -900,6 +900,10 @@ var REGEN_COMBO_AFTER_MISS = 5;
 var MAX_REGEN_COMBO = 5;
 var Judge = class {
   windows;
+  /** Effective (rate-scaled) windows in chart-seconds, computed once — the base
+   *  windows, scale, add and rate are all session-constant, so the hot judge
+   *  loops read these instead of recomputing base*scale+add every call. */
+  effWin;
   notesByTrack;
   notes;
   // flat, sorted by time
@@ -908,6 +912,12 @@ var Judge = class {
   missCombo = 0;
   life = INITIAL_LIFE;
   failed = false;
+  /** Display-only score override for a rival's MIRROR judge (live versus): the
+   *  rival field is fed judged-note tns for rendering but never re-scored, so
+   *  its dance-point accumulators stay empty. The 100 ms snap carries the
+   *  rival's real percent — set this from it so their score panel / grade match
+   *  their bars. `null` on a real player's judge, which scores itself. */
+  displayPercent = null;
   /** Increments on every tap judgment (hit, miss, or mine) for UI feedback. */
   judgmentSeq = 0;
   lastTns = 0 /* None */;
@@ -918,7 +928,6 @@ var Judge = class {
   actualDance = 0;
   possibleDance = 0;
   possibleGrade = 0;
-  rate;
   missHorizon;
   lastUpdate = 0;
   /** Hits still owed before life regenerates after a loss (ITG regen-after-miss). */
@@ -934,8 +943,18 @@ var Judge = class {
   rowCombo = /* @__PURE__ */ new Map();
   constructor(noteData, timing, windows = DEFAULT_WINDOWS, rate = 1, section = null) {
     this.windows = windows;
-    this.rate = rate;
     this.missHorizon = missHorizonSeconds(windows) * rate;
+    this.effWin = {
+      w0: windowSeconds(windows, "w0") * rate,
+      w1: windowSeconds(windows, "w1") * rate,
+      w2: windowSeconds(windows, "w2") * rate,
+      w3: windowSeconds(windows, "w3") * rate,
+      w4: windowSeconds(windows, "w4") * rate,
+      w5: windowSeconds(windows, "w5") * rate,
+      mine: windowSeconds(windows, "mine") * rate,
+      hold: windowSeconds(windows, "hold") * rate,
+      roll: windowSeconds(windows, "roll") * rate
+    };
     this.notesByTrack = Array.from({ length: noteData.numTracks }, () => []);
     this.notes = [];
     for (let track = 0; track < noteData.numTracks; track++) {
@@ -1023,7 +1042,7 @@ var Judge = class {
   }
   /** Effective (rate-scaled) window in chart-seconds. */
   win(key) {
-    return windowSeconds(this.windows, key) * this.rate;
+    return this.effWin[key];
   }
   classify(err) {
     if (err <= this.win("w1")) return 9 /* W1 */;
@@ -1189,11 +1208,13 @@ var Judge = class {
     this.activeHolds.splice(activeIdx, 1);
   }
   get percentDancePoints() {
+    if (this.displayPercent !== null) return this.displayPercent;
     if (this.possibleDance <= 0) return 0;
     return Math.max(0, this.actualDance / this.possibleDance);
   }
   get grade() {
     if (this.failed) return "F";
+    if (this.displayPercent !== null) return gradeFromPercent(this.displayPercent);
     let actual = 0;
     for (const k in this.tapCounts) actual += this.tapCounts[k] * tapGradePoints(Number(k));
     for (const k in this.holdCounts) actual += this.holdCounts[k] * holdGradePoints(Number(k));
