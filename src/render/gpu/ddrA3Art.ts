@@ -328,18 +328,23 @@ export function paintNote(
   ctx.strokeStyle = OUTLINE_INK;
   ctx.lineWidth = 3 * ds;
   ctx.stroke();
-  tracePoly(ctx, ARROW_HOLLOW, s);
   if (hollow) {
-    // Punch the interior out to fully transparent so the field/video shows
-    // through the centre until the skin's beat fill washes it white.
+    // Punch the WHOLE interior — the hollow AND the central stem (capsule +
+    // pencil) — out to fully transparent, so the field/video shows through the
+    // centre until the skin's beat fill washes it white. (The hollow alone leaves
+    // the stem band-coloured, since the stem sits below it toward the tail.)
     ctx.save();
     ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = '#000';
-    ctx.fill();
+    for (const poly of [ARROW_HOLLOW, ARROW_CAPSULE, ARROW_PENCIL]) {
+      tracePoly(ctx, poly, s);
+      ctx.fill();
+    }
     ctx.restore();
     return;
   }
   // Near-black hollow.
+  tracePoly(ctx, ARROW_HOLLOW, s);
   ctx.fillStyle = OUTLINE_INK;
   ctx.fill();
   // Pale tube.
