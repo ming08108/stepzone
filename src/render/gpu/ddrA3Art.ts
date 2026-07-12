@@ -328,11 +328,20 @@ export function paintNote(
   ctx.strokeStyle = OUTLINE_INK;
   ctx.lineWidth = 3 * ds;
   ctx.stroke();
-  // Near-black hollow.
   tracePoly(ctx, ARROW_HOLLOW, s);
+  if (hollow) {
+    // Punch the interior out to fully transparent so the field/video shows
+    // through the centre until the skin's beat fill washes it white.
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  // Near-black hollow.
   ctx.fillStyle = OUTLINE_INK;
   ctx.fill();
-  if (hollow) return; // interior stays dark; the skin fills it on the beat
   // Pale tube.
   ctx.fillStyle = tube;
   tracePoly(ctx, ARROW_CAPSULE, s);
