@@ -105,6 +105,9 @@ export class SimplyLoveGpuSkin implements GpuSkin {
   // key or paint closure built per frame. Reused opts objects for the rotation
   // (and masked-stripe) pushes avoid a `{…}` alloc per quad. Reset on clear().
   private readonly rectCache = new Map<string, AtlasRect | null>();
+  /** Per-view eased dance % (0..1) + last timestamp, so the readout counts up
+   *  smoothly toward the real score instead of snapping on each hit. */
+  private readonly scoreShown = new Map<string, { v: number; t: number }>();
   private readonly rotOpt: QuadOpts = { rot: 0 };
   private readonly stripeOpt: QuadOpts = { rot: 0, mask: undefined, phaseV: 0 };
   private readonly repeatOpt: QuadOpts = { repeatV: 0 };
@@ -248,6 +251,37 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     });
   }
 
+  /** Arrow-tip tail cap: a silver triangle tapering to a point (matches the
+   *  note), so the freeze ends in an arrow shape rather than a flat tube. */
+  private sprHoldCap(ctx: SkinCtx, alive: boolean): AtlasRect | null {
+    const ck = alive ? 'cap1' : 'cap0';
+    const hit = this.rectCache.get(ck);
+    if (hit !== undefined) return hit;
+    const w = ctx.arrowS * 1.5;
+    const capH = Math.max(1, Math.round(w * 0.5));
+    const rect = ctx.atlas.sprite(`slcap:${alive}:${Math.round(w)}`, w, capH, (c) => {
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.lineTo(w, 0);
+      c.lineTo(w / 2, capH);
+      c.closePath();
+      const g = c.createLinearGradient(0, 0, w, 0);
+      if (alive) {
+        g.addColorStop(0, 'rgba(148,154,162,0.95)');
+        g.addColorStop(0.5, 'rgba(255,255,255,0.95)');
+        g.addColorStop(1, 'rgba(128,133,141,0.95)');
+      } else {
+        g.addColorStop(0, 'rgba(70,72,78,0.8)');
+        g.addColorStop(0.5, 'rgba(118,122,128,0.8)');
+        g.addColorStop(1, 'rgba(70,72,78,0.8)');
+      }
+      c.fillStyle = g;
+      c.fill();
+    });
+    this.rectCache.set(ck, rect);
+    return rect;
+  }
+
   /** Horizontal silver gradient strip (constant down the tube). */
   private sprTube(ctx: SkinCtx, alive: boolean): AtlasRect | null {
     const ck = alive ? 'tube1' : 'tube0';
@@ -349,8 +383,10 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     style: TapNoteStyle,
     _now: number,
     beat: number,
+    beatPulse: number,
   ): void {
-    const m = this.pad(ctx);
+    // Beat-synced breathing on top of the flowing stem stripe below.
+    const m = this.pad(ctx) * (style === 'deadHead' ? 1 : 1 + 0.05 * beatPulse);
     const dead = style === 'deadHead';
     const faceColor = dead ? '#7c8087' : ITG_QUANT_COLOR[quant];
     const x = ctx.laneX(track);
@@ -385,52 +421,40 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const ds = ctx.ds;
     const x = ctx.laneX(track);
     const w = ctx.arrowS * 1.5;
-    const r = w / 2;
     const h = Math.max(1, bottom - top);
-    const cy = top + h / 2;
+    const reverse = ctx.reverse;
+    // Body stops short of a tapered arrow-tip tail (at the far end from the head).
+    const capH = Math.min(w * 0.5, h);
+    const bodyH = h - capH;
+    const bodyCy = (reverse ? top + capH : top) + bodyH / 2;
     const white = ctx.white();
     // Silver tube.
     const tube = this.sprTube(ctx, alive);
-    if (tube) ctx.batch.push(x, cy, w, h, tube, 1, 1, 1, 1);
-    void r;
+    if (tube && bodyH > 0) ctx.batch.push(x, bodyCy, w, bodyH, tube, 1, 1, 1, 1);
+    // Arrow-tip tail cap.
+    const cap = this.sprHoldCap(ctx, alive);
+    if (cap && capH > 0) {
+      const capCy = reverse ? top + capH / 2 : bottom - capH / 2;
+      ctx.batch.push(x, capCy, w, capH, cap, 1, 1, 1, 1, { flipV: reverse });
+    }
     // Cel sheen bands riding the tube (tile anchored at the top).
     const sheen = this.sprSheen(ctx);
-    if (sheen) {
+    if (sheen && bodyH > 0) {
       const a = alive ? 0.3 : 0.1;
-      this.repeatOpt.repeatV = Math.max(1, h / (26 * ds));
-      ctx.batch.push(x, cy, w, h, sheen, 1, 1, 1, a, this.repeatOpt);
+      this.repeatOpt.repeatV = Math.max(1, bodyH / (26 * ds));
+      ctx.batch.push(x, bodyCy, w, bodyH, sheen, 1, 1, 1, a, this.repeatOpt);
     }
     // Dark side rims.
-    if (white) {
+    if (white && bodyH > 0) {
       const ra = alive ? 0.5 : 0.35;
-      ctx.batch.push(
-        x - w / 2 + 1.1 * ds,
-        cy,
-        2.2 * ds,
-        h,
-        white,
-        20 / 255,
-        22 / 255,
-        26 / 255,
-        ra,
-      );
-      ctx.batch.push(
-        x + w / 2 - 1.1 * ds,
-        cy,
-        2.2 * ds,
-        h,
-        white,
-        20 / 255,
-        22 / 255,
-        26 / 255,
-        ra,
-      );
-      // Engaged: beat shimmer + bright rim.
+      ctx.batch.push(x - w / 2 + 1.1 * ds, bodyCy, 2.2 * ds, bodyH, white, 20 / 255, 22 / 255, 26 / 255, ra); // prettier-ignore
+      ctx.batch.push(x + w / 2 - 1.1 * ds, bodyCy, 2.2 * ds, bodyH, white, 20 / 255, 22 / 255, 26 / 255, ra); // prettier-ignore
+      // Engaged: a brighter beat shimmer + glowing rims so a held freeze lights up.
       if (alive && held) {
-        ctx.batch.push(x, cy, w, h, white, 1, 1, 1, 0.1 + 0.16 * beatPulse);
-        const rim = 0.35 + 0.35 * beatPulse;
-        ctx.batch.push(x - w / 2 + 0.6 * ds, cy, 1.2 * ds, h, white, 1, 1, 1, rim);
-        ctx.batch.push(x + w / 2 - 0.6 * ds, cy, 1.2 * ds, h, white, 1, 1, 1, rim);
+        ctx.batch.push(x, bodyCy, w, bodyH, white, 1, 1, 1, 0.16 + 0.22 * beatPulse);
+        const rim = 0.4 + 0.4 * beatPulse;
+        ctx.batch.push(x - w / 2 + 0.6 * ds, bodyCy, 1.4 * ds, bodyH, white, 1, 1, 1, rim);
+        ctx.batch.push(x + w / 2 - 0.6 * ds, bodyCy, 1.4 * ds, bodyH, white, 1, 1, 1, rim);
       }
     }
   }
@@ -464,12 +488,12 @@ export class SimplyLoveGpuSkin implements GpuSkin {
   // --- HUD -------------------------------------------------------------------
 
   hudUnderlay(ctx: SkinCtx, judge: Judge, progress: number, now: number, beat: number): void {
-    this.drawPanel(ctx, judge, progress, beat);
+    this.drawPanel(ctx, judge, progress, beat, now);
     this.drawDensity(ctx, judge, now);
   }
 
   /** SL side panel: song meter, LifeMeterBar (+ swoosh), dance %, difficulty. */
-  private drawPanel(ctx: SkinCtx, judge: Judge, progress: number, beat: number): void {
+  private drawPanel(ctx: SkinCtx, judge: Judge, progress: number, beat: number, now: number): void {
     const ds = ctx.ds;
     const white = ctx.white();
     if (!white) return;
@@ -541,7 +565,17 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     // Dance % (big Wendy digits, right-aligned): composited per-glyph so the
     // value changing every hit never re-rasterizes (the old repaint-in-place
     // slot baked a fresh texture each change — a per-hit stutter at 4K).
-    const pct = (judge.percentDancePoints * 100).toFixed(2) + '%';
+    // Ease the shown % toward the real score so it rolls up instead of snapping.
+    const target = Math.max(0, Math.min(1, judge.percentDancePoints));
+    const prev = this.scoreShown.get(ctx.viewKey);
+    let shown = target;
+    if (prev) {
+      const dt = Math.max(0, now - prev.t);
+      shown = prev.v + (target - prev.v) * (1 - Math.exp(-dt / 0.09));
+      if (Math.abs(target - shown) < 1e-6) shown = target;
+    }
+    this.scoreShown.set(ctx.viewKey, { v: shown, t: now });
+    const pct = (shown * 100).toFixed(2) + '%';
     const pctO = { px: 44 * ds, bakePx: Math.round(44 * ds), tracking: 1 * ds };
     ctx.glyphs.drawNumber(
       ctx.hud,

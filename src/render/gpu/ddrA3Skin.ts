@@ -105,6 +105,9 @@ export class DdrA3GpuSkin implements GpuSkin {
   private readonly noteSprites = new Map<string, AtlasRect | null>();
   // Reused opts for the per-note rotation push (avoids a `{rot}` alloc/note).
   private readonly rotOpt: QuadOpts = { rot: 0 };
+  /** Per-view eased money score (0..1) + last timestamp, so the panel counts
+   *  up smoothly toward the real score instead of snapping on each hit. */
+  private readonly scoreShown = new Map<string, { v: number; t: number }>();
 
   fieldLeft(bare: boolean, width: number, numTracks: number, colW: number, ds: number): number {
     return bare
@@ -335,16 +338,21 @@ export class DdrA3GpuSkin implements GpuSkin {
     );
     if (shade && bodyH > 0) b.push(x, bodyCenter, w, bodyH, shade);
 
-    // Rounded tail cap (baked with gradient end, shading and outline).
+    // Arrow-tip tail cap: a triangle tapering to a point (matches the note
+    // shape) instead of a rounded/extruded bulb. Baked with the stream gradient,
+    // the same cylinder shading, and an outline.
     const cap = ctx.atlas.sprite(
       `holdcap:${variant}:${Math.round(w)}`,
       w + 4 * ds,
       capR + 2 * ds,
       (c) => {
-        c.translate(2 * ds, -capR + 2 * ds);
+        const pad = 2 * ds;
         c.beginPath();
-        c.roundRect(0, 0, w, 2 * capR - 2 * ds, [0, 0, capR, capR]);
-        const g = c.createLinearGradient(0, 0, 0, 2 * capR);
+        c.moveTo(pad, pad);
+        c.lineTo(pad + w, pad);
+        c.lineTo(pad + w / 2, capR + pad);
+        c.closePath();
+        const g = c.createLinearGradient(0, 0, 0, capR);
         g.addColorStop(0, skin.core);
         g.addColorStop(1, skin.light);
         c.fillStyle = g;
@@ -374,9 +382,13 @@ export class DdrA3GpuSkin implements GpuSkin {
       b.push(x + w / 2, bodyCenter, 1.8 * ds, bodyH, white, or, og, ob, oa);
     }
 
-    // Engaged shimmer washing with the beat.
+    // Engaged: a bright body wash pulsing with the beat + glowing side rails,
+    // so a held freeze clearly lights up (arcade-style).
     if (alive && held && white) {
-      b.push(x, top + h / 2, w, h, white, 1, 1, 1, 0.08 + 0.14 * beatPulse);
+      b.push(x, top + h / 2, w, h, white, 1, 1, 1, 0.14 + 0.2 * beatPulse);
+      const rim = 0.45 + 0.4 * beatPulse;
+      b.push(x - w / 2, top + h / 2, 2.6 * ds, h, white, 1, 1, 1, rim);
+      b.push(x + w / 2, top + h / 2, 2.6 * ds, h, white, 1, 1, 1, rim);
     }
   }
 
@@ -388,15 +400,19 @@ export class DdrA3GpuSkin implements GpuSkin {
     style: TapNoteStyle,
     _now: number,
     _beat: number,
-    _beatPulse: number,
+    beatPulse: number,
   ): void {
     const b = ctx.batch;
     const dead = style === 'deadHead';
-    const head = style === 'holdHead' || style === 'deadHead';
-    const band = dead ? NOTE_GREY : head ? NOTE_GREEN : QUANT_BAND[quant];
-    const tube = dead ? TUBE_GREY : head ? QUANT_TUBE[NoteType.N12TH] : QUANT_TUBE[quant];
+    // A hold/freeze HEAD is colored by quantization exactly like a tap (the hold
+    // body is what's visually distinct) — so a chord of a tap + a hold head reads
+    // as one color. Only a dropped (dead) head greys out.
+    const band = dead ? NOTE_GREY : QUANT_BAND[quant];
+    const tube = dead ? TUBE_GREY : QUANT_TUBE[quant];
     const spr = this.sprNote(ctx, band, tube);
-    const m = ctx.arrowS + 9 * ctx.ds;
+    // Beat-synced breathing pulse (the arcade arrows animate on the beat); a
+    // dead head sits still.
+    const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.06 * beatPulse);
     if (spr) {
       this.rotOpt.rot = ctx.angle(track);
       b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
@@ -485,7 +501,7 @@ export class DdrA3GpuSkin implements GpuSkin {
     if (white) {
       this.pushGauge(ctx, judge, now, beatPulse);
       this.pushSongPanel(ctx, progress, white);
-      this.pushScorePanel(ctx, judge);
+      this.pushScorePanel(ctx, judge, now);
     }
   }
 
@@ -737,7 +753,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       );
   }
 
-  private pushScorePanel(ctx: SkinCtx, judge: Judge): void {
+  private pushScorePanel(ctx: SkinCtx, judge: Judge, now: number): void {
     const { ds, height } = ctx;
     const sh = ctx.shapes;
     const pw = 280 * ds;
@@ -789,9 +805,21 @@ export class DdrA3GpuSkin implements GpuSkin {
     if (g.rect) ctx.hud.push(px + pw - 10 * ds - g.gw / 2, py + rowH / 2, g.gsw, rowH, g.rect);
 
     // Money digits, centered in the hex bar, leading zeros dimmed (glyph quads).
-    const digits = String(
-      Math.max(0, Math.min(9999999, Math.round(judge.percentDancePoints * 1000000))),
-    ).padStart(7, '0');
+    // Ease the shown value toward the real score so it rolls up instead of
+    // snapping on each hit (frame-rate independent; per view).
+    const target = Math.max(0, Math.min(1, judge.percentDancePoints));
+    const prev = this.scoreShown.get(ctx.viewKey);
+    let shown = target;
+    if (prev) {
+      const dt = Math.max(0, now - prev.t);
+      shown = prev.v + (target - prev.v) * (1 - Math.exp(-dt / 0.09));
+      if (Math.abs(target - shown) < 1e-6) shown = target;
+    }
+    this.scoreShown.set(ctx.viewKey, { v: shown, t: now });
+    const digits = String(Math.max(0, Math.min(9999999, Math.round(shown * 1000000)))).padStart(
+      7,
+      '0',
+    );
     const firstSig = digits.search(/[1-9]/);
     let text = '';
     const dim: boolean[] = [];
