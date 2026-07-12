@@ -114,6 +114,8 @@ export class GameSession {
   private readonly loopEndSeconds: number = 0;
   private loopCount = 1;
   private bgVideo: HTMLVideoElement | null = null;
+  /** Song time (s) at which the bg movie's frame 0 plays (#BGCHANGES beat). */
+  private bgVideoStartSecond = 0;
   private logicalW = 800;
   private logicalH = 720;
 
@@ -237,11 +239,17 @@ export class GameSession {
     this.gpuField?.setRivals(cfgs);
   }
 
-  /** Set (or clear) the background video/image drawn behind the field. */
-  setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
+  /** Set (or clear) the background video/image drawn behind the field.
+   *  `startSecond` is the song time at which a movie's frame 0 plays (its
+   *  #BGCHANGES trigger beat, converted to seconds) — 0 to start from the top. */
+  setBackground(
+    media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null,
+    startSecond = 0,
+  ): void {
     this.bgMedia = media;
     this.gpuField?.setBackground(media);
     this.bgVideo = media instanceof HTMLVideoElement ? media : null;
+    this.bgVideoStartSecond = startSecond;
     if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;
   }
 
@@ -425,18 +433,21 @@ export class GameSession {
     // by nudging playbackRate (a PLL), not by seeking. That also fixes a constant
     // lag: seeking to `now` and calling play() leaves the video ~0.1-0.2s behind
     // (decode/play latency), which the old 0.35s tolerance never corrected.
-    if (this.bgVideo && now >= 0) {
+    // The movie's own time is the song time minus its trigger point (#BGCHANGES
+    // beat) — its frame 0 shows at `bgVideoStartSecond`, not song start.
+    const target = now - this.bgVideoStartSecond;
+    if (this.bgVideo && target >= 0) {
       const v = this.bgVideo;
       const rate = this.musicRate;
       if (v.paused) {
-        v.currentTime = Math.max(0, now);
+        v.currentTime = Math.max(0, target);
         v.playbackRate = rate;
         void v.play().catch(() => {});
       } else {
-        const drift = v.currentTime - now; // +ve: video is ahead of the music
+        const drift = v.currentTime - target; // +ve: video is ahead of the music
         if (Math.abs(drift) > 1.5) {
           // Gross desync (tab was backgrounded, a long stall) — hard resync.
-          v.currentTime = Math.max(0, now);
+          v.currentTime = Math.max(0, target);
           v.playbackRate = rate;
         } else if (Math.abs(drift) > 0.04) {
           // Ease back: slow the video when it's ahead, speed it up when behind.

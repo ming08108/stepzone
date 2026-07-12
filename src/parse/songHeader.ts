@@ -22,6 +22,25 @@ export function parseDisplayBpm(
   return { type: 'specified', min, max: min };
 }
 
+const VIDEO_EXT = /\.(avi|mpe?g|mp4|m4v|webm|ogv|mkv|wmv|mov|flv|divx)$/i;
+
+/**
+ * The beat of the first #BGCHANGES entry that references a movie, or null.
+ * Each entry is `beat=file=rate=…`, entries comma-separated. The movie's frame 0
+ * plays at that beat, so this is the offset the background-video sync needs.
+ */
+function firstVideoBgChangeBeat(v: string): number | null {
+  for (const entry of v.split(',')) {
+    const parts = entry.split('=');
+    if (parts.length < 2) continue;
+    if (VIDEO_EXT.test(parts[1].trim())) {
+      const beat = Number.parseFloat(parts[0]);
+      if (Number.isFinite(beat)) return beat;
+    }
+  }
+  return null;
+}
+
 /**
  * Apply one song-header tag whose semantics are identical in `.sm` and
  * `.ssc`. Returns true if the tag was handled; false means the caller's
@@ -63,6 +82,13 @@ export function applySongHeaderTag(song: Song, tag: string, value: MsdValue): bo
     case 'BACKGROUND':
       song.backgroundFile = v1;
       return true;
+    case 'BGCHANGES':
+    case 'BGCHANGES1':
+    case 'BGCHANGES2': {
+      const beat = firstVideoBgChangeBeat(v1);
+      if (beat !== null) song.bgVideoStartBeat = beat;
+      return true;
+    }
     case 'CDTITLE':
       song.cdTitleFile = v1;
       return true;

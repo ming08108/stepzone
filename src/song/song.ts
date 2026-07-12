@@ -24,6 +24,10 @@ export class Song {
   jacketFile = '';
   lyricsFile = '';
 
+  /** Beat at which the background MOVIE is triggered (#BGCHANGES) — its frame 0
+   *  aligns with this beat, not song start. 0 if none / plays from the top. */
+  bgVideoStartBeat = 0;
+
   /** Preview clip start/length in seconds (-1 start = auto). */
   sampleStartSeconds = -1;
   sampleLengthSeconds = 12;

@@ -707,7 +707,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         v.playsInline = true;
         v.preload = 'auto';
         bgMediaRef.current = v;
-        session.setBackground(v);
+        // A movie's frame 0 plays at its #BGCHANGES trigger beat, not song start.
+        session.setBackground(v, req.song.timing.getElapsedTimeFromBeat(req.song.bgVideoStartBeat));
       } else {
         // Decode off-thread straight from the File. A detached <img> on a
         // blob URL can be deferred by the browser for seconds (a black field
