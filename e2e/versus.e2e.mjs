@@ -72,6 +72,9 @@ async function playerPage(browser, base, name, { stayOnGrid = false, query = '' 
       'notefield.net.identity.v1',
       JSON.stringify({ playerId: `e2e-${n}`, secret: `s-${n}`, name: n }),
     );
+    // Both peers are on localhost — skip STUN so ICE connects instantly via host
+    // candidates (no network round-trip / gather latency to flake on).
+    window.__e2eRtc = { iceServers: [] };
   }, name);
   const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(`${name}: ${e.message}`));

@@ -19,7 +19,12 @@
 import { isRoomCode } from './versus';
 
 const API_URL = '/api/versus';
-const RTC_CONFIG: RTCConfiguration = {
+// A public STUN server for NAT traversal in production. E2E runs both peers on
+// localhost, where host candidates connect directly and STUN only adds gather
+// latency/network flakiness — so the e2e injects window.__e2eRtc = {iceServers:[]}
+// before load to skip it. Prod (no override) keeps STUN.
+const RTC_CONFIG: RTCConfiguration = (typeof window !== 'undefined' &&
+  (window as unknown as { __e2eRtc?: RTCConfiguration }).__e2eRtc) || {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 };
 /** Ship the SDP after this long even if gathering hasn't said "complete". */
