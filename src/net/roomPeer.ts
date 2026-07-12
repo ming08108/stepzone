@@ -116,6 +116,10 @@ export abstract class RoomPeer {
   onGo?: (delayMs: number) => void;
   /** The room is gone for good (terminal; fires at most once). */
   onClosed?: (reason: RoomClosedReason) => void;
+  /** Lobby: the host is browsing this song (guests only). */
+  onBrowsing?: (title: string, artist: string) => void;
+  /** Lobby: someone suggested a song (host: from a guest; guests: relayed). */
+  onSuggested?: (name: string, title: string, artist: string) => void;
 
   /** Roster in id order (host first). */
   get players(): PlayerState[] {
@@ -291,6 +295,16 @@ export class RoomHost extends RoomPeer {
       case 'hostReady':
         // Only the guest we actually promoted can redirect the room.
         if (id === this.promotedId) this.onHostReady?.(msg.code);
+        break;
+      case 'suggest':
+        // Show it to the host and relay to everyone else so the room agrees.
+        this.onSuggested?.(p.name, msg.title, msg.artist);
+        this.relayExcept(id, {
+          t: 'suggested',
+          name: p.name,
+          title: msg.title,
+          artist: msg.artist,
+        });
         break;
       case 'bye':
         this.handleGuestClose(id);
@@ -520,6 +534,12 @@ export class RoomHost extends RoomPeer {
    *  store) to the new host's room, then this room is done. */
   sendMigrate(code: string): void {
     this.broadcast({ t: 'migrate', code });
+  }
+
+  /** Lobby: tell the room what song the host is currently browsing. */
+  sendBrowsing(title: string, artist: string): void {
+    if (this.ended || this.phase !== 'lobby') return;
+    this.broadcast({ t: 'browsing', title, artist });
   }
 
   leave(): void {
@@ -798,6 +818,12 @@ export class RoomGuest extends RoomPeer {
       case 'migrate':
         this.onMigrate?.(msg.code);
         break;
+      case 'browsing':
+        this.onBrowsing?.(msg.title, msg.artist);
+        break;
+      case 'suggested':
+        this.onSuggested?.(msg.name, msg.title, msg.artist);
+        break;
       case 'bye':
         this.closed = true;
         this.end('host-left');
@@ -899,6 +925,12 @@ export class RoomGuest extends RoomPeer {
    *  it can send everyone over. */
   reportHostCode(code: string): void {
     this.send({ t: 'hostReady', code });
+  }
+
+  /** Lobby: nudge the host toward a song (relayed to the whole room). */
+  sendSuggest(title: string, artist: string): void {
+    if (this.ended) return;
+    this.send({ t: 'suggest', title, artist });
   }
 
   leave(): void {

@@ -28,8 +28,13 @@ import { parsePlayResult } from './protocol';
  *  v3: `load` carries the racer id list so a guest whose ready raced a host
  *  force-start self-excludes instead of wedging on a race it isn't part of.
  *  v4: host handoff — becomeHost / hostReady / migrate reconnect the room
- *  around a new host. */
-export const ROOM_PROTOCOL = 4;
+ *  around a new host.
+ *  v5: lobby social — the host broadcasts what it's browsing; guests suggest
+ *  songs (relayed to everyone). */
+export const ROOM_PROTOCOL = 5;
+
+/** Cap for a suggested/browsed song's display strings on the wire. */
+export const MAX_SONG_LABEL = 120;
 
 /** Hub-and-spoke fan-out is per-guest work for the host — keep parties small. */
 export const MAX_PLAYERS = 8;
@@ -256,6 +261,8 @@ export type GuestMsg =
   // Host handoff: the guest the old host promoted has opened its own room and
   // reports the arrow code, so the old host can send everyone there.
   | { t: 'hostReady'; code: string }
+  // Lobby: a guest nudges the host toward a song (relayed to everyone).
+  | { t: 'suggest'; title: string; artist: string }
   | { t: 'bye' };
 
 /** Host -> guest. Roster is the single source of shared room state. */
@@ -279,6 +286,10 @@ export type HostMsg =
   // `migrate` tells everyone else to reconnect to that new room's code.
   | { t: 'becomeHost' }
   | { t: 'migrate'; code: string }
+  // Lobby social: what the host is browsing (null title = stopped), and a
+  // guest's suggestion relayed to the whole room.
+  | { t: 'browsing'; title: string; artist: string }
+  | { t: 'suggested'; name: string; title: string; artist: string }
   | { t: 'bye' };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -323,6 +334,10 @@ export function parseGuestMsg(raw: string): GuestMsg | null {
       return num(v.at) ? { t: 'pong', at: v.at } : null;
     case 'hostReady':
       return isRoomCode(v.code) ? { t: 'hostReady', code: v.code } : null;
+    case 'suggest':
+      return str(v.title, MAX_SONG_LABEL) && str(v.artist, MAX_SONG_LABEL)
+        ? { t: 'suggest', title: v.title, artist: v.artist }
+        : null;
     case 'fileReq':
     case 'bye':
       return { t: v.t };
@@ -377,6 +392,14 @@ export function parseHostMsg(raw: string): HostMsg | null {
       return { t: v.t };
     case 'migrate':
       return isRoomCode(v.code) ? { t: 'migrate', code: v.code } : null;
+    case 'browsing':
+      return str(v.title, MAX_SONG_LABEL) && str(v.artist, MAX_SONG_LABEL)
+        ? { t: 'browsing', title: v.title, artist: v.artist }
+        : null;
+    case 'suggested':
+      return str(v.name, 24) && str(v.title, MAX_SONG_LABEL) && str(v.artist, MAX_SONG_LABEL)
+        ? { t: 'suggested', name: v.name, title: v.title, artist: v.artist }
+        : null;
     case 'ping':
       return num(v.at) ? { t: 'ping', at: v.at } : null;
     case 'go':

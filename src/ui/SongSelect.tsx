@@ -32,7 +32,7 @@ import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
 import { isRoomCode } from '../net/versus';
 import { MultiplayerPanel } from './MultiplayerPanel';
-import { roomState, subscribeRoom } from './roomStore';
+import { announceBrowsing, roomBrowsing, roomState, subscribeRoom, suggestSong } from './roomStore';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
 import {
@@ -195,6 +195,12 @@ export function SongSelect({
   // Live room (roomStore) — drives the party dock and the guest song guard.
   const vsRoom = useSyncExternalStore(subscribeRoom, roomState);
   const isRoomGuest = vsRoom.k === 'in-room' && !vsRoom.room.isHost;
+  const isRoomHost = vsRoom.k === 'in-room' && vsRoom.room.isHost;
+  const roomBrowse = vsRoom.k === 'in-room' ? vsRoom.room : null;
+  // What the host is browsing (guests only; re-read on each room notify).
+  const browsingLabel = isRoomGuest ? (roomBrowsing()?.title ?? null) : null;
+  // Transient "SUGGESTED!" confirmation after a guest nudges a song.
+  const [suggested, setSuggested] = useState<string | null>(null);
 
   // Lifetime stats/scores, fresh each visit (plays recorded while away land).
   const stats = useMemo(() => loadStats(), []);
@@ -332,6 +338,14 @@ export function SongSelect({
   const song = shownSongs[selClamped];
   const selPack = inPacks ? (packList[packClamped]?.pack ?? null) : null;
   const songBest = song?.bests[diff] ?? null;
+
+  // Host: broadcast the highlighted song so waiting guests see what we're eyeing
+  // (deduped in the store; only sends on an actual change).
+  useEffect(() => {
+    if (isRoomHost && roomBrowse?.phase === 'lobby' && !inPacks && song) {
+      announceBrowsing(song.title, song.artist);
+    }
+  }, [isRoomHost, roomBrowse?.phase, inPacks, song]);
 
   // The header art box follows each image's own shape (jackets are square,
   // classic banners 3.2:1) instead of cropping everything to one fixed frame.
@@ -482,9 +496,17 @@ export function SongSelect({
   );
 
   const start = useCallback(async () => {
-    // In a room the HOST picks the song; guests browse but the party dock
-    // explains why START does nothing here (their pick happens on options).
-    if (isRoomGuest) return;
+    // In a room the HOST picks the song; a guest's START suggests the
+    // highlighted song to the room instead.
+    if (isRoomGuest) {
+      const s = shownSongs[Math.min(sel, Math.max(0, shownSongs.length - 1))];
+      if (s) {
+        suggestSong(s.title, s.artist);
+        setSuggested(s.title);
+        window.setTimeout(() => setSuggested(null), 2200);
+      }
+      return;
+    }
     const s = shownSongs[Math.min(sel, Math.max(0, shownSongs.length - 1))];
     if (!s || s.levels[diff] == null) return;
     const entry = await ensureLoaded(s.entry); // no-op unless a catalog row
@@ -1310,11 +1332,24 @@ export function SongSelect({
       {/* Hint bar — context-aware (pack grid vs song list). */}
       <div className="flex h-[44px] flex-none items-center gap-6 border-t border-white/[0.09] px-[28px] text-[12px] tracking-[0.14em] text-[#ececec]/62">
         {isRoomGuest ? (
-          // A guest can browse but can't pick — the host chooses the song and
-          // everyone follows automatically.
-          <span style={{ color: AC }} className="tracking-[0.16em]">
-            IN A ROOM — THE HOST PICKS THE SONG · YOU’LL JOIN AUTOMATICALLY
-          </span>
+          // A guest can't pick — the host chooses — but can suggest a song and
+          // see what the host is currently browsing.
+          <>
+            <span style={{ color: AC }} className="tracking-[0.16em]">
+              {suggested
+                ? `SUGGESTED “${suggested}”`
+                : roomBrowse?.song
+                  ? 'THE HOST PICKED A SONG — GET READY'
+                  : browsingLabel
+                    ? `HOST IS LOOKING AT: ${browsingLabel}`
+                    : 'IN A ROOM — THE HOST PICKS THE SONG'}
+            </span>
+            {!inPacks && (
+              <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>
+                START — SUGGEST THIS SONG
+              </span>
+            )}
+          </>
         ) : inPacks ? (
           <>
             <span>◀▶▲▼ PACK</span>

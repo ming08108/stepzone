@@ -14,7 +14,13 @@ import { CodeArrows } from './PadArrow';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { STEP_AC as AC } from './Stage';
-import { dismissRoomError, leaveRoom, transferHostTo, type RoomUiState } from './roomStore';
+import {
+  dismissRoomError,
+  leaveRoom,
+  roomSuggestions,
+  transferHostTo,
+  type RoomUiState,
+} from './roomStore';
 
 const READY = '#59f07f';
 const DONE = '#38f0ff';
@@ -130,6 +136,7 @@ export function CopyInviteButton({ code }: { code: string }) {
 export function RoomDock({ vs, status }: { vs: RoomUiState; status?: string }) {
   if (vs.k === 'idle') return null;
   const present = vs.k === 'in-room' ? vs.room.players.filter((p) => !p.left).length : 0;
+  const suggestions = roomSuggestions();
   return (
     <div
       className="flex-none overflow-hidden rounded-[4px] border border-l-[3px]"
@@ -191,6 +198,24 @@ export function RoomDock({ vs, status }: { vs: RoomUiState; status?: string }) {
             {status && (
               <div className="mt-1 px-1 text-[11px] leading-snug tracking-[0.06em] text-[#ececec]/55">
                 {status}
+              </div>
+            )}
+            {vs.room.phase === 'lobby' && suggestions.length > 0 && (
+              <div className="mt-1.5 border-t border-white/[0.06] pt-1.5">
+                <div className="px-1 text-[9px] font-bold tracking-[0.18em] text-[#ececec]/40">
+                  SUGGESTIONS
+                </div>
+                {suggestions.slice(0, 3).map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-baseline gap-2 px-1 py-[1px] text-[11px] tracking-[0.04em]"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[#ececec]/85">{s.title}</span>
+                    <span className="flex-none text-[9px] tracking-[0.1em] text-[#ececec]/40">
+                      {s.name}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>

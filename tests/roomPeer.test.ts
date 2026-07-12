@@ -572,6 +572,28 @@ describe('room choreography', () => {
     expect(became).toBe(false);
   });
 
+  it('lobby social: host browsing broadcasts; a suggestion reaches the host and the room', () => {
+    const r = room(2);
+    const browsed: string[] = [];
+    r.guests.forEach((g) => (g.onBrowsing = (t, a) => browsed.push(`${t}|${a}`)));
+    r.host.sendBrowsing('Butterfly', 'SMILE.dk');
+    r.flush();
+    expect(browsed).toEqual(['Butterfly|SMILE.dk', 'Butterfly|SMILE.dk']);
+
+    const hostGot: string[] = [];
+    r.host.onSuggested = (name, title) => hostGot.push(`${name}:${title}`);
+    const g1Echo: string[] = [];
+    r.guests[0].onSuggested = (name, title) => g1Echo.push(`${name}:${title}`);
+    const g2Got: string[] = [];
+    r.guests[1].onSuggested = (name, title) => g2Got.push(`${name}:${title}`);
+    r.guests[0].sendSuggest('Max 300', 'Omega');
+    r.flush();
+    // The host sees it and relays to the OTHER guest — never back to the sender.
+    expect(hostGot).toEqual(['G1:Max 300']);
+    expect(g2Got).toEqual(['G1:Max 300']);
+    expect(g1Echo).toEqual([]);
+  });
+
   it('a lone host cannot start a song', () => {
     const r = room(1);
     r.host.setSong(song(), 1);

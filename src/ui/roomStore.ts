@@ -70,6 +70,55 @@ let follow: FollowState = { k: 'none' };
 /** Guards stale async follow resolutions (a newer song broadcast wins). */
 let followToken = 0;
 
+// ---- lobby social (what the host is browsing + song suggestions) --------------------
+export interface Suggestion {
+  id: number;
+  name: string;
+  title: string;
+  artist: string;
+}
+/** The song the host is currently browsing (lobby, before a pick). */
+let browsing: { title: string; artist: string } | null = null;
+/** Recent song suggestions (newest first, capped). */
+let suggestions: Suggestion[] = [];
+let suggestSeq = 0;
+let lastBrowseKey = '';
+
+export function roomBrowsing(): { title: string; artist: string } | null {
+  return browsing;
+}
+export function roomSuggestions(): Suggestion[] {
+  return suggestions;
+}
+function setBrowsing(b: { title: string; artist: string } | null): void {
+  browsing = b;
+  notify();
+}
+function addSuggestion(name: string, title: string, artist: string): void {
+  suggestions = [{ id: ++suggestSeq, name, title, artist }, ...suggestions].slice(0, 5);
+  notify();
+}
+
+/** Host (in song select): tell the room what song is highlighted. Deduped, so
+ *  moving the cursor only sends on an actual change. */
+export function announceBrowsing(title: string, artist: string): void {
+  const r = currentRoom();
+  if (!(r instanceof RoomHost)) return;
+  const key = `${title}\n${artist}`;
+  if (key === lastBrowseKey) return;
+  lastBrowseKey = key;
+  r.sendBrowsing(title, artist);
+}
+
+/** Guest (in song select): suggest the highlighted song to the room. */
+export function suggestSong(title: string, artist: string): void {
+  const r = currentRoom();
+  if (!(r instanceof RoomGuest)) return;
+  r.sendSuggest(title, artist);
+  // The host's relay excludes us, so show our own suggestion locally.
+  addSuggestion(getIdentity().name, title, artist);
+}
+
 let state: RoomUiState = { k: 'idle' };
 const listeners = new Set<() => void>();
 
@@ -127,6 +176,9 @@ function teardownRoom(): void {
   sink = null;
   follow = { k: 'none' };
   followToken++;
+  browsing = null;
+  suggestions = [];
+  lastBrowseKey = '';
 }
 
 /** Tear down whatever exists and return to idle. Safe in any state. */
@@ -145,6 +197,7 @@ function wireHost(host: RoomHost, channel: HostedRoomChannel): void {
     notify();
   };
   host.onFileReq = (guestId) => void serveSongTransfer(host, guestId);
+  host.onSuggested = (name, title, artist) => addSuggestion(name, title, artist);
   // Host handoff: the guest we promoted opened its room and reported the code —
   // send everyone (including us) there.
   host.onHostReady = (code) => {
@@ -224,6 +277,9 @@ export function announceSong(song: Song, musicRate: number, entry?: LibraryEntry
   // setSong only applies in the lobby; if a straggler is still mid-song the
   // want is remembered and replayed by the update hook when the cycle ends.
   wantSong = { ref, key, rate: musicRate };
+  // A real pick supersedes "the host is browsing…".
+  if (browsing) setBrowsing(null);
+  lastBrowseKey = '';
   r.setSong(ref, musicRate);
 }
 
@@ -302,6 +358,8 @@ function wireGuest(guest: RoomGuest, conn: VersusConnection): void {
   conn.channel.addEventListener('close', () => guest.handleClose());
   guest.onUpdate = notify;
   guest.onSong = (song) => void followSong(guest, song);
+  guest.onBrowsing = (title, artist) => setBrowsing({ title, artist });
+  guest.onSuggested = (name, title, artist) => addSuggestion(name, title, artist);
   // Host handoff: we were chosen as the new host, or told to move to a new one.
   guest.onBecomeHost = () => void becomeNewHost(guest, conn);
   guest.onMigrate = (code) => void migrateSelfTo(code);
@@ -380,6 +438,7 @@ function setFollow(next: FollowState): void {
  *  files come P2P from the host and land through the normal library path. */
 async function followSong(guest: RoomGuest, songRef: VersusSongRef | null): Promise<void> {
   const token = ++followToken;
+  if (browsing) setBrowsing(null); // the host committed to a song
   if (!songRef) {
     setFollow({ k: 'none' });
     return;
