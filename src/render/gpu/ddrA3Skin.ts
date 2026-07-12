@@ -55,6 +55,12 @@ import { cropUV, type QuadOpts } from './quads';
 import type { ColorFn } from './shapes';
 import type { GpuSkin, SkinCtx } from './skin';
 
+/** Beat pulse weight (0..1): 1 exactly ON the beat, easing to 0 at the half-beat
+ *  via a cosine — the smooth zoom StepMania's pulse()/effectclock("beat") gives. */
+function beatSine(beat: number): number {
+  return 0.5 + 0.5 * Math.cos(2 * Math.PI * (beat - Math.floor(beat)));
+}
+
 /** Parse #rgb/#rrggbb/rgb()/rgba() into 0..1 floats. */
 function parseColor(s: string): [number, number, number, number] {
   if (s.startsWith('#')) {
@@ -417,8 +423,8 @@ export class DdrA3GpuSkin implements GpuSkin {
     quant: NoteType,
     style: TapNoteStyle,
     _now: number,
-    _beat: number,
-    beatPulse: number,
+    beat: number,
+    _beatPulse: number,
   ): void {
     const b = ctx.batch;
     const dead = style === 'deadHead';
@@ -428,9 +434,10 @@ export class DdrA3GpuSkin implements GpuSkin {
     const band = dead ? NOTE_GREY : QUANT_BAND[quant];
     const tube = dead ? TUBE_GREY : QUANT_TUBE[quant];
     const spr = this.sprNote(ctx, band, tube);
-    // Beat-synced breathing pulse (the arcade arrows animate on the beat); a
-    // dead head sits still.
-    const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.06 * beatPulse);
+    // Beat pulse (StepMania pulse()/effectclock("beat")): a smooth sine zoom that
+    // peaks ON the beat and eases back by the half-beat — the arcade arrows
+    // "pulse in" with the music. A dead head sits still.
+    const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.15 * beatSine(beat));
     if (spr) {
       this.rotOpt.rot = ctx.angle(track);
       b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);

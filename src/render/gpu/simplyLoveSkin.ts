@@ -46,6 +46,12 @@ import type { Tint } from './glyphs';
 import type { ColorFn } from './shapes';
 import type { GpuSkin, SkinCtx } from './skin';
 
+/** Beat pulse weight (0..1): 1 exactly ON the beat, easing to 0 at the half-beat
+ *  via a cosine — the smooth zoom StepMania's pulse()/effectclock("beat") gives. */
+function beatSine(beat: number): number {
+  return 0.5 + 0.5 * Math.cos(2 * Math.PI * (beat - Math.floor(beat)));
+}
+
 /** Parse #rgb/#rrggbb/rgb()/rgba() to straight-alpha floats (0..1). */
 function parseColor(s: string): [number, number, number, number] {
   if (s.startsWith('#')) {
@@ -383,10 +389,11 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     style: TapNoteStyle,
     _now: number,
     beat: number,
-    beatPulse: number,
+    _beatPulse: number,
   ): void {
-    // Beat-synced breathing on top of the flowing stem stripe below.
-    const m = this.pad(ctx) * (style === 'deadHead' ? 1 : 1 + 0.05 * beatPulse);
+    // Beat pulse (StepMania pulse()/effectclock("beat")): a smooth sine zoom
+    // peaking ON the beat, on top of the flowing stem stripe below.
+    const m = this.pad(ctx) * (style === 'deadHead' ? 1 : 1 + 0.13 * beatSine(beat));
     const dead = style === 'deadHead';
     const faceColor = dead ? '#7c8087' : ITG_QUANT_COLOR[quant];
     const x = ctx.laneX(track);
