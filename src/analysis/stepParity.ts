@@ -84,11 +84,21 @@ function emptyNote(): IntermediateNote {
 // StageLayout
 // ============================================================================
 
-function facingPenalty(v: number): number {
-  // C++: float result = pow(base, 1.8) * 100; — pow/×100 stay double, one round.
-  const base = f(-1 * Math.min(v, 0));
-  return f(Math.pow(base, 1.8) * 100);
-}
+// The facing penalties are the only values ITGmania derives with pow() — and
+// V8's pow rounds its last bit differently from MSVC's, which can flip a near-tie
+// path. But they depend solely on the fixed stage geometry, so they're constants:
+// the exact native float32 values, dumped from the compiled C++ (indexed
+// left*columnCount + right). Hardcoding them removes the last transcendental from
+// the per-chart path — everything else is sqrt (IEEE correctly-rounded) and
+// float32 arithmetic, so the solver is now bit-identical to the game.
+// prettier-ignore
+const FX_SINGLE = [0, 0, 0, 0, 8.24692345, 0, 0, 0, 8.24692345, 0, 0, 0, 100, 8.24692345, 8.24692345, 0];
+// prettier-ignore
+const FY_SINGLE = [0, 8.24692345, 0, 0, 0, 0, 0, 0, 8.24692345, 100, 0, 8.24692345, 0, 8.24692345, 0, 0];
+// prettier-ignore
+const FX_DOUBLE = [0, 0, 0, 0, 0, 0, 0, 0, 8.24692345, 0, 0, 0, 0, 0, 0, 0, 8.24692345, 0, 0, 0, 0, 0, 0, 0, 100, 8.24692345, 8.24692345, 0, 0, 0, 0, 0, 100, 44.7841072, 44.7841072, 100, 0, 0, 0, 0, 80.3925781, 100, 26.6119728, 44.7841072, 8.24692345, 0, 0, 0, 80.3925781, 26.6119728, 100, 44.7841072, 8.24692345, 0, 0, 0, 100, 80.3925781, 80.3925781, 100, 100, 8.24692345, 8.24692345, 0];
+// prettier-ignore
+const FY_DOUBLE = [0, 8.24692345, 0, 0, 0, 0.00371863903, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8.24692345, 100, 0, 8.24692345, 0.304584622, 1.43621647, 0, 0.00371863903, 0, 8.24692345, 0, 0, 0, 0.304584622, 0, 0, 0, 0.304584622, 0, 0, 0, 8.24692345, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.00371863903, 1.43621647, 0, 0.304584622, 8.24692345, 100, 0, 8.24692345, 0, 0.00371863903, 0, 0, 0, 8.24692345, 0, 0];
 
 class StageLayout {
   columns: StagePoint[];
@@ -103,12 +113,23 @@ class StageLayout {
   /** mask (note|hold) -> list of foot placements. */
   permuteCache = new Map<number, number[][]>();
 
-  constructor(cols: StagePoint[], up: number[], down: number[], side: number[]) {
+  constructor(
+    cols: StagePoint[],
+    up: number[],
+    down: number[],
+    side: number[],
+    fx: number[],
+    fy: number[],
+  ) {
     this.columns = cols;
     this.columnCount = cols.length;
     this.upArrows = up;
     this.downArrows = down;
     this.sideArrows = side;
+    // Native float32 facing penalties (see FX_/FY_ above); fround to land on the
+    // exact float32 the game holds.
+    this.facingXPenalties = fx.map(f);
+    this.facingYPenalties = fy.map(f);
     this.preCalculateStuff();
     this.preGeneratePermutations();
   }
@@ -134,26 +155,6 @@ class StageLayout {
     if (l === INVALID || r === INVALID) return 0;
     return this.facingYPenalties[l * this.columnCount + r];
   }
-  private getXDifference(l: number, r: number): number {
-    if (l === r) return 0;
-    let dx = f(this.columns[r].x - this.columns[l].x);
-    const dy = f(this.columns[r].y - this.columns[l].y);
-    const distance = f(Math.sqrt(f(f(dx * dx) + f(dy * dy))));
-    dx = f(dx / distance);
-    const negative = dx <= 0;
-    dx = f(Math.pow(dx, 4));
-    return negative ? -dx : dx;
-  }
-  private getYDifference(l: number, r: number): number {
-    if (l === r) return 0;
-    const dx = f(this.columns[r].x - this.columns[l].x);
-    let dy = f(this.columns[r].y - this.columns[l].y);
-    const distance = f(Math.sqrt(f(f(dx * dx) + f(dy * dy))));
-    dy = f(dy / distance);
-    const negative = dy <= 0;
-    dy = f(Math.pow(dy, 4));
-    return negative ? -dy : dy;
-  }
   averagePoint(l: number, r: number): StagePoint {
     if (l === INVALID && r === INVALID) return { x: 0, y: 0 };
     if (l === INVALID) return this.columns[r];
@@ -172,17 +173,7 @@ class StageLayout {
         };
         const dx = f(this.columns[left].x - this.columns[right].x);
         const dy = f(this.columns[left].y - this.columns[right].y);
-        const dist = f(Math.sqrt(f(f(dx * dx) + f(dy * dy))));
-        this.distances[idx] = dist;
-        if (dist === 0) {
-          this.facingXPenalties[idx] = 0;
-          this.facingYPenalties[idx] = 0;
-        } else {
-          const xm = this.getXDifference(left, right);
-          const ym = this.getYDifference(left, right);
-          this.facingXPenalties[idx] = Math.max(0, facingPenalty(xm));
-          this.facingYPenalties[idx] = Math.max(0, facingPenalty(ym));
-        }
+        this.distances[idx] = f(Math.sqrt(f(f(dx * dx) + f(dy * dy))));
       }
     }
   }
@@ -243,6 +234,8 @@ const LAYOUT_SINGLE = new StageLayout(
   [2],
   [1],
   [0, 3],
+  FX_SINGLE,
+  FY_SINGLE,
 );
 const LAYOUT_DOUBLE = new StageLayout(
   [
@@ -258,6 +251,8 @@ const LAYOUT_DOUBLE = new StageLayout(
   [2, 6],
   [1, 5],
   [0, 3, 4, 7],
+  FX_DOUBLE,
+  FY_DOUBLE,
 );
 
 function layoutFor(stepsType: string): StageLayout | null {
@@ -886,7 +881,7 @@ class Generator {
         for (let c = 0; c < columnCount; c++) {
           if (
             counter.activeHolds[c].type === TNT_EMPTY ||
-            note.beat > counter.activeHolds[c].beat + counter.activeHolds[c].holdLength
+            note.beat > f(counter.activeHolds[c].beat + counter.activeHolds[c].holdLength)
           )
             counter.activeHolds[c] = emptyNote();
         }
