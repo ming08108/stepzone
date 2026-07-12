@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "e2e": "node e2e/songselect.e2e.mjs && node e2e/leaderboard.e2e.mjs && node e2e/versus.e2e.mjs",
+    "e2e": "node e2e/run.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

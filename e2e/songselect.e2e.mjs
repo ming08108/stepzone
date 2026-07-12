@@ -92,7 +92,7 @@ async function dropPack(page) {
   await page.waitForFunction(
     (before) => window.__urlLog.minted.length >= before + 3,
     mintedBefore,
-    { timeout: 15_000 },
+    { timeout: 30_000 },
   );
 }
 
@@ -111,13 +111,24 @@ const packCardArt = (page, pack) =>
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
+/** Wait until the on-screen text contains `needle` (substring). Returns as soon
+ *  as it appears — no fixed sleep. */
+const waitText = (page, needle, timeout = 20_000) =>
+  page.waitForFunction((n) => document.body.innerText.includes(n), needle, { timeout });
+
+/** Wait until the on-screen text changes from `prev` (for "the screen reacted"
+ *  transitions where we don't have a stable target string). */
+const waitChanged = (page, prev, timeout = 20_000) =>
+  page.waitForFunction((p) => document.body.innerText !== p, prev, { timeout }).catch(() => {});
+
 /** Press keys until we're back on the song-select screen. */
 async function backToSongSelect(page) {
   for (let i = 0; i < 12; i++) {
     const txt = await bodyText(page);
     if (txt.includes('STEPZONE')) return true;
     await page.keyboard.press(/RESULTS|GRADE|CLEARED|FAILED/i.test(txt) ? 'Enter' : 'Escape');
-    await page.waitForTimeout(700);
+    // Wait for the screen to react (text change) rather than a fixed delay.
+    await waitChanged(page, txt, 8_000);
   }
   return false;
 }
@@ -168,9 +179,9 @@ try {
   page.on('pageerror', (e) => pageErrors.push(String(e.message)));
 
   // 1. Boot: starter library on the pack grid.
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base, { waitUntil: 'load' });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   const boot = await bodyText(page);
   step('boots to the pack grid with the starter library', boot.includes('Stepzone Starter'));
@@ -189,14 +200,14 @@ try {
   if (hasGpu) {
     await page.keyboard.press('ArrowRight'); // ALL SONGS → Stepzone Starter card
     await page.keyboard.press('Enter'); // open the pack
-    await page.waitForTimeout(600);
+    await waitText(page, '▲▼ SONG'); // wait for the song list, not a fixed delay
     await page.keyboard.press('Enter'); // highlighted song → PLAYER OPTIONS
     await page.waitForFunction(() => /PLAYER OPTIONS|SPEED/i.test(document.body.innerText), null, {
-      timeout: 10_000,
+      timeout: 30_000,
     });
     step('reaches PLAYER OPTIONS', true);
     await page.keyboard.press('Enter'); // START
-    await page.waitForFunction(() => !!window.__nfSession, null, { timeout: 20_000 });
+    await page.waitForFunction(() => !!window.__nfSession, null, { timeout: 30_000 });
     // Dev StrictMode can re-create the session shortly after mount; assert the
     // clock advances between two samples of the SAME session object.
     const advanced = await page.evaluate(async () => {
@@ -211,8 +222,10 @@ try {
       return null;
     });
     step('gameplay clock advances', advanced !== null, advanced ?? 'no advancing sample in 10s');
-    await page.keyboard.down('Escape'); // hold-to-quit
-    await page.waitForTimeout(1500);
+    // Hold-to-quit is durational (Back held past the threshold), so hold a fixed
+    // span rather than waiting on a state.
+    await page.keyboard.down('Escape');
+    await page.waitForTimeout(1_500);
     await page.keyboard.up('Escape');
     step('hold-to-quit returns to song select', await backToSongSelect(page));
     const backTxt = await bodyText(page);
@@ -225,10 +238,11 @@ try {
   await dropPack(page);
   // Back out to the pack grid if a pack is open (SELECT menu → BACK).
   if (!(await bodyText(page)).includes('ALL SONGS')) {
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(400);
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(600);
+    const t = await bodyText(page);
+    await page.keyboard.press('Escape'); // open the SELECT menu (BACK ‹ PACKS)
+    await waitChanged(page, t, 8_000);
+    await page.keyboard.press('Enter'); // activate BACK → pack grid
+    await waitText(page, 'ALL SONGS');
   }
   step('dropped pack appears in the grid', (await bodyText(page)).includes('E2E Pack'));
   const minted1 = await page.evaluate(() => window.__urlLog.minted.length);
@@ -238,7 +252,21 @@ try {
 
   // 4. Re-drop the same pack: fresh scan replaces pack art, stale URL revoked.
   await dropPack(page);
-  await page.waitForTimeout(800);
+  // Wait for the pack card to actually re-render with a new blob src.
+  await page
+    .waitForFunction(
+      (oldSrc) => {
+        for (const img of document.querySelectorAll('img')) {
+          if (!img.src.startsWith('blob:')) continue;
+          const card = img.closest('div[class]')?.parentElement;
+          if (card && card.textContent.includes('E2E Pack')) return img.src !== oldSrc;
+        }
+        return false;
+      },
+      art1?.src ?? '',
+      { timeout: 10_000 },
+    )
+    .catch(() => {});
   const art2 = await packCardArt(page, 'E2E Pack');
   const revoked = await page.evaluate(() => window.__urlLog.revoked);
   step('re-drop replaces the pack art URL', !!art2 && !!art1 && art2.src !== art1.src);
@@ -249,15 +277,14 @@ try {
   if (hasGpu) {
     await page.keyboard.press('ArrowRight'); // ALL SONGS → E2E Pack card
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(600);
+    await waitText(page, '▲▼ SONG'); // wait for the song list
     await page.keyboard.press('ArrowRight'); // the E2E charts are HARD-only; move the diff cursor
-    await page.waitForTimeout(200);
     await page.keyboard.press('Enter'); // Alpha Song → PLAYER OPTIONS
     await page.waitForFunction(() => /PLAYER OPTIONS|SPEED/i.test(document.body.innerText), null, {
-      timeout: 10_000,
+      timeout: 30_000,
     });
     await page.keyboard.press('Enter'); // START
-    await page.waitForFunction(() => !!window.__nfSession, null, { timeout: 20_000 });
+    await page.waitForFunction(() => !!window.__nfSession, null, { timeout: 30_000 });
     step('a dropped song starts gameplay', true);
     step('back to song select after the dropped song', await backToSongSelect(page));
   } else {

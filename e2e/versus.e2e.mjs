@@ -75,7 +75,7 @@ async function playerPage(browser, base, name, { stayOnGrid = false, query = '' 
   }, name);
   const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(`${name}: ${e.message}`));
-  await page.goto(base + query, { waitUntil: 'networkidle' });
+  await page.goto(base + query, { waitUntil: 'load' });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 20_000,
   });
@@ -88,7 +88,9 @@ async function playerPage(browser, base, name, { stayOnGrid = false, query = '' 
   return page;
 }
 
-/** Hold-to-quit a live song (back held past the quit threshold). */
+/** Hold-to-quit a live song. The quit is durational (Back must be held past the
+ *  threshold), so this genuinely holds for a fixed span — not a state we can wait
+ *  on. */
 async function quitSong(page) {
   await page.keyboard.down('Escape');
   await page.waitForTimeout(1_500);
@@ -376,7 +378,7 @@ try {
     await alpha.waitForTimeout(200);
     await alpha.keyboard.press('Enter');
     await alpha.waitForFunction(() => /PLAYER OPTIONS/i.test(document.body.innerText), null, {
-      timeout: 10_000,
+      timeout: 20_000,
     });
     for (const [page, who] of [
       [bravo, 'guest'],

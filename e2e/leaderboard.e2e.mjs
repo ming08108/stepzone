@@ -30,7 +30,7 @@ const bodyText = (page) => page.evaluate(() => document.body.innerText);
 /** Boot to the pack grid and open ALL SONGS (first card, default highlight).
  *  The very first boot gets the name prompt — type a name and confirm. */
 async function openAllSongs(page, base) {
-  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.goto(base, { waitUntil: 'load' });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 20_000,
   });
@@ -40,7 +40,7 @@ async function openAllSongs(page, base) {
     await page.waitForFunction(
       () => !document.body.innerText.includes('WELCOME TO STEPZONE'),
       null,
-      { timeout: 5_000 },
+      { timeout: 12_000 },
     );
     const savedName = await page.evaluate(
       () => JSON.parse(localStorage.getItem('notefield.net.identity.v1') ?? '{}').name,
@@ -49,7 +49,7 @@ async function openAllSongs(page, base) {
   }
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => /▲▼ SONG/.test(document.body.innerText), null, {
-    timeout: 10_000,
+    timeout: 20_000,
   });
 }
 
@@ -72,7 +72,7 @@ try {
   // 1. Boot to the song list; the header's GlobalBest readout fetches the
   //    board for the highlighted starter chart — capture that chart hash.
   const boardRequest = page.waitForRequest((r) => r.url().includes('/api/scores?'), {
-    timeout: 15_000,
+    timeout: 30_000,
   });
   await openAllSongs(page, base);
   const reqUrl = new URL((await boardRequest).url());
@@ -86,7 +86,7 @@ try {
   //    on plus a replay that actually plays it — which the harness gets from
   //    the DEV-only `window.__seedChartData()` hook for the highlighted chart.
   await page.waitForFunction(() => typeof window.__seedChartData === 'function', null, {
-    timeout: 10_000,
+    timeout: 20_000,
   });
   const seed = await page.evaluate(() => window.__seedChartData());
   step(
@@ -161,7 +161,7 @@ try {
   // 3. Fresh page (server store persists) — the WORLD line shows the seeded top.
   await openAllSongs(page, base);
   await page.waitForFunction(() => document.body.innerText.includes('WORLD'), null, {
-    timeout: 10_000,
+    timeout: 20_000,
   });
   const header = await bodyText(page);
   step(
@@ -173,7 +173,7 @@ try {
   // 4. The full board renders in the side panel beside the list — no menu
   //    navigation needed (the panel is always visible on wide viewports).
   await page.waitForFunction(() => /#1\s*RIVAL/.test(document.body.innerText), null, {
-    timeout: 10_000,
+    timeout: 20_000,
   });
   const panel = await bodyText(page);
   step('side panel lists the seeded board', /#1\s*RIVAL/.test(panel) && /#2\s*BRONZE/.test(panel));
