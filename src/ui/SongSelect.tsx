@@ -1117,11 +1117,15 @@ export function SongSelect({
                       ref={on ? selCardRef : undefined}
                       onClick={() => setPackSel(i)}
                       onDoubleClick={() => openPackAt(i)}
-                      className="flex cursor-pointer flex-col overflow-hidden border transition-colors"
+                      className="flex cursor-pointer flex-col overflow-hidden border transition-all"
                       style={{
                         borderColor: on ? AC : 'rgba(255,255,255,.10)',
-                        background: on ? AC + '14' : 'rgba(255,255,255,.02)',
-                        boxShadow: on ? `0 0 22px ${AC}33` : 'none',
+                        background: on ? AC + '26' : 'rgba(255,255,255,.02)',
+                        // Inset 2px accent ring (no layout shift) + a stronger glow
+                        // so the highlighted pack reads at a glance across the grid.
+                        boxShadow: on
+                          ? `inset 0 0 0 2px ${AC}, 0 0 0 1px ${AC}, 0 6px 26px ${AC}55`
+                          : 'none',
                       }}
                     >
                       <div
