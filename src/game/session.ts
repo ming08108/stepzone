@@ -418,14 +418,33 @@ export class GameSession {
     if (!this.running) return;
     const now = this.clock.songSecondsNow();
 
-    // Keep a background video loosely synced to the song.
+    // Background-video sync. A song's background movie is matched to the music,
+    // so the video's own time should equal the music position (`now`). ITGmania
+    // never seeks a playing movie — it free-runs it at the music rate (its
+    // MovieTexture refuses non-zero seeks) — so we do the same and correct drift
+    // by nudging playbackRate (a PLL), not by seeking. That also fixes a constant
+    // lag: seeking to `now` and calling play() leaves the video ~0.1-0.2s behind
+    // (decode/play latency), which the old 0.35s tolerance never corrected.
     if (this.bgVideo && now >= 0) {
       const v = this.bgVideo;
+      const rate = this.musicRate;
       if (v.paused) {
         v.currentTime = Math.max(0, now);
+        v.playbackRate = rate;
         void v.play().catch(() => {});
-      } else if (Math.abs(v.currentTime - now) > 0.35) {
-        v.currentTime = Math.max(0, now);
+      } else {
+        const drift = v.currentTime - now; // +ve: video is ahead of the music
+        if (Math.abs(drift) > 1.5) {
+          // Gross desync (tab was backgrounded, a long stall) — hard resync.
+          v.currentTime = Math.max(0, now);
+          v.playbackRate = rate;
+        } else if (Math.abs(drift) > 0.04) {
+          // Ease back: slow the video when it's ahead, speed it up when behind.
+          const nudge = Math.max(-0.15, Math.min(0.15, drift * 1.5));
+          v.playbackRate = Math.max(0.25, rate - nudge);
+        } else {
+          v.playbackRate = rate;
+        }
       }
     }
 
