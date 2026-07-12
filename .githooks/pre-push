@@ -1,0 +1,29 @@
+#!/bin/sh
+# The full CI mirror, run locally before anything leaves the machine — the same
+# four gates as .github/workflows/ci.yml, in the same order. Push is where CI
+# triggers, so this is the real safety net (it also re-runs the fast checks in
+# case a commit used --no-verify). The e2e suite drives a real browser + WebGPU
+# and takes ~2-3 min; it self-skips gameplay legs where WebGPU is unavailable.
+#
+# Escape hatches (use sparingly): `git push --no-verify`, or SKIP_HOOKS=1.
+[ -n "$SKIP_HOOKS" ] && { echo "pre-push: skipped (SKIP_HOOKS set)"; exit 0; }
+
+fail() {
+  echo ""
+  echo "✗ push blocked — $1 failed. Fix it, or bypass with: git push --no-verify"
+  exit 1
+}
+
+echo "▶ pre-push 1/4: prettier --check"
+npm run --silent format:check || fail "formatting (npm run format)"
+
+echo "▶ pre-push 2/4: tsc --noEmit"
+npm run --silent typecheck || fail "typecheck"
+
+echo "▶ pre-push 3/4: vitest run"
+npm run --silent test || fail "unit tests"
+
+echo "▶ pre-push 4/4: e2e (real browser, ~2-3 min)"
+npm run --silent e2e || fail "e2e"
+
+echo "✓ pre-push passed — safe to push"

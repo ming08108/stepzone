@@ -1,0 +1,22 @@
+#!/bin/sh
+# Fast CI gates, run locally on every commit so a red build never reaches the
+# remote. These mirror the quick checks in .github/workflows/ci.yml. The slower
+# unit + e2e suites run on push (see .githooks/pre-push).
+#
+# Escape hatches (use sparingly): `git commit --no-verify`, or SKIP_HOOKS=1.
+[ -n "$SKIP_HOOKS" ] && { echo "pre-commit: skipped (SKIP_HOOKS set)"; exit 0; }
+
+fail() {
+  echo ""
+  echo "✗ commit blocked — $1"
+  echo "  $2"
+  exit 1
+}
+
+echo "▶ pre-commit: prettier --check"
+npm run --silent format:check || fail "formatting" "fix with: npm run format   (then re-stage)"
+
+echo "▶ pre-commit: tsc --noEmit"
+npm run --silent typecheck || fail "typecheck" "fix the type errors above"
+
+echo "✓ pre-commit passed"

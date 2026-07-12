@@ -1,2 +1,6 @@
 # Generated function bundles (scripts/buildApi.mjs) — not hand-written code.
 api/*.js
+
+# Local-only, gitignored tool state — absent from CI's checkout, so ignore it
+# here too and the pre-commit/pre-push format check matches CI exactly.
+.claude/settings.local.json

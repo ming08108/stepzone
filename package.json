@@ -8,6 +8,7 @@
     "node": ">=22.6"
   },
   "scripts": {
+    "prepare": "node scripts/setup-hooks.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build && npm run build:api",
     "build:api": "node scripts/buildApi.mjs",
