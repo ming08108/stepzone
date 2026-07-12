@@ -341,6 +341,41 @@ describe('room choreography', () => {
     expect(r.host.ended).toBe(false);
   });
 
+  it('a latecomer joining mid-song is a spectator, not a racer, and joins the next cycle', () => {
+    const r = room(2);
+    toPlaying(r); // HOST + G1 + G2 racing on Song
+    expect(r.host.phase).toBe('playing');
+    // Someone joins while the race is live.
+    const late = r.addGuest('LATE');
+    r.flush();
+    // Admitted to the roster and handed the in-progress song (so its files can
+    // transfer early)…
+    expect(r.host.players.map((p) => p.name)).toContain('LATE');
+    expect(late.song?.title).toBe('Song');
+    expect(late.phase).toBe('playing');
+    // …but the racer set was locked at load, so they cannot ready or finish this
+    // cycle and never gate its end (ready is lobby-only).
+    late.ready(pick(7));
+    r.flush();
+    expect(late.self?.ready).toBe(false);
+    r.host.finish(result(0.9));
+    r.guests[0].finish(result(0.8));
+    r.guests[1].finish(result(0.7));
+    r.flush();
+    expect(r.host.phase).toBe('lobby'); // the three original racers settle it
+    expect(late.phase).toBe('lobby');
+    // Next cycle: the latecomer is now a full participant and DOES gate the start.
+    r.host.setSong(song('Next'), 1);
+    r.flush();
+    r.host.ready(pick(5));
+    r.guests.forEach((g, i) => g.ready(pick(6 + i)));
+    r.flush();
+    expect(r.host.phase).toBe('lobby'); // still waiting on LATE
+    late.ready(pick(9));
+    r.flush();
+    expect(r.host.phase).toBe('loading'); // everyone, latecomer included
+  });
+
   it('a guest vanishing in the lobby just leaves the roster', () => {
     const r = room(2);
     r.guests[0].leave();
