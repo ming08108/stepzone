@@ -534,7 +534,8 @@ export class DdrA3GpuSkin implements GpuSkin {
           const off = m * (1 - level);
           const fcx = cx - off * Math.sin(rot);
           const fcy = y + off * Math.cos(rot);
-          b.push(fcx, fcy, 2 * m, 2 * m * level, uv, 1, 1, 1, 0.9, this.rotOpt);
+          // Keep it a discreet translucent wash, not a solid white flash.
+          b.push(fcx, fcy, 2 * m, 2 * m * level, uv, 1, 1, 1, 0.3, this.rotOpt);
         }
       }
     }
