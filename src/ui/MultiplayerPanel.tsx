@@ -80,6 +80,10 @@ export function MultiplayerPanel({
       const isBack = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
       const arrow = ARROW_KEY[e.key];
       if (!isConfirm && !isBack && !arrow) return;
+      // Once a room is spinning up (busy/in-room/error) the panel is handing off
+      // to the global dock — ignore keys in that window so a stray press can't
+      // re-trigger host/join before the parent unmounts us.
+      if (roomState().k !== 'idle') return;
       e.preventDefault();
       const s = stepRef.current;
       if (isBack) {

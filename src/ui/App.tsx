@@ -62,10 +62,17 @@ export function App() {
   // P2P) it stages a play request here; when the host clears their pick, a
   // guest parked on PLAYER OPTIONS returns to the songs. Never yanks anyone
   // out of live gameplay — 'play' finishes on its own.
+  //
+  // Only route into pre-play while the room is in the LOBBY. A guest who joins
+  // mid-song is sent the in-progress song too (so its files transfer early),
+  // but must NOT be dropped onto PLAYER OPTIONS for a race already underway —
+  // there READY UP silently no-ops (the peer gates ready to the lobby phase).
+  // The staged 'ready' follow persists, so when the race ends and the room
+  // returns to the lobby this effect re-runs and routes them for the next one.
   const vs = useSyncExternalStore(subscribeRoom, roomState);
   useEffect(() => {
     if (vs.k !== 'in-room' || vs.room.isHost) return;
-    if (vs.follow.k === 'ready' && view !== 'play') {
+    if (vs.follow.k === 'ready' && view !== 'play' && vs.room.phase === 'lobby') {
       const staged = consumeFollow();
       if (staged) {
         setReq(staged);

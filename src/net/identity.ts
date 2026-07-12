@@ -87,7 +87,12 @@ function sanitize(v: unknown): NetIdentity | null {
   if (typeof v.playerId !== 'string' || v.playerId.length === 0) return null;
   if (typeof v.secret !== 'string' || v.secret.length === 0) return null;
   const name = typeof v.name === 'string' && v.name.length > 0 ? v.name : DEFAULT_NAME;
-  return { playerId: v.playerId, secret: v.secret, name, generated: v.generated === true };
+  // A legacy record (pre-`generated`) counts as generated only if it still holds
+  // the old default name — so those users still get the first-visit prompt the
+  // old `name === DEFAULT_NAME` check gave them, while a legacy custom name that
+  // was clearly user-chosen is never nagged.
+  const generated = v.generated === undefined ? name === DEFAULT_NAME : v.generated === true;
+  return { playerId: v.playerId, secret: v.secret, name, generated };
 }
 
 /** The persistent identity, created on first use. */
