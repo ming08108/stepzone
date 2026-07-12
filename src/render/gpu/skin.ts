@@ -89,6 +89,8 @@ export interface GpuSkin {
     alive: boolean,
     roll: boolean,
     beatPulse: number,
+    /** Quantization of the hold head — so the trail can match its head's color. */
+    quant: NoteType,
   ): void;
 
   /** Tap or hold head (not mine — that's mine()). */

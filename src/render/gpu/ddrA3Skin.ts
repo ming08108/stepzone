@@ -156,9 +156,26 @@ export class DdrA3GpuSkin implements GpuSkin {
     });
   }
 
-  private holdSkinOf(alive: boolean, roll: boolean): { skin: HoldSkin; variant: string } {
+  private holdSkinOf(
+    alive: boolean,
+    roll: boolean,
+    quant: NoteType,
+  ): { skin: HoldSkin; variant: string } {
     if (!alive) return { skin: HOLD_GREY, variant: 'grey' };
-    return roll ? { skin: HOLD_PURPLE, variant: 'purple' } : { skin: HOLD_GREEN, variant: 'green' };
+    if (roll) return { skin: HOLD_PURPLE, variant: 'purple' };
+    // A regular freeze's trail takes its head's quantization color, so the whole
+    // note is one color (only beat timing determines it). Cached per quant.
+    const b = QUANT_BAND[quant];
+    return {
+      skin: {
+        light: b[0],
+        core: b[1],
+        rail: HOLD_GREEN.rail,
+        outline: b[2],
+        chevron: HOLD_GREEN.chevron,
+      },
+      variant: 'q' + quant,
+    };
   }
 
   /** Bake (once) the gold grade sprite ("AAA".."D") + its layout metrics.
@@ -282,6 +299,7 @@ export class DdrA3GpuSkin implements GpuSkin {
     alive: boolean,
     roll: boolean,
     beatPulse: number,
+    quant: NoteType,
   ): void {
     const { ds } = ctx;
     const b = ctx.batch;
@@ -290,7 +308,7 @@ export class DdrA3GpuSkin implements GpuSkin {
     const h = Math.max(1, bottom - top);
     const capR = w * 0.48;
     const reverse = ctx.reverse;
-    const { skin, variant } = this.holdSkinOf(alive, roll);
+    const { skin, variant } = this.holdSkinOf(alive, roll, quant);
     const white = ctx.white();
 
     // Straight section stops capR short of the tail (rounded end); the cap
@@ -860,13 +878,15 @@ export class DdrA3GpuSkin implements GpuSkin {
       this.sprReceptor(ctx, 'bright');
       this.sprReceptor(ctx, 'press');
 
-      // Hold skins: green (live), purple (roll), grey (dropped). A body long
-      // enough to bake the straight-section grad/tile AND the rounded cap.
+      // Hold skins: one per quant (live regular freeze), plus roll (purple) and
+      // dropped (grey). A body long enough to bake the grad/tile AND the cap.
       const holdTop = ctx.receptorY;
       const holdBottom = ctx.receptorY + 220 * ds;
-      this.hold(ctx, 0, holdTop, holdBottom, false, true, false, 0.5); // green
-      this.hold(ctx, 0, holdTop, holdBottom, false, true, true, 0.5); // purple
-      this.hold(ctx, 0, holdTop, holdBottom, false, false, false, 0.5); // grey
+      for (const key of Object.keys(QUANT_BAND)) {
+        this.hold(ctx, 0, holdTop, holdBottom, false, true, false, 0.5, Number(key) as NoteType);
+      }
+      this.hold(ctx, 0, holdTop, holdBottom, false, true, true, 0.5, NoteType.N4TH); // roll
+      this.hold(ctx, 0, holdTop, holdBottom, false, false, false, 0.5, NoteType.N4TH); // grey
 
       // Mine (orb/arcs/core) and both explosion layers (boom + ray).
       this.mine(ctx, ctx.laneX(0), ctx.receptorY, 0, 0.5);

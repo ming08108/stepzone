@@ -843,6 +843,7 @@ export class GpuNoteField {
         holdIsAlive(n),
         n.isRoll,
         beatPulse,
+        getNoteType(n.row),
       );
     }
 

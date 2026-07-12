@@ -417,6 +417,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     alive: boolean,
     _roll: boolean,
     beatPulse: number,
+    _quant: NoteType, // ITG freeze bodies are silver, not quant-colored
   ): void {
     const ds = ctx.ds;
     const x = ctx.laneX(track);
