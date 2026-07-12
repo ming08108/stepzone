@@ -6,9 +6,10 @@
  * focus, so pad navigation is untouched. Hides on narrow viewports (it needs the
  * width) and when no chart is highlighted.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LibraryEntry } from '../io/songFiles';
 import { computeChartStats, type ChartStats } from '../analysis/chartStats';
+import type { Steps } from '../song/steps';
 import { bestChartsPerSlot } from './difficultyUi';
 
 const GRAPH_LO = '#00adc0';
@@ -75,22 +76,48 @@ function Row({ n, label }: { n: number; label: string }) {
 
 export function ChartStatsSide({ entry, diff }: { entry: LibraryEntry | null; diff: number }) {
   const chart = entry ? (bestChartsPerSlot(entry.song)[diff] ?? null) : null;
+
+  // The full StepParity solver is heavy, so don't run it on every song the cursor
+  // flies past — debounce until the selection settles. The panel keeps showing the
+  // last computed stats meanwhile (and always reserves its width) so scrolling
+  // never reflows the song table.
+  const [settled, setSettled] = useState<{ entry: LibraryEntry | null; chart: Steps | null }>({
+    entry,
+    chart,
+  });
+  useEffect(() => {
+    const id = setTimeout(() => setSettled({ entry, chart }), 130);
+    return () => clearTimeout(id);
+  }, [entry, chart]);
+
   const stats = useMemo<ChartStats | null>(() => {
-    if (!entry || !chart) return null;
+    if (!settled.entry || !settled.chart) return null;
     try {
-      const timing = chart.getTimingData(entry.song.timing);
-      return computeChartStats(chart.getNoteData(), timing, chart.stepsType);
+      const timing = settled.chart.getTimingData(settled.entry.song.timing);
+      return computeChartStats(settled.chart.getNoteData(), timing, settled.chart.stepsType);
     } catch {
       return null;
     }
-    // Recompute when the resolved chart changes (note data is cached on Steps).
-  }, [entry, chart]);
+  }, [settled]);
 
-  if (!stats) return null;
-  const t = stats.tech;
+  const t = stats?.tech ?? null;
 
   return (
     <div className="hidden w-[300px] flex-none flex-col gap-3 overflow-hidden border-l border-white/[0.09] px-[18px] py-3 min-[1400px]:flex">
+      {!stats ? (
+        <div className="flex flex-1 items-center justify-center text-[11px] tracking-[0.2em] text-[#ececec]/25">
+          …
+        </div>
+      ) : (
+        <ChartStatsBody stats={stats} t={t} />
+      )}
+    </div>
+  );
+}
+
+function ChartStatsBody({ stats, t }: { stats: ChartStats; t: ChartStats['tech'] }) {
+  return (
+    <>
       <div className="flex flex-none items-baseline gap-3">
         <span className="text-[11px] tracking-[0.2em] text-[#ececec]/40">STATS</span>
         <span className="h-px flex-1 bg-white/[0.07]" />
@@ -125,6 +152,6 @@ export function ChartStatsSide({ entry, diff }: { entry: LibraryEntry | null; di
         {stats.lifts > 0 && <Row n={stats.lifts} label="Lifts" />}
         {stats.fakes > 0 && <Row n={stats.fakes} label="Fakes" />}
       </div>
-    </div>
+    </>
   );
 }
