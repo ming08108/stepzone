@@ -18,7 +18,7 @@ and game logic.
 ```
 npm install     # Node ≥ 22.6 required (built on Node 24 LTS)
 npm run dev     # dev server → http://localhost:5173
-npm test        # unit tests: MSD parser, timing, note grid, sync clock, judgment
+npm test        # unit tests: MSD parser, timing, note grid, sync clock, judgment, tech counts
 npm run build   # strict typecheck + production build
 ```
 
@@ -47,6 +47,27 @@ An in-app render benchmark (OPTIONS → DISPLAY → **Run render benchmark**, or
 open `/?bench=auto`) measures the real GPU time of each presented frame via
 WebGPU timestamp queries. The design, the pass order, and the numbers are in
 [`docs/RENDER-PERF.md`](docs/RENDER-PERF.md).
+
+Song backgrounds (movies included) play behind the field, kept in sync with the
+music by their `#BGCHANGES` trigger and a playback-rate lock.
+
+## Song analysis
+
+The song-select screen shows a per-chart breakdown beside the leaderboard: a
+notes-per-second density graph with peak NPS, the note tallies
+(steps/jumps/hands/holds/rolls/mines), and the ITG "tech" counts — Crossovers,
+Footswitches, Sideswitches, Jacks, and Brackets. Those come from a faithful
+TypeScript port of ITGmania's StepParity foot-placement solver and TechCounts
+classifier — the full cost model, in emulated 32-bit float — validated against
+the compiled C++ on a real song library to match the game exactly.
+
+## Online play
+
+Scores post to global per-chart leaderboards (pad-only, guarded by a
+replay-verified re-simulation), and players can race the same chart in real time
+in persistent peer-to-peer rooms — the host picks the song, files stream over the
+data channels, and each player's live score bar streams between machines.
+Deployed on Vercel + Neon.
 
 ## Low latency
 
