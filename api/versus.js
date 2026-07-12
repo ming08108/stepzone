@@ -28,6 +28,7 @@ function isRoomCode(v2) {
 }
 var MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 var MAX_BG_BYTES = 32 * 1024 * 1024;
+var MAX_TRANSFER_BYTES = MAX_AUDIO_BYTES + MAX_BG_BYTES;
 var isObj = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2);
 var ROOM_LIVE_MS = 6e4;
 var JOIN_TTL_MS = 2 * 6e4;

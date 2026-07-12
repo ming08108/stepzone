@@ -143,7 +143,8 @@ export abstract class RoomPeer {
   }
 
   protected appendNotes(p: PlayerState, notes: VersusNote[]): void {
-    if (p.notes.length < MAX_NOTE_FEED) p.notes.push(...notes);
+    const room = MAX_NOTE_FEED - p.notes.length;
+    if (room > 0) p.notes.push(...(notes.length > room ? notes.slice(0, room) : notes));
   }
 
   // ---- local player actions (implemented per end) --------------------------------
@@ -251,14 +252,20 @@ export class RoomHost extends RoomPeer {
         }
         break;
       case 'snap':
-        if (this.phase === 'playing' && (!p.snap || msg.snap.seq > p.snap.seq)) {
+        // Only enrolled racers stream — a spectator can't inject a fake
+        // scoreboard for its id, and the host won't amplify it to everyone.
+        if (
+          this.phase === 'playing' &&
+          this.racers.has(id) &&
+          (!p.snap || msg.snap.seq > p.snap.seq)
+        ) {
           p.snap = msg.snap;
           this.relayExcept(id, { t: 'psnap', id, snap: msg.snap });
           this.update();
         }
         break;
       case 'notes':
-        if (this.phase === 'playing') {
+        if (this.phase === 'playing' && this.racers.has(id)) {
           this.appendNotes(p, msg.notes);
           this.relayExcept(id, { t: 'pnotes', id, notes: msg.notes });
         }
@@ -536,7 +543,9 @@ export class RoomHost extends RoomPeer {
     this.racers = new Set(racers.map((p) => p.id));
     this.phase = 'loading';
     this.broadcastRoster();
-    this.broadcast({ t: 'load' });
+    // Carry the racer ids so a guest whose `ready` raced this start (e.g. a host
+    // force-start) self-excludes instead of loading into a race it isn't in.
+    this.broadcast({ t: 'load', racers: [...this.racers] });
     this.onLoadRequested?.();
     this.update();
   }
@@ -703,7 +712,9 @@ export class RoomGuest extends RoomPeer {
         this.update();
         break;
       case 'load':
-        if (!this.loadRequested && this.selfReady) {
+        // Only load if the host actually enrolled us as a racer — a force-start
+        // that raced our `ready` starts without us, and we must not wedge.
+        if (!this.loadRequested && this.selfReady && msg.racers.includes(this.youId ?? -1)) {
           this.loadRequested = true;
           this.phase = 'loading';
           this.onLoadRequested?.();

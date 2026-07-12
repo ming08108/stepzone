@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { TransferSink } from '../src/net/versusTransfer';
-import { parseHostMsg, type TransferBinary } from '../src/net/versus';
+import { parseHostMsg, parseSnap, type TransferBinary } from '../src/net/versus';
 
 const files = (...sizes: number[]): TransferBinary[] =>
   sizes.map((bytes, i) => ({
@@ -69,5 +69,37 @@ describe('transfer frames', () => {
     expect(parseHostMsg(withFiles([{ name: 'x/y.ogg', kind: 'audio', bytes: 1 }]))).toBeNull();
     expect(parseHostMsg(withFiles([]))).toBeNull();
     expect(parseHostMsg(JSON.stringify({ t: 'fileErr', message: 'x'.repeat(300) }))).toBeNull();
+    // Path smuggling via backslash or dot-dot (no slash) is rejected too.
+    expect(parseHostMsg(withFiles([{ name: 'a\\b.ogg', kind: 'audio', bytes: 1 }]))).toBeNull();
+    expect(parseHostMsg(withFiles([{ name: '..', kind: 'audio', bytes: 1 }]))).toBeNull();
+    // A zero-byte "file" is only ever hostile — every real transfer has content.
+    expect(parseHostMsg(withFiles([{ name: 'a.ogg', kind: 'audio', bytes: 0 }]))).toBeNull();
+    // Each file is under its per-kind cap, but the whole transfer exceeds the
+    // aggregate ceiling — reject so a host can't force ~256 MB of allocation.
+    const big = 60 * 1024 * 1024;
+    expect(
+      parseHostMsg(
+        withFiles([
+          { name: 'a.ogg', kind: 'audio', bytes: big },
+          { name: 'b.ogg', kind: 'audio', bytes: big },
+        ]),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('parseSnap', () => {
+  const base = { atSong: 1, percent: 0.5, combo: 3, life: 1, failed: false };
+  it('accepts a valid integer seq and clamps ranges', () => {
+    expect(parseSnap({ ...base, seq: 7 })?.seq).toBe(7);
+    expect(parseSnap({ ...base, seq: 0, percent: 2 })?.percent).toBe(1);
+  });
+  it('rejects non-integer, negative, or non-finite seq (freeze guard)', () => {
+    // A huge/fractional seq would pass a bare finite check and, being > every
+    // real integer seq, freeze the monotonic receiver on a fake sample.
+    expect(parseSnap({ ...base, seq: 1e308 })).toBeNull();
+    expect(parseSnap({ ...base, seq: 1.5 })).toBeNull();
+    expect(parseSnap({ ...base, seq: -1 })).toBeNull();
+    expect(parseSnap({ ...base, seq: Number.NaN })).toBeNull();
   });
 });

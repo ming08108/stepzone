@@ -24,8 +24,10 @@
 import type { PlayResult } from './protocol';
 import { parsePlayResult } from './protocol';
 
-/** Wire protocol revision — both ends must match (host rejects mismatches). */
-export const ROOM_PROTOCOL = 2;
+/** Wire protocol revision — both ends must match (host rejects mismatches).
+ *  v3: `load` carries the racer id list so a guest whose ready raced a host
+ *  force-start self-excludes instead of wedging on a race it isn't part of. */
+export const ROOM_PROTOCOL = 3;
 
 /** Hub-and-spoke fan-out is per-guest work for the host — keep parties small. */
 export const MAX_PLAYERS = 8;
@@ -123,11 +125,18 @@ export interface VersusNote {
 }
 
 export const MAX_NOTE_INDEX = 200_000;
+/** A per-frame snap counter — a billion covers weeks of continuous play, so any
+ *  value past it is a hostile jump meant to out-rank (and freeze out) every real
+ *  snap under the receiver's monotonic `>` guard. 1e308 is an integer, so a
+ *  bare integer check is not enough; this ceiling is what actually stops it. */
+export const MAX_SNAP_SEQ = 1_000_000_000;
 
 export function parseSnap(v: unknown): VersusSnap | null {
   if (!isObj(v)) return null;
-  if (!num(v.seq) || !num(v.atSong) || !num(v.percent) || !num(v.combo) || !num(v.life))
-    return null;
+  // seq is a bounded integer counter — reject fractional/negative AND absurdly
+  // large values, either of which would break the monotonic receiver.
+  if (!seqNum(v.seq) || v.seq > MAX_SNAP_SEQ) return null;
+  if (!num(v.atSong) || !num(v.percent) || !num(v.combo) || !num(v.life)) return null;
   if (typeof v.failed !== 'boolean') return null;
   return {
     seq: v.seq,
@@ -196,18 +205,31 @@ export interface TransferBinary {
   bytes: number;
 }
 
+/** Ceiling on a whole transfer, so a hostile host can't force ~256 MB of guest
+ *  allocation with four max-size entries (the real flow is audio + optional bg). */
+export const MAX_TRANSFER_BYTES = MAX_AUDIO_BYTES + MAX_BG_BYTES;
+
 const fileName = (n: unknown): n is string =>
-  typeof n === 'string' && n.length > 0 && n.length <= 128 && !n.includes('/');
+  typeof n === 'string' &&
+  n.length > 0 &&
+  n.length <= 128 &&
+  !n.includes('/') &&
+  !n.includes('\\') &&
+  !n.includes('..');
 
 function parseTransferBinaries(v: unknown): TransferBinary[] | null {
   if (!Array.isArray(v) || v.length === 0 || v.length > 4) return null;
   const out: TransferBinary[] = [];
+  let total = 0;
   for (const f of v) {
     if (!isObj(f)) return null;
     if (!fileName(f.name)) return null;
     if (f.kind !== 'audio' && f.kind !== 'bg') return null;
     const cap = f.kind === 'audio' ? MAX_AUDIO_BYTES : MAX_BG_BYTES;
-    if (!num(f.bytes) || !Number.isInteger(f.bytes) || f.bytes < 0 || f.bytes > cap) return null;
+    // Every real transferred file has content; 0 bytes is only ever hostile.
+    if (!num(f.bytes) || !Number.isInteger(f.bytes) || f.bytes <= 0 || f.bytes > cap) return null;
+    total += f.bytes;
+    if (total > MAX_TRANSFER_BYTES) return null;
     out.push({ name: f.name, kind: f.kind, bytes: f.bytes });
   }
   return out;
@@ -237,7 +259,7 @@ export type HostMsg =
   | { t: 'err'; reason: 'full' | 'version' }
   | { t: 'roster'; phase: RoomPhase; players: RosterPlayer[] }
   | { t: 'song'; seq: number; song: VersusSongRef | null; musicRate: number }
-  | { t: 'load' } // all ready — prepare your session
+  | { t: 'load'; racers: number[] } // start your session IF you're a racer
   | { t: 'ping'; at: number } // per-guest RTT probe (host clock, echoed)
   | { t: 'go'; delayMs: number } // begin after delayMs (half-RTT compensated)
   | { t: 'psnap'; id: number; snap: VersusSnap } // relayed player streams
@@ -333,7 +355,11 @@ export function parseHostMsg(raw: string): HostMsg | null {
       if (!num(v.musicRate) || v.musicRate < 0.5 || v.musicRate > 3) return null;
       return { t: 'song', seq: v.seq, song, musicRate: v.musicRate };
     }
-    case 'load':
+    case 'load': {
+      if (!Array.isArray(v.racers) || v.racers.length > MAX_PLAYERS) return null;
+      if (!v.racers.every((id) => seqNum(id))) return null;
+      return { t: 'load', racers: v.racers as number[] };
+    }
     case 'fileDone':
     case 'bye':
       return { t: v.t };

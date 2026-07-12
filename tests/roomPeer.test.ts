@@ -385,6 +385,23 @@ describe('room choreography', () => {
     expect(r.host.ended).toBe(false);
   });
 
+  it('a mid-song spectator cannot inject snaps or notes into the race', () => {
+    const r = room(2);
+    toPlaying(r);
+    const late = r.addGuest('LATE');
+    r.flush();
+    const lateId = r.host.players.find((p) => p.name === 'LATE')!.id;
+    // The spectator's phase is 'playing' (via roster), so its send guards pass —
+    // but it was never enrolled as a racer, so the host must not store or relay.
+    late.sendSnap({ atSong: 1, percent: 0.99, combo: 50, life: 1, failed: false });
+    late.sendNotes([{ i: 0, tns: 9 }]);
+    r.flush();
+    expect(r.host.players.find((p) => p.id === lateId)?.snap ?? null).toBeNull();
+    expect(r.host.players.find((p) => p.id === lateId)?.notes).toEqual([]);
+    // And nothing was amplified to the other racers.
+    expect(r.guests[0].players.find((p) => p.id === lateId)?.snap ?? null).toBeNull();
+  });
+
   it('a mid-loading leaver does not wedge the start gate', () => {
     const r = room(2);
     r.host.setSong(song(), 1);
@@ -461,6 +478,35 @@ describe('room choreography', () => {
     r.host.ready(pick(5)); // only the host is ready
     r.flush();
     r.host.forceStart();
+    r.flush();
+    expect(r.host.phase).toBe('lobby');
+  });
+
+  it('a force-start that races a guest ready leaves that guest out, not wedged', () => {
+    const r = room(2);
+    r.host.setSong(song(), 1);
+    r.flush();
+    r.host.ready(pick(5));
+    r.guests[0].ready(pick(6)); // G1 ready
+    r.flush();
+    // G2 readies, but its frame is still in flight when the host force-starts.
+    let g2Loaded = false;
+    r.guests[1].onLoadRequested = () => {
+      g2Loaded = true;
+    };
+    r.guests[1].ready(pick(7)); // queued, NOT flushed
+    expect(r.host.players.find((p) => p.id === 2)?.ready).toBe(false); // host hasn't seen it
+    r.host.forceStart(); // racers = {host, G1}; G2's ready arrives after
+    r.flush();
+    expect(r.host.phase).toBe('loading');
+    // G2 got the load frame but self-excluded — it isn't in the racer list.
+    expect(g2Loaded).toBe(false);
+    // The race runs and ends on host + G1 only; G2 never gated it.
+    r.host.loaded();
+    r.guests[0].loaded();
+    r.flush();
+    r.host.finish(result(0.9));
+    r.guests[0].finish(result(0.8));
     r.flush();
     expect(r.host.phase).toBe('lobby');
   });

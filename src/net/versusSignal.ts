@@ -16,6 +16,8 @@
  * hanging forever.
  */
 
+import { isRoomCode } from './versus';
+
 const API_URL = '/api/versus';
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
@@ -50,14 +52,16 @@ export interface HostedRoomChannel {
 async function completeSdp(pc: RTCPeerConnection): Promise<string> {
   if (pc.iceGatheringState !== 'complete') {
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, GATHER_TIMEOUT_MS);
-      pc.addEventListener('icegatheringstatechange', function check() {
-        if (pc.iceGatheringState === 'complete') {
-          clearTimeout(timer);
-          pc.removeEventListener('icegatheringstatechange', check);
-          resolve();
-        }
-      });
+      const done = () => {
+        clearTimeout(timer);
+        pc.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      };
+      const check = () => {
+        if (pc.iceGatheringState === 'complete') done();
+      };
+      const timer = setTimeout(done, GATHER_TIMEOUT_MS); // ship what we have
+      pc.addEventListener('icegatheringstatechange', check);
     });
   }
   const sdp = pc.localDescription?.sdp;
@@ -68,20 +72,27 @@ async function completeSdp(pc: RTCPeerConnection): Promise<string> {
 /** Resolve once the channel opens; reject on failure/timeout. */
 function waitForOpen(pc: RTCPeerConnection, channel: RTCDataChannel): Promise<void> {
   return new Promise((resolve, reject) => {
-    const fail = (why: string) => {
+    const cleanup = () => {
       clearTimeout(timer);
+      channel.removeEventListener('open', onOpen);
+      pc.removeEventListener('connectionstatechange', onState);
+    };
+    const fail = (why: string) => {
+      cleanup();
       reject(new Error(why));
     };
-    const timer = setTimeout(() => fail('connection timed out'), OPEN_TIMEOUT_MS);
-    channel.addEventListener('open', () => {
-      clearTimeout(timer);
+    const onOpen = () => {
+      cleanup();
       resolve();
-    });
-    pc.addEventListener('connectionstatechange', () => {
+    };
+    const onState = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         fail('connection failed (NAT/firewall)');
       }
-    });
+    };
+    const timer = setTimeout(() => fail('connection timed out'), OPEN_TIMEOUT_MS);
+    channel.addEventListener('open', onOpen);
+    pc.addEventListener('connectionstatechange', onState);
   });
 }
 
@@ -109,9 +120,16 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
   } catch {
     return null;
   }
+  // A malformed create response (no/invalid code) would otherwise spin the poll
+  // loop forever on `?code=undefined` (400s, never 404) — fail fast instead.
+  if (!isRoomCode(code)) return null;
 
   let closed = false;
-  const handled = new Set<string>();
+  /** Joins whose answer we've committed — never answer them twice. */
+  const answered = new Set<string>();
+  /** Joins currently being answered — dedupe concurrent poll cycles without
+   *  permanently skipping a join whose answer failed transiently. */
+  const inFlight = new Set<string>();
   const room: HostedRoomChannel = {
     code,
     close() {
@@ -135,12 +153,17 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
         body: JSON.stringify({ t: 'answer', code, joinId: join.joinId, answer }),
       });
       if (!res.ok) throw new Error(`answer ${res.status}`);
+      // The answer is committed (consume-once server-side) — never re-answer
+      // this join. Anything past here failing means the joiner re-joins fresh.
+      answered.add(join.joinId);
+      let openTimer: ReturnType<typeof setTimeout> | undefined;
       const channel = await Promise.race([
         channelArrived,
-        new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('connection timed out')), OPEN_TIMEOUT_MS),
-        ),
+        new Promise<never>((_, rej) => {
+          openTimer = setTimeout(() => rej(new Error('connection timed out')), OPEN_TIMEOUT_MS);
+        }),
       ]);
+      clearTimeout(openTimer); // channelArrived won — don't leak the 25s timer
       if (channel.readyState !== 'open') await waitForOpen(pc, channel);
       if (closed) {
         pc.close();
@@ -148,8 +171,11 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
       }
       room.onPeer?.({ channel, close: () => pc.close() });
     } catch {
-      // A failed/timed-out joiner must not take down the poll loop.
+      // A failed/timed-out joiner must not take down the poll loop. If we never
+      // got as far as committing the answer, a later poll will retry this join.
       pc.close();
+    } finally {
+      inFlight.delete(join.joinId);
     }
   };
 
@@ -166,8 +192,8 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
         if (res.ok) {
           const body = (await res.json()) as { joins?: PendingJoin[] };
           for (const join of body.joins ?? []) {
-            if (handled.has(join.joinId)) continue;
-            handled.add(join.joinId);
+            if (answered.has(join.joinId) || inFlight.has(join.joinId)) continue;
+            inFlight.add(join.joinId);
             void handleJoin(join);
           }
         }
