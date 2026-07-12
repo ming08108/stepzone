@@ -211,7 +211,7 @@ const ARROW_HOLLOW: Pts = [
 ];
 
 /** Tube piece 1: the capsule on the tail side of the shaft. */
-const ARROW_CAPSULE: Pts = [
+export const ARROW_CAPSULE: Pts = [
   [-0.05, 0.7],
   [0.05, 0.7],
   [0.133, 0.617],
@@ -222,7 +222,7 @@ const ARROW_CAPSULE: Pts = [
 ];
 
 /** Tube piece 2: the pencil pointing at the tip, chevron-notched at its tail. */
-const ARROW_PENCIL: Pts = [
+export const ARROW_PENCIL: Pts = [
   [-0.133, 0.217],
   [-0.133, -0.167],
   [0, -0.3],

@@ -17,7 +17,8 @@ import type { Feedback, TapNoteStyle } from '../types';
 import {
   A3_EXPLOSION,
   A3_JUDGMENT,
-  ARROW_OUTER,
+  ARROW_CAPSULE,
+  ARROW_PENCIL,
   COMBO_PLAIN,
   COMBO_TINT,
   GOLD_DARK,
@@ -144,14 +145,17 @@ export class DdrA3GpuSkin implements GpuSkin {
     return rect;
   }
 
-  /** Solid white arrow silhouette — drawn (UV-cropped) as the rising interior
-   *  fill, so the fill is already clipped to the note's shape. */
-  private sprArrowMask(ctx: SkinCtx): AtlasRect | null {
+  /** Solid white arrow CORE (the central capsule+pencil tube, not the chevron
+   *  wings) — drawn UV-cropped as the rising interior fill, so the fill lands only
+   *  in the middle of the arrow and is already clipped to the core's shape. */
+  private sprCoreFill(ctx: SkinCtx): AtlasRect | null {
     const m = ctx.arrowS + 9 * ctx.ds;
-    return ctx.atlas.sprite('note:mask', 2 * m, 2 * m, (c) => {
+    return ctx.atlas.sprite('note:corefill', 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      tracePoly(c, ARROW_OUTER, ctx.arrowS);
       c.fillStyle = '#ffffff';
+      tracePoly(c, ARROW_CAPSULE, ctx.arrowS);
+      c.fill();
+      tracePoly(c, ARROW_PENCIL, ctx.arrowS);
       c.fill();
     });
   }
@@ -514,7 +518,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       // with the lane so it always fills base→tip whatever way the arrow points.
       // Dead heads sit unfilled.
       if (!dead) {
-        const fill = this.sprArrowMask(ctx); // solid white arrow silhouette
+        const fill = this.sprCoreFill(ctx); // solid white arrow core (middle only)
         const span = ctx.height * 0.7;
         const level = 1 - Math.min(1, Math.abs(y - ctx.receptorY) / span);
         if (fill && level > 0.02) {
@@ -973,7 +977,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       }
       this.sprNote(ctx, NOTE_GREEN, QUANT_TUBE[NoteType.N12TH]);
       this.sprNote(ctx, NOTE_GREY, TUBE_GREY);
-      this.sprArrowMask(ctx); // solid silhouette used as the rising interior fill
+      this.sprCoreFill(ctx); // solid core used as the rising interior fill
       this.sprGlow(ctx); // held-freeze bloom
 
       // Receptors: idle dim, beat-bright, press flash.
