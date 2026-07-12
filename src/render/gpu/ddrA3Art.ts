@@ -187,7 +187,7 @@ export const ARROW_OUTER: Pts = [
 ];
 
 /** The hollow between the chevron band and the shaft (near-black interior). */
-const ARROW_HOLLOW: Pts = [
+export const ARROW_HOLLOW: Pts = [
   [0, -0.717],
   [0.767, 0.05],
   [0.767, 0.133],
@@ -305,6 +305,9 @@ export function paintNote(
   ds: number,
   band: BandColors,
   tube: string,
+  /** Leave the interior a dark hollow (no pale tube) — the skin fills it with a
+   *  beat-driven white wash instead. */
+  hollow = false,
 ): void {
   ctx.lineJoin = 'round';
   // Colored band over the whole silhouette (tail = pale, tip = deep),
@@ -329,6 +332,7 @@ export function paintNote(
   tracePoly(ctx, ARROW_HOLLOW, s);
   ctx.fillStyle = OUTLINE_INK;
   ctx.fill();
+  if (hollow) return; // interior stays dark; the skin fills it on the beat
   // Pale tube.
   ctx.fillStyle = tube;
   tracePoly(ctx, ARROW_CAPSULE, s);

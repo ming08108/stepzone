@@ -412,9 +412,8 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     beat: number,
     _beatPulse: number,
   ): void {
-    // Beat pulse (StepMania pulse()/effectclock("beat")): a smooth sine zoom
-    // peaking ON the beat, on top of the flowing stem stripe below.
-    const m = this.pad(ctx) * (style === 'deadHead' ? 1 : 1 + 0.13 * beatSine(beat));
+    // Fixed size — no beat zoom; the interior animation is the stem stripe below.
+    const m = this.pad(ctx);
     const dead = style === 'deadHead';
     const faceColor = dead ? '#7c8087' : ITG_QUANT_COLOR[quant];
     const x = ctx.laneX(track);

@@ -18,6 +18,7 @@ import {
   A3_EXPLOSION,
   A3_JUDGMENT,
   ARROW_CAPSULE,
+  ARROW_HOLLOW,
   ARROW_PENCIL,
   COMBO_PLAIN,
   COMBO_TINT,
@@ -139,24 +140,27 @@ export class DdrA3GpuSkin implements GpuSkin {
     const m = ctx.arrowS + 9 * ctx.ds;
     const rect = ctx.atlas.sprite(`note:${band[1]}`, 2 * m, 2 * m, (c) => {
       c.translate(m, m);
-      paintNote(c, ctx.arrowS, ctx.ds, band, tube);
+      // Hollow interior — the dark centre is filled with a beat-driven white wash
+      // in note(); the pale tube is omitted.
+      paintNote(c, ctx.arrowS, ctx.ds, band, tube, true);
     });
     this.noteSprites.set(band[1], rect);
     return rect;
   }
 
-  /** Solid white arrow CORE (the central capsule+pencil tube, not the chevron
-   *  wings) — drawn UV-cropped as the rising interior fill, so the fill lands only
-   *  in the middle of the arrow and is already clipped to the core's shape. */
-  private sprCoreFill(ctx: SkinCtx): AtlasRect | null {
+  /** Solid white arrow INTERIOR (the hollow region + the capsule/pencil stem, i.e.
+   *  the whole inside of the arrow up into the head) — drawn UV-cropped from the
+   *  tail so it reads as a white fill rising through the arrow, clipped to the
+   *  interior shape so the coloured outline/bands stay visible. */
+  private sprInteriorFill(ctx: SkinCtx): AtlasRect | null {
     const m = ctx.arrowS + 9 * ctx.ds;
-    return ctx.atlas.sprite('note:corefill', 2 * m, 2 * m, (c) => {
+    return ctx.atlas.sprite('note:interiorfill', 2 * m, 2 * m, (c) => {
       c.translate(m, m);
       c.fillStyle = '#ffffff';
-      tracePoly(c, ARROW_CAPSULE, ctx.arrowS);
-      c.fill();
-      tracePoly(c, ARROW_PENCIL, ctx.arrowS);
-      c.fill();
+      for (const poly of [ARROW_HOLLOW, ARROW_CAPSULE, ARROW_PENCIL]) {
+        tracePoly(c, poly, ctx.arrowS);
+        c.fill();
+      }
     });
   }
 
@@ -474,10 +478,9 @@ export class DdrA3GpuSkin implements GpuSkin {
     const band = dead ? NOTE_GREY : QUANT_BAND[quant];
     const tube = dead ? TUBE_GREY : QUANT_TUBE[quant];
     const spr = this.sprNote(ctx, band, tube);
-    // Beat pulse (StepMania pulse()/effectclock("beat")): a smooth sine zoom that
-    // peaks ON the beat and eases back by the half-beat — the arcade arrows
-    // "pulse in" with the music. A dead head sits still.
-    const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.15 * beatSine(beat));
+    // Fixed size — the arrows don't pulse; the beat animation lives in the
+    // interior white fill below.
+    const m = ctx.arrowS + 9 * ctx.ds;
     if (spr) {
       const rot = ctx.angle(track);
       // An engaged freeze head glows: a soft quant-tinted bloom behind the arrow,
@@ -509,18 +512,13 @@ export class DdrA3GpuSkin implements GpuSkin {
       const cx = ctx.laneX(track);
       this.rotOpt.rot = rot;
       b.push(cx, y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
-      // Interior fill: the arrow charges up from its tail to its tip as it nears
-      // the receptor — empty far up the field, brimming full at the judgment line —
-      // so a scrolling arrow visibly fills over its approach (and neighbours at
-      // different distances sit at different levels, like the arcade). Drawn as the
-      // solid arrow silhouette with only its base-side strip revealed: a sub-quad
-      // seated on the tail, sized and UV-cropped to the current level and rotated
-      // with the lane so it always fills base→tip whatever way the arrow points.
-      // Dead heads sit unfilled.
+      // Interior fill: a white wash that fills the arrow's hollow interior on the
+      // beat — rising from the tail up through the stem and into the head, peaking
+      // ON the beat and easing back by the half-beat (beatSine). Every arrow fills
+      // in time with the music; a dead head sits dark.
       if (!dead) {
-        const fill = this.sprCoreFill(ctx); // solid white arrow core (middle only)
-        const span = ctx.height * 0.7;
-        const level = 1 - Math.min(1, Math.abs(y - ctx.receptorY) / span);
+        const fill = this.sprInteriorFill(ctx); // solid white arrow interior
+        const level = beatSine(beat);
         if (fill && level > 0.02) {
           // Reveal only the tail-side `level` fraction of the sprite (v grows toward
           // the base at v1); reuse one rect so the per-note crop never allocates.
@@ -536,7 +534,7 @@ export class DdrA3GpuSkin implements GpuSkin {
           const off = m * (1 - level);
           const fcx = cx - off * Math.sin(rot);
           const fcy = y + off * Math.cos(rot);
-          b.push(fcx, fcy, 2 * m, 2 * m * level, uv, 1, 1, 1, 0.55, this.rotOpt);
+          b.push(fcx, fcy, 2 * m, 2 * m * level, uv, 1, 1, 1, 0.9, this.rotOpt);
         }
       }
     }
@@ -977,7 +975,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       }
       this.sprNote(ctx, NOTE_GREEN, QUANT_TUBE[NoteType.N12TH]);
       this.sprNote(ctx, NOTE_GREY, TUBE_GREY);
-      this.sprCoreFill(ctx); // solid core used as the rising interior fill
+      this.sprInteriorFill(ctx); // white interior used as the beat fill
       this.sprGlow(ctx); // held-freeze bloom
 
       // Receptors: idle dim, beat-bright, press flash.
