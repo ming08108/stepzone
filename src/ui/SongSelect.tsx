@@ -1067,254 +1067,257 @@ export function SongSelect({
         )}
       </div>
 
-      {/* Column headers (song list only) */}
-      {!inPacks && (
-        <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
-          {(
-            [
-              ['TITLE', 'title', false],
-              ['ARTIST', 'artist', false],
-              ['PACK', 'pack', false],
-              ['BPM', 'bpm', true],
-              ['BEST', 'best', true],
-              ['PLAYS', 'plays', true],
-              ['LV', 'level', true],
-            ] as const
-          ).map(([label, key, end]) => {
-            const on = sort === key;
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  setSort(key);
-                  setSel(0);
-                }}
-                className="text-[11px] tracking-[0.14em] whitespace-nowrap"
-                style={{
-                  justifySelf: end ? 'end' : 'start',
-                  color: on ? AC : 'rgba(236,236,236,.4)',
-                  fontWeight: on ? 700 : 400,
-                }}
-              >
-                {label}
-                {on ? ' ▾' : ''}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       {/* Virtualized song list + the live board for the highlighted chart */}
       <div className="flex min-h-0 flex-1">
-        <div
-          ref={listRef}
-          className="relative min-h-0 flex-1 overflow-hidden"
-          onWheel={(e) => {
-            // Song list: the wheel moves the selection (this container has no native
-            // scroll). The pack grid scrolls natively (its own overflow-y-auto), so
-            // leave the wheel to it — moving packSel here would double-move.
-            if (inPacks) return;
-            // Accumulate for trackpads.
-            wheelAcc.current += e.deltaY;
-            const step = 30;
-            if (Math.abs(wheelAcc.current) < step) return;
-            const dir = wheelAcc.current > 0 ? 1 : -1;
-            wheelAcc.current = 0;
-            const n = Math.max(1, shownSongs.length);
-            setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
-          }}
-        >
-          {inPacks && (
-            <div ref={gridRef} className="absolute inset-0 overflow-y-auto px-[20px] py-[16px]">
-              <div
-                className="grid gap-[14px]"
-                style={{ gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))` }}
-              >
-                {packList.map((p, i) => {
-                  const on = i === packClamped;
-                  const art = packArtByIndex[i] ?? null;
-                  return (
-                    <div
-                      key={p.pack}
-                      ref={on ? selCardRef : undefined}
-                      onClick={() => setPackSel(i)}
-                      onDoubleClick={() => openPackAt(i)}
-                      className="flex cursor-pointer flex-col overflow-hidden border transition-all"
-                      style={{
-                        borderColor: on ? AC : 'rgba(255,255,255,.10)',
-                        background: on ? AC + '26' : 'rgba(255,255,255,.02)',
-                        // Inset 2px accent ring (no layout shift) + a stronger glow
-                        // so the highlighted pack reads at a glance across the grid.
-                        boxShadow: on
-                          ? `inset 0 0 0 2px ${AC}, 0 0 0 1px ${AC}, 0 6px 26px ${AC}55`
-                          : 'none',
-                      }}
-                    >
-                      <div
-                        className="relative w-full overflow-hidden bg-black/40"
-                        style={{ aspectRatio: '256 / 80' }}
-                      >
-                        {art ? (
-                          <img src={art} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <div
-                            className="flex h-full w-full items-center justify-center text-[24px] font-bold tracking-[0.08em] text-white/85"
-                            style={{
-                              background: artGradient(p.pack === ALL_PACK ? 'ALL SONGS' : p.pack),
-                            }}
-                          >
-                            {p.pack === ALL_PACK ? '★ ALL' : initials(p.pack)}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-between gap-2 px-[12px] py-[9px]">
-                        <span
-                          className="truncate text-[15px] font-bold"
-                          style={{ color: on ? '#ececec' : 'rgba(236,236,236,.82)' }}
-                        >
-                          {packLabel(p.pack)}
-                        </span>
-                        <span
-                          className="flex-none text-[12px] tracking-[0.06em]"
-                          style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                        >
-                          {p.count}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+        {/* Header + rows share one column so they line up whether or not the
+            RANKS panel (right) is present (it's absent offline / under 1100px). */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* Column headers (song list only). */}
+          {!inPacks && (
+            <div className="grid h-[28px] flex-none grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.06] px-[28px]">
+              {(
+                [
+                  ['TITLE', 'title', false],
+                  ['ARTIST', 'artist', false],
+                  ['PACK', 'pack', false],
+                  ['BPM', 'bpm', true],
+                  ['BEST', 'best', true],
+                  ['PLAYS', 'plays', true],
+                  ['LV', 'level', true],
+                ] as const
+              ).map(([label, key, end]) => {
+                const on = sort === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setSort(key);
+                      setSel(0);
+                    }}
+                    className="text-[11px] tracking-[0.14em] whitespace-nowrap"
+                    style={{
+                      justifySelf: end ? 'end' : 'start',
+                      color: on ? AC : 'rgba(236,236,236,.4)',
+                      fontWeight: on ? 700 : 400,
+                    }}
+                  >
+                    {label}
+                    {on ? ' ▾' : ''}
+                  </button>
+                );
+              })}
             </div>
           )}
-          {!inPacks && (
-            <div
-              className="absolute inset-0"
-              style={{
-                maskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
-                WebkitMaskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
-              }}
-            >
+          <div
+            ref={listRef}
+            className="relative min-h-0 flex-1 overflow-hidden"
+            onWheel={(e) => {
+              // Song list: the wheel moves the selection (this container has no native
+              // scroll). The pack grid scrolls natively (its own overflow-y-auto), so
+              // leave the wheel to it — moving packSel here would double-move.
+              if (inPacks) return;
+              // Accumulate for trackpads.
+              wheelAcc.current += e.deltaY;
+              const step = 30;
+              if (Math.abs(wheelAcc.current) < step) return;
+              const dir = wheelAcc.current > 0 ? 1 : -1;
+              wheelAcc.current = 0;
+              const n = Math.max(1, shownSongs.length);
+              setSel((prev) => Math.max(0, Math.min(n - 1, Math.min(prev, n - 1) + dir)));
+            }}
+          >
+            {inPacks && (
+              <div ref={gridRef} className="absolute inset-0 overflow-y-auto px-[20px] py-[16px]">
+                <div
+                  className="grid gap-[14px]"
+                  style={{ gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))` }}
+                >
+                  {packList.map((p, i) => {
+                    const on = i === packClamped;
+                    const art = packArtByIndex[i] ?? null;
+                    return (
+                      <div
+                        key={p.pack}
+                        ref={on ? selCardRef : undefined}
+                        onClick={() => setPackSel(i)}
+                        onDoubleClick={() => openPackAt(i)}
+                        className="flex cursor-pointer flex-col overflow-hidden border transition-all"
+                        style={{
+                          borderColor: on ? AC : 'rgba(255,255,255,.10)',
+                          background: on ? AC + '26' : 'rgba(255,255,255,.02)',
+                          // Inset 2px accent ring (no layout shift) + a stronger glow
+                          // so the highlighted pack reads at a glance across the grid.
+                          boxShadow: on
+                            ? `inset 0 0 0 2px ${AC}, 0 0 0 1px ${AC}, 0 6px 26px ${AC}55`
+                            : 'none',
+                        }}
+                      >
+                        <div
+                          className="relative w-full overflow-hidden bg-black/40"
+                          style={{ aspectRatio: '256 / 80' }}
+                        >
+                          {art ? (
+                            <img src={art} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <div
+                              className="flex h-full w-full items-center justify-center text-[24px] font-bold tracking-[0.08em] text-white/85"
+                              style={{
+                                background: artGradient(p.pack === ALL_PACK ? 'ALL SONGS' : p.pack),
+                              }}
+                            >
+                              {p.pack === ALL_PACK ? '★ ALL' : initials(p.pack)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 px-[12px] py-[9px]">
+                          <span
+                            className="truncate text-[15px] font-bold"
+                            style={{ color: on ? '#ececec' : 'rgba(236,236,236,.82)' }}
+                          >
+                            {packLabel(p.pack)}
+                          </span>
+                          <span
+                            className="flex-none text-[12px] tracking-[0.06em]"
+                            style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
+                          >
+                            {p.count}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {!inPacks && (
               <div
-                className="absolute inset-x-0 top-0"
+                className="absolute inset-0"
                 style={{
-                  height: total * ROW_H,
-                  transform: `translateY(${off}px)`,
-                  transition: scrollAnim ? 'transform .16s ease-out' : 'none',
+                  maskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
+                  WebkitMaskImage: `linear-gradient(to bottom, ${topFade ? 'transparent' : 'black'} 0, black 8%, black 92%, ${botFade ? 'transparent' : 'black'} 100%)`,
                 }}
               >
-                {shownSongs.slice(first, last).map((s, k) => {
-                  const i = first + k;
-                  const on = i === selClamped;
-                  const lv = s.levels[diff];
-                  const best = s.bests[diff];
-                  return (
-                    <div
-                      key={i}
-                      onClick={() => setSel(i)}
-                      onDoubleClick={() => {
-                        setSel(i);
-                        void start();
-                      }}
-                      className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
-                      style={{
-                        top: i * ROW_H,
-                        height: ROW_H,
-                        fontSize: 16,
-                        fontWeight: on ? 700 : 400,
-                        color: on ? '#ececec' : 'rgba(236,236,236,.6)',
-                        background: on ? AC + '1a' : 'transparent',
-                        borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
-                      }}
-                    >
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFav(s.key);
-                          }}
-                          title="Favorite (F)"
-                          aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
-                          className="flex-none text-[15px] leading-none"
-                          style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.4)' }}
+                <div
+                  className="absolute inset-x-0 top-0"
+                  style={{
+                    height: total * ROW_H,
+                    transform: `translateY(${off}px)`,
+                    transition: scrollAnim ? 'transform .16s ease-out' : 'none',
+                  }}
+                >
+                  {shownSongs.slice(first, last).map((s, k) => {
+                    const i = first + k;
+                    const on = i === selClamped;
+                    const lv = s.levels[diff];
+                    const best = s.bests[diff];
+                    return (
+                      <div
+                        key={i}
+                        onClick={() => setSel(i)}
+                        onDoubleClick={() => {
+                          setSel(i);
+                          void start();
+                        }}
+                        className="absolute inset-x-0 grid cursor-pointer grid-cols-[1.25fr_1fr_0.7fr_84px_84px_56px_64px] items-center gap-[18px] border-b border-white/[0.04] px-[28px] whitespace-nowrap"
+                        style={{
+                          top: i * ROW_H,
+                          height: ROW_H,
+                          fontSize: 16,
+                          fontWeight: on ? 700 : 400,
+                          color: on ? '#ececec' : 'rgba(236,236,236,.6)',
+                          background: on ? AC + '1a' : 'transparent',
+                          borderLeft: on ? `2px solid ${AC}` : '2px solid transparent',
+                        }}
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFav(s.key);
+                            }}
+                            title="Favorite (F)"
+                            aria-label={favs.has(s.key) ? 'Unfavorite' : 'Favorite'}
+                            className="flex-none text-[15px] leading-none"
+                            style={{ color: favs.has(s.key) ? FAV_CLR : 'rgba(236,236,236,.4)' }}
+                          >
+                            {favs.has(s.key) ? '★' : '☆'}
+                          </button>
+                          <span className="overflow-hidden text-ellipsis">{s.title}</span>
+                        </span>
+                        <span
+                          className="overflow-hidden text-ellipsis"
+                          style={{ color: on ? '#ececec' : 'rgba(236,236,236,.62)' }}
                         >
-                          {favs.has(s.key) ? '★' : '☆'}
-                        </button>
-                        <span className="overflow-hidden text-ellipsis">{s.title}</span>
-                      </span>
-                      <span
-                        className="overflow-hidden text-ellipsis"
-                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.62)' }}
-                      >
-                        {s.artist}
-                      </span>
-                      <span
-                        className="overflow-hidden text-ellipsis text-[14px]"
-                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
-                      >
-                        {s.pack || '—'}
-                      </span>
-                      <span className="justify-self-end opacity-60">{s.bpm}</span>
-                      <span
-                        className="justify-self-end text-[13px]"
-                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.7)' }}
-                      >
-                        {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
-                      </span>
-                      <span
-                        className="justify-self-end text-[13px]"
-                        style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
-                      >
-                        {s.plays > 0 ? s.plays : ''}
-                      </span>
-                      <span
-                        className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
-                        style={{ background: AC + '1f', color: AC }}
-                      >
-                        {lv == null ? '—' : lv}
-                      </span>
-                    </div>
-                  );
-                })}
+                          {s.artist}
+                        </span>
+                        <span
+                          className="overflow-hidden text-ellipsis text-[14px]"
+                          style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
+                        >
+                          {s.pack || '—'}
+                        </span>
+                        <span className="justify-self-end opacity-60">{s.bpm}</span>
+                        <span
+                          className="justify-self-end text-[13px]"
+                          style={{ color: on ? '#ececec' : 'rgba(236,236,236,.7)' }}
+                        >
+                          {best ? `${(best.percent * 100).toFixed(1)} ${best.grade}` : ''}
+                        </span>
+                        <span
+                          className="justify-self-end text-[13px]"
+                          style={{ color: on ? '#ececec' : 'rgba(236,236,236,.5)' }}
+                        >
+                          {s.plays > 0 ? s.plays : ''}
+                        </span>
+                        <span
+                          className="justify-self-end min-w-[40px] px-2 py-px text-center text-[14px] font-bold"
+                          style={{ background: AC + '1f', color: AC }}
+                        >
+                          {lv == null ? '—' : lv}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-          {drag && (
-            <div
-              className="absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
-              style={{ background: 'rgba(11,12,14,.85)', color: AC }}
-            >
-              DROP A SONG FOLDER / PACK
-            </div>
-          )}
-          {loading && (
-            <div
-              className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4"
-              style={{ background: 'rgba(11,12,14,.82)' }}
-            >
+            )}
+            {drag && (
               <div
-                className="text-[15px] tracking-[0.18em]"
-                style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+                className="absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
+                style={{ background: 'rgba(11,12,14,.85)', color: AC }}
               >
-                {loading.msg}
+                DROP A SONG FOLDER / PACK
               </div>
+            )}
+            {loading && (
               <div
-                className="h-[3px] w-[300px] overflow-hidden"
-                style={{ background: 'rgba(255,255,255,.12)' }}
+                className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4"
+                style={{ background: 'rgba(11,12,14,.82)' }}
               >
                 <div
-                  className="h-full transition-[width] duration-150"
-                  style={{
-                    // Determinate bar while parsing (frac known); dim full bar
-                    // while scanning so it never looks stalled at 0%.
-                    width: loading.frac != null ? `${Math.round(loading.frac * 100)}%` : '100%',
-                    opacity: loading.frac != null ? 1 : 0.25,
-                    background: AC,
-                  }}
-                />
+                  className="text-[15px] tracking-[0.18em]"
+                  style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}
+                >
+                  {loading.msg}
+                </div>
+                <div
+                  className="h-[3px] w-[300px] overflow-hidden"
+                  style={{ background: 'rgba(255,255,255,.12)' }}
+                >
+                  <div
+                    className="h-full transition-[width] duration-150"
+                    style={{
+                      // Determinate bar while parsing (frac known); dim full bar
+                      // while scanning so it never looks stalled at 0%.
+                      width: loading.frac != null ? `${Math.round(loading.frac * 100)}%` : '100%',
+                      opacity: loading.frac != null ? 1 : 0.25,
+                      background: AC,
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {!inPacks && <LeaderboardSide entry={song?.entry ?? null} diff={diff} />}
