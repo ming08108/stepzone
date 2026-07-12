@@ -7,7 +7,7 @@
  */
 import { chartKey } from '../app/scores';
 import type { LibraryEntry } from '../io/songFiles';
-import type { VersusChartMeta } from '../net/versus';
+import type { VersusChartMeta, VersusSongRef } from '../net/versus';
 import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 
@@ -26,6 +26,24 @@ export function findSongByAnyHash(
     }
   }
   return null;
+}
+
+/** Unopened catalog rows whose title matches the room's song. `findSongByAnyHash`
+ *  can only match PARSED entries, so a song the user owns but hasn't opened yet
+ *  looks missing and would trigger a needless P2P transfer. These candidates are
+ *  worth loading (just the title matches, not the whole library) and re-checking
+ *  by hash first. Title is the display-full title on both ends. */
+export function unopenedTitleMatches(
+  entries: LibraryEntry[],
+  songRef: VersusSongRef,
+): LibraryEntry[] {
+  const want = songRef.title.trim().toLowerCase();
+  return entries.filter(
+    (e) =>
+      e.lazyDir != null &&
+      e.song.charts.length === 0 &&
+      (e.song.displayFullTitle || e.song.title).trim().toLowerCase() === want,
+  );
 }
 
 /** Resolve one player's pick against a loaded song — null when the local copy

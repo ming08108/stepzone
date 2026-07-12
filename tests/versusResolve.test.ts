@@ -5,7 +5,13 @@
 import { describe, expect, it } from 'vitest';
 import { chartKey } from '../src/app/scores';
 import type { LibraryEntry } from '../src/io/songFiles';
-import { chartForPick, findSongByAnyHash, pickOf } from '../src/ui/versusResolve';
+import {
+  chartForPick,
+  findSongByAnyHash,
+  pickOf,
+  unopenedTitleMatches,
+} from '../src/ui/versusResolve';
+import type { VersusSongRef } from '../src/net/versus';
 import { Difficulty } from '../src/song/difficulty';
 import { Song } from '../src/song/song';
 import { Steps } from '../src/song/steps';
@@ -56,5 +62,17 @@ describe('versus song resolution', () => {
   it('pickOf round-trips through chartKey', () => {
     expect(pickOf(song, easy).chartHash).toBe(chartKey(song, easy));
     expect(pickOf(song, easy).meter).toBe(3);
+  });
+
+  it('finds unopened catalog rows to load before a transfer (owned-but-unparsed song)', () => {
+    const ref = { title: 'Target', artist: 'A', charts: [pickOf(song, hard)] } as VersusSongRef;
+    const lazyTarget = { song: mkSong('Target', []), lazyDir: 'Pack/Target' } as LibraryEntry;
+    const lazyOther = { song: mkSong('Other', []), lazyDir: 'Pack/Other' } as LibraryEntry;
+    const loadedTarget = { song, lazyDir: 'Pack/Target' } as LibraryEntry; // already parsed
+    const matches = unopenedTitleMatches([lazyTarget, lazyOther, loadedTarget, entry(other)], ref);
+    // Only the unparsed, title-matching row is worth loading + re-hashing.
+    expect(matches).toEqual([lazyTarget]);
+    // Case-insensitive title match, but a non-catalog (no lazyDir) row is skipped.
+    expect(unopenedTitleMatches([entry(mkSong('Target', []))], ref)).toEqual([]);
   });
 });

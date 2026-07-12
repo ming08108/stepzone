@@ -35,7 +35,7 @@ import {
 import type { Song } from '../song/song';
 import type { PlayRequest, RoomPlayInfo } from './playRequest';
 import { addFiles, ensureLoaded, libraryState } from './libraryStore';
-import { chartForPick, findSongByAnyHash, pickOf } from './versusResolve';
+import { chartForPick, findSongByAnyHash, pickOf, unopenedTitleMatches } from './versusResolve';
 
 /** What a guest's auto-follow of the host's song pick is currently doing.
  *  `progress` (0..1) is set during the P2P transfer for a progress bar. */
@@ -319,6 +319,21 @@ async function followSong(guest: RoomGuest, songRef: VersusSongRef | null): Prom
   }
   setFollow({ k: 'resolving', message: 'FINDING YOUR COPY OF THE SONG…' });
   let local = findSongByAnyHash(libraryState().entries, songRef.charts);
+  if (!local) {
+    // Not among the PARSED songs — but the library may already hold it as an
+    // unopened catalog row (whose charts aren't hashed yet). Load just the
+    // title-matching candidates and re-check by hash, so we never re-download a
+    // song the user already has.
+    for (const cand of unopenedTitleMatches(libraryState().entries, songRef)) {
+      const loaded = await ensureLoaded(cand);
+      if (token !== followToken) return; // superseded while loading
+      const hit = findSongByAnyHash([loaded], songRef.charts);
+      if (hit) {
+        local = hit;
+        break;
+      }
+    }
+  }
   if (!local) {
     const got = await requestSongTransfer(guest, (received, total) =>
       setFollow({
