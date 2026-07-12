@@ -113,9 +113,9 @@ export class DdrA3GpuSkin implements GpuSkin {
   private readonly noteSprites = new Map<string, AtlasRect | null>();
   // Reused opts for the per-note rotation push (avoids a `{rot}` alloc/note).
   private readonly rotOpt: QuadOpts = { rot: 0 };
-  // Reused opts for the interior shine scroll (mask + tiling + phase), so a note
-  // gets the flowing highlight without a per-note alloc.
-  private readonly shineOpt: QuadOpts = { rot: 0, mask: undefined, repeatV: 1, phaseV: 0 };
+  // Reused cropped-UV rect for the rising interior fill, so the per-note crop is a
+  // few field writes rather than a fresh AtlasRect each frame.
+  private readonly fillUV: AtlasRect = { u0: 0, v0: 0, u1: 0, v1: 0, w: 0, h: 0 };
   // Reused opts for the additive held-head glow.
   private readonly addOpt: QuadOpts = { add: true };
   // Quant core color (band[1]) parsed to a float tint once, for the held glow.
@@ -144,7 +144,8 @@ export class DdrA3GpuSkin implements GpuSkin {
     return rect;
   }
 
-  /** Arrow silhouette as a white alpha mask, so the shine clips to the note. */
+  /** Solid white arrow silhouette — drawn (UV-cropped) as the rising interior
+   *  fill, so the fill is already clipped to the note's shape. */
   private sprArrowMask(ctx: SkinCtx): AtlasRect | null {
     const m = ctx.arrowS + 9 * ctx.ds;
     return ctx.atlas.sprite('note:mask', 2 * m, 2 * m, (c) => {
@@ -152,27 +153,6 @@ export class DdrA3GpuSkin implements GpuSkin {
       tracePoly(c, ARROW_OUTER, ctx.arrowS);
       c.fillStyle = '#ffffff';
       c.fill();
-    });
-  }
-
-  /** One period of the interior fill: a broad soft-edged wash (transparent gap →
-   *  bright body, brightest on the base side and fading toward its leading front)
-   *  that scrolls up through the arrow — the highlight rises from the tail to the
-   *  tip and loops. Sampled once per period (repeatV 1) so it reads as a single
-   *  rising fill, not a run of stripes. */
-  private sprShine(ctx: SkinCtx): AtlasRect | null {
-    const m = ctx.arrowS + 9 * ctx.ds;
-    return ctx.atlas.sprite('note:shine', 2 * m, 2 * m, (c) => {
-      const g = c.createLinearGradient(0, 0, 0, 2 * m);
-      g.addColorStop(0, 'rgba(255,255,255,0)');
-      g.addColorStop(0.22, 'rgba(255,255,255,0)'); // transparent gap between loops
-      g.addColorStop(0.36, 'rgba(255,255,255,0.06)'); // leading front (toward the tip)
-      g.addColorStop(0.58, 'rgba(255,255,255,0.34)');
-      g.addColorStop(0.82, 'rgba(255,255,255,0.46)'); // filled body, brightest at the base
-      g.addColorStop(0.95, 'rgba(255,255,255,0)');
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      c.fillStyle = g;
-      c.fillRect(0, 0, 2 * m, 2 * m);
     });
   }
 
@@ -522,23 +502,37 @@ export class DdrA3GpuSkin implements GpuSkin {
           );
         }
       }
+      const cx = ctx.laneX(track);
       this.rotOpt.rot = rot;
-      b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
-      // Flowing interior fill: a broad highlight that rises from the arrow's tail
-      // to its tip, clipped to the silhouette, one sweep per beat. `phaseV` climbs
-      // 0→1 over the beat; per the quad shader a rising phase moves the fill toward
-      // luv.y 0, which is the tip of the tip-up sprite — so it always flows base→tip
-      // whatever way the lane rotates the arrow. Dead heads sit still.
+      b.push(cx, y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
+      // Interior fill: the arrow charges up from its tail to its tip as it nears
+      // the receptor — empty far up the field, brimming full at the judgment line —
+      // so a scrolling arrow visibly fills over its approach (and neighbours at
+      // different distances sit at different levels, like the arcade). Drawn as the
+      // solid arrow silhouette with only its base-side strip revealed: a sub-quad
+      // seated on the tail, sized and UV-cropped to the current level and rotated
+      // with the lane so it always fills base→tip whatever way the arrow points.
+      // Dead heads sit unfilled.
       if (!dead) {
-        const mask = this.sprArrowMask(ctx);
-        const shine = this.sprShine(ctx);
-        if (mask && shine) {
-          const o = this.shineOpt;
-          o.rot = rot;
-          o.mask = mask;
-          o.repeatV = 1;
-          o.phaseV = beat - Math.floor(beat);
-          b.push(ctx.laneX(track), y, 2 * m, 2 * m, shine, 1, 1, 1, 1, o);
+        const fill = this.sprArrowMask(ctx); // solid white arrow silhouette
+        const span = ctx.height * 0.7;
+        const level = 1 - Math.min(1, Math.abs(y - ctx.receptorY) / span);
+        if (fill && level > 0.02) {
+          // Reveal only the tail-side `level` fraction of the sprite (v grows toward
+          // the base at v1); reuse one rect so the per-note crop never allocates.
+          const uv = this.fillUV;
+          const dv = fill.v1 - fill.v0;
+          uv.u0 = fill.u0;
+          uv.u1 = fill.u1;
+          uv.w = fill.w;
+          uv.v0 = fill.v0 + dv * (1 - level);
+          uv.v1 = fill.v1;
+          uv.h = fill.h * level;
+          // Seat the strip on the tail (local +y = base) and rotate it into the lane.
+          const off = m * (1 - level);
+          const fcx = cx - off * Math.sin(rot);
+          const fcy = y + off * Math.cos(rot);
+          b.push(fcx, fcy, 2 * m, 2 * m * level, uv, 1, 1, 1, 0.55, this.rotOpt);
         }
       }
     }
@@ -979,8 +973,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       }
       this.sprNote(ctx, NOTE_GREEN, QUANT_TUBE[NoteType.N12TH]);
       this.sprNote(ctx, NOTE_GREY, TUBE_GREY);
-      this.sprArrowMask(ctx); // shared interior-shine mask + band
-      this.sprShine(ctx);
+      this.sprArrowMask(ctx); // solid silhouette used as the rising interior fill
       this.sprGlow(ctx); // held-freeze bloom
 
       // Receptors: idle dim, beat-bright, press flash.
