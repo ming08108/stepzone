@@ -117,6 +117,9 @@ export class SimplyLoveGpuSkin implements GpuSkin {
   private readonly rotOpt: QuadOpts = { rot: 0 };
   private readonly stripeOpt: QuadOpts = { rot: 0, mask: undefined, phaseV: 0 };
   private readonly repeatOpt: QuadOpts = { repeatV: 0 };
+  private readonly addOpt: QuadOpts = { add: true };
+  /** ITG quant face color parsed to a float tint once, for the held-freeze glow. */
+  private readonly glowTint = new Map<NoteType, Tint>();
   /** Reused 4-point buffer for the density trapezoids (no per-bin array alloc). */
   private readonly densitySeg: [number, number][] = [
     [0, 0],
@@ -334,6 +337,24 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     return rect;
   }
 
+  /** Soft round bloom behind an actively-held freeze head — additive, tinted to
+   *  the note's quant color and pulsed with the beat. */
+  private sprGlow(ctx: SkinCtx): AtlasRect | null {
+    const hit = this.rectCache.get('glow');
+    if (hit !== undefined) return hit;
+    const r = ctx.arrowS + 14 * ctx.ds;
+    const rect = ctx.atlas.sprite('slglow', 2 * r, 2 * r, (c) => {
+      const g = c.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, 'rgba(255,255,255,0.9)');
+      g.addColorStop(0.45, 'rgba(255,255,255,0.35)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, 2 * r, 2 * r);
+    });
+    this.rectCache.set('glow', rect);
+    return rect;
+  }
+
   // --- art hooks -------------------------------------------------------------
 
   chrome(ctx: SkinCtx, judge: Judge, beatPulse: number): void {
@@ -398,6 +419,32 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const faceColor = dead ? '#7c8087' : ITG_QUANT_COLOR[quant];
     const x = ctx.laneX(track);
     const rot = ctx.angle(track);
+    // An engaged freeze head glows: a quant-tinted bloom behind the face, pulsing
+    // with the beat while the sustain is held.
+    if (style === 'heldHead') {
+      const glow = this.sprGlow(ctx);
+      if (glow) {
+        let tint = this.glowTint.get(quant);
+        if (!tint) {
+          tint = parseColor(ITG_QUANT_COLOR[quant]);
+          this.glowTint.set(quant, tint);
+        }
+        const p = beatSine(beat);
+        const gr = (ctx.arrowS + 14 * ctx.ds) * (1.05 + 0.18 * p);
+        ctx.batch.push(
+          x,
+          y,
+          2 * gr,
+          2 * gr,
+          glow,
+          tint[0],
+          tint[1],
+          tint[2],
+          0.3 + 0.35 * p,
+          this.addOpt,
+        );
+      }
+    }
     this.rotOpt.rot = rot;
     const base = this.sprTap(ctx, faceColor);
     if (base) ctx.batch.push(x, y, 2 * m, 2 * m, base, 1, 1, 1, 1, this.rotOpt);
@@ -855,6 +902,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     try {
       this.sprFaceMask(ctx);
       this.sprStripe(ctx);
+      this.sprGlow(ctx);
       this.sprSwoosh(ctx);
       this.sprMineBody(ctx);
       this.sprMineCore(ctx);

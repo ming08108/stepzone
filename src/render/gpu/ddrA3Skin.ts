@@ -116,6 +116,10 @@ export class DdrA3GpuSkin implements GpuSkin {
   // Reused opts for the interior shine scroll (mask + tiling + phase), so a note
   // gets the flowing highlight without a per-note alloc.
   private readonly shineOpt: QuadOpts = { rot: 0, mask: undefined, repeatV: 1, phaseV: 0 };
+  // Reused opts for the additive held-head glow.
+  private readonly addOpt: QuadOpts = { add: true };
+  // Quant core color (band[1]) parsed to a float tint once, for the held glow.
+  private readonly glowTint = new Map<NoteType, Tint>();
   /** Per-view eased money score (0..1) + last timestamp, so the panel counts
    *  up smoothly toward the real score instead of snapping on each hit. */
   private readonly scoreShown = new Map<string, { v: number; t: number }>();
@@ -151,19 +155,39 @@ export class DdrA3GpuSkin implements GpuSkin {
     });
   }
 
-  /** One period of the interior highlight band (transparent → bright → transparent),
-   *  tiled + scrolled through the arrow each frame for the flowing A3 animation. */
+  /** One period of the interior fill: a broad soft-edged wash (transparent gap →
+   *  bright body, brightest on the base side and fading toward its leading front)
+   *  that scrolls up through the arrow — the highlight rises from the tail to the
+   *  tip and loops. Sampled once per period (repeatV 1) so it reads as a single
+   *  rising fill, not a run of stripes. */
   private sprShine(ctx: SkinCtx): AtlasRect | null {
     const m = ctx.arrowS + 9 * ctx.ds;
     return ctx.atlas.sprite('note:shine', 2 * m, 2 * m, (c) => {
       const g = c.createLinearGradient(0, 0, 0, 2 * m);
       g.addColorStop(0, 'rgba(255,255,255,0)');
-      g.addColorStop(0.4, 'rgba(255,255,255,0)');
-      g.addColorStop(0.5, 'rgba(255,255,255,0.5)');
-      g.addColorStop(0.6, 'rgba(255,255,255,0)');
+      g.addColorStop(0.22, 'rgba(255,255,255,0)'); // transparent gap between loops
+      g.addColorStop(0.36, 'rgba(255,255,255,0.06)'); // leading front (toward the tip)
+      g.addColorStop(0.58, 'rgba(255,255,255,0.34)');
+      g.addColorStop(0.82, 'rgba(255,255,255,0.46)'); // filled body, brightest at the base
+      g.addColorStop(0.95, 'rgba(255,255,255,0)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
       c.fillStyle = g;
       c.fillRect(0, 0, 2 * m, 2 * m);
+    });
+  }
+
+  /** Soft round bloom behind an actively-held freeze head — additive, tinted to
+   *  the note's quant color and pulsed with the beat so the arrow "breathes"
+   *  while the sustain is held. */
+  private sprGlow(ctx: SkinCtx): AtlasRect | null {
+    const r = ctx.arrowS + 16 * ctx.ds;
+    return ctx.atlas.sprite('note:glow', 2 * r, 2 * r, (c) => {
+      const g = c.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, 'rgba(255,255,255,0.9)');
+      g.addColorStop(0.45, 'rgba(255,255,255,0.35)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, 2 * r, 2 * r);
     });
   }
 
@@ -472,10 +496,39 @@ export class DdrA3GpuSkin implements GpuSkin {
     const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.15 * beatSine(beat));
     if (spr) {
       const rot = ctx.angle(track);
+      // An engaged freeze head glows: a soft quant-tinted bloom behind the arrow,
+      // pulsing with the beat while the sustain is held.
+      if (style === 'heldHead') {
+        const glow = this.sprGlow(ctx);
+        if (glow) {
+          let tint = this.glowTint.get(quant);
+          if (!tint) {
+            tint = parseColor(band[1]);
+            this.glowTint.set(quant, tint);
+          }
+          const p = beatSine(beat);
+          const gr = (ctx.arrowS + 16 * ctx.ds) * (1.05 + 0.18 * p);
+          b.push(
+            ctx.laneX(track),
+            y,
+            2 * gr,
+            2 * gr,
+            glow,
+            tint[0],
+            tint[1],
+            tint[2],
+            0.3 + 0.35 * p,
+            this.addOpt,
+          );
+        }
+      }
       this.rotOpt.rot = rot;
       b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
-      // Flowing interior highlight: a bright band tiled + scrolled up through the
-      // arrow, clipped to its silhouette (one period per beat). Dead heads sit still.
+      // Flowing interior fill: a broad highlight that rises from the arrow's tail
+      // to its tip, clipped to the silhouette, one sweep per beat. `phaseV` climbs
+      // 0→1 over the beat; per the quad shader a rising phase moves the fill toward
+      // luv.y 0, which is the tip of the tip-up sprite — so it always flows base→tip
+      // whatever way the lane rotates the arrow. Dead heads sit still.
       if (!dead) {
         const mask = this.sprArrowMask(ctx);
         const shine = this.sprShine(ctx);
@@ -483,8 +536,8 @@ export class DdrA3GpuSkin implements GpuSkin {
           const o = this.shineOpt;
           o.rot = rot;
           o.mask = mask;
-          o.repeatV = 2.2;
-          o.phaseV = -(beat - Math.floor(beat));
+          o.repeatV = 1;
+          o.phaseV = beat - Math.floor(beat);
           b.push(ctx.laneX(track), y, 2 * m, 2 * m, shine, 1, 1, 1, 1, o);
         }
       }
@@ -928,6 +981,7 @@ export class DdrA3GpuSkin implements GpuSkin {
       this.sprNote(ctx, NOTE_GREY, TUBE_GREY);
       this.sprArrowMask(ctx); // shared interior-shine mask + band
       this.sprShine(ctx);
+      this.sprGlow(ctx); // held-freeze bloom
 
       // Receptors: idle dim, beat-bright, press flash.
       this.sprReceptor(ctx, 'dim');

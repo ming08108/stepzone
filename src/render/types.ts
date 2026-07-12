@@ -31,8 +31,8 @@ export interface JudgmentStyle {
 }
 
 /**
- * How a tap arrow is styled: a plain tap, a live freeze head (DDR draws them
- * green; pinned to the receptor while engaged), or a dead freeze head (grey,
- * scrolling off after a drop/miss).
+ * How a tap arrow is styled: a plain tap, an approaching freeze head, a freeze
+ * head that's actively engaged (held ON the receptor — glows and pulses), or a
+ * dead freeze head (grey, scrolling off after a drop/miss).
  */
-export type TapNoteStyle = 'tap' | 'holdHead' | 'deadHead';
+export type TapNoteStyle = 'tap' | 'holdHead' | 'heldHead' | 'deadHead';

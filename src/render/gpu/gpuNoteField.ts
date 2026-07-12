@@ -866,7 +866,9 @@ export class GpuNoteField {
         const style: TapNoteStyle = isHoldHead
           ? headState === 'dropped'
             ? 'deadHead'
-            : 'holdHead'
+            : engaged
+              ? 'heldHead'
+              : 'holdHead'
           : 'tap';
         this.skin.note(ctx, n.track, y, quant, style, now, beat, beatPulse);
       }
