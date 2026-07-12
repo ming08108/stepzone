@@ -78,9 +78,10 @@ export function ChartStatsSide({ entry, diff }: { entry: LibraryEntry | null; di
   const chart = entry ? (bestChartsPerSlot(entry.song)[diff] ?? null) : null;
 
   // The full StepParity solver is heavy, so don't run it on every song the cursor
-  // flies past — debounce until the selection settles. The panel keeps showing the
-  // last computed stats meanwhile (and always reserves its width) so scrolling
-  // never reflows the song table.
+  // flies past — debounce until the selection settles. The panel always reserves
+  // its width so scrolling never reflows the song table; and while a new selection
+  // is still settling we show a COMPUTING state rather than the previous chart's
+  // numbers, so the panel never displays stats that don't match the highlight.
   const [settled, setSettled] = useState<{ entry: LibraryEntry | null; chart: Steps | null }>({
     entry,
     chart,
@@ -100,16 +101,19 @@ export function ChartStatsSide({ entry, diff }: { entry: LibraryEntry | null; di
     }
   }, [settled]);
 
-  const t = stats?.tech ?? null;
+  // The computed stats belong to `settled`; only trust them when that's caught up
+  // to the current highlight.
+  const current = settled.entry === entry && settled.chart === chart;
+  const showStats = current && stats;
 
   return (
     <div className="hidden w-[300px] flex-none flex-col gap-3 overflow-hidden border-l border-white/[0.09] px-[18px] py-3 min-[1400px]:flex">
-      {!stats ? (
-        <div className="flex flex-1 items-center justify-center text-[11px] tracking-[0.2em] text-[#ececec]/25">
-          …
-        </div>
+      {showStats ? (
+        <ChartStatsBody stats={stats} t={stats.tech} />
       ) : (
-        <ChartStatsBody stats={stats} t={t} />
+        <div className="flex flex-1 items-center justify-center text-[11px] tracking-[0.22em] text-[#ececec]/30">
+          {chart ? 'COMPUTING…' : '—'}
+        </div>
       )}
     </div>
   );
