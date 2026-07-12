@@ -523,6 +523,55 @@ describe('room choreography', () => {
     expect(r.host.phase).toBe('lobby'); // the host must ready first
   });
 
+  it('host handoff: promote → becomeHost → hostReady (from the promoted guest only) → migrate', () => {
+    const r = room(2);
+    const NEW = 'RULDLD';
+    let g1Become = false;
+    r.guests[0].onBecomeHost = () => {
+      g1Become = true;
+    };
+    const migrated: string[] = [];
+    r.guests.forEach((g) => (g.onMigrate = (c) => migrated.push(c)));
+    let hostGot: string | null = null;
+    r.host.onHostReady = (c) => {
+      hostGot = c;
+    };
+
+    r.host.promote(1); // guests[0] is id 1
+    r.flush();
+    expect(g1Become).toBe(true);
+
+    // A guest that WASN'T promoted can't redirect the room.
+    r.guests[1].reportHostCode(NEW);
+    r.flush();
+    expect(hostGot).toBeNull();
+
+    // The promoted guest's report reaches the host.
+    r.guests[0].reportHostCode(NEW);
+    r.flush();
+    expect(hostGot).toBe(NEW);
+
+    // The host sends everyone to the new room.
+    r.host.sendMigrate(NEW);
+    r.flush();
+    expect(migrated).toEqual([NEW, NEW]);
+  });
+
+  it('promote is lobby-only and never targets the host itself', () => {
+    const r = room(1);
+    let became = false;
+    r.guests[0].onBecomeHost = () => {
+      became = true;
+    };
+    toPlaying(r); // now mid-race
+    r.host.promote(1);
+    r.flush();
+    expect(became).toBe(false); // not in the lobby
+    r.host.promote(0); // the host can't promote itself
+    r.flush();
+    expect(became).toBe(false);
+  });
+
   it('a lone host cannot start a song', () => {
     const r = room(1);
     r.host.setSong(song(), 1);

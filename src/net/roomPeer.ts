@@ -183,6 +183,11 @@ export class RoomHost extends RoomPeer {
 
   /** A guest asked for the current song's files (serve over ITS channel). */
   onFileReq?: (guestId: number) => void;
+  /** The guest we asked to become the new host has opened its room and reported
+   *  the code — the store now sends everyone there (host handoff). */
+  onHostReady?: (code: string) => void;
+  /** The guest currently being promoted to host (only its hostReady counts). */
+  private promotedId = -1;
 
   constructor(
     readonly code: string,
@@ -282,6 +287,10 @@ export class RoomHost extends RoomPeer {
         break;
       case 'fileReq':
         this.onFileReq?.(id);
+        break;
+      case 'hostReady':
+        // Only the guest we actually promoted can redirect the room.
+        if (id === this.promotedId) this.onHostReady?.(msg.code);
         break;
       case 'bye':
         this.handleGuestClose(id);
@@ -496,6 +505,23 @@ export class RoomHost extends RoomPeer {
     this.update();
   }
 
+  /** Host handoff step 1: ask a present guest to open its own room and report
+   *  back (lobby only — a race shouldn't be interrupted). */
+  promote(id: number): void {
+    if (this.ended || this.phase !== 'lobby' || id === 0) return;
+    const slot = this.guests.get(id);
+    const p = this.playerMap.get(id);
+    if (!slot || !p || p.left) return;
+    this.promotedId = id;
+    this.sendTo(slot, { t: 'becomeHost' });
+  }
+
+  /** Host handoff step 3: send everyone (including the old host itself, via the
+   *  store) to the new host's room, then this room is done. */
+  sendMigrate(code: string): void {
+    this.broadcast({ t: 'migrate', code });
+  }
+
   leave(): void {
     this.broadcast({ t: 'bye' });
     for (const slot of [...this.guests.values()]) this.dropSlot(slot.id);
@@ -640,6 +666,10 @@ export class RoomGuest extends RoomPeer {
   onFileMeta?: (meta: FileMetaMsg) => void;
   onFileDone?: () => void;
   onFileErr?: (message: string) => void;
+  /** The host chose us as the new host — open our own room (host handoff). */
+  onBecomeHost?: () => void;
+  /** The host handed off to a new room — reconnect to `code`. */
+  onMigrate?: (code: string) => void;
 
   constructor(
     private readonly channel: PeerChannel,
@@ -762,6 +792,12 @@ export class RoomGuest extends RoomPeer {
       case 'fileErr':
         this.onFileErr?.(msg.message);
         break;
+      case 'becomeHost':
+        this.onBecomeHost?.();
+        break;
+      case 'migrate':
+        this.onMigrate?.(msg.code);
+        break;
       case 'bye':
         this.closed = true;
         this.end('host-left');
@@ -857,6 +893,12 @@ export class RoomGuest extends RoomPeer {
   requestFile(): void {
     if (this.ended) return;
     this.send({ t: 'fileReq' });
+  }
+
+  /** Host handoff step 2: we opened our own room — tell the old host its code so
+   *  it can send everyone over. */
+  reportHostCode(code: string): void {
+    this.send({ t: 'hostReady', code });
   }
 
   leave(): void {

@@ -26,8 +26,10 @@ import { parsePlayResult } from './protocol';
 
 /** Wire protocol revision — both ends must match (host rejects mismatches).
  *  v3: `load` carries the racer id list so a guest whose ready raced a host
- *  force-start self-excludes instead of wedging on a race it isn't part of. */
-export const ROOM_PROTOCOL = 3;
+ *  force-start self-excludes instead of wedging on a race it isn't part of.
+ *  v4: host handoff — becomeHost / hostReady / migrate reconnect the room
+ *  around a new host. */
+export const ROOM_PROTOCOL = 4;
 
 /** Hub-and-spoke fan-out is per-guest work for the host — keep parties small. */
 export const MAX_PLAYERS = 8;
@@ -251,6 +253,9 @@ export type GuestMsg =
   | { t: 'finish'; seq: number; result: PlayResult }
   | { t: 'pong'; at: number }
   | { t: 'fileReq' }
+  // Host handoff: the guest the old host promoted has opened its own room and
+  // reports the arrow code, so the old host can send everyone there.
+  | { t: 'hostReady'; code: string }
   | { t: 'bye' };
 
 /** Host -> guest. Roster is the single source of shared room state. */
@@ -270,6 +275,10 @@ export type HostMsg =
   | { t: 'fileMeta'; simfileName: string; simfile: string; files: TransferBinary[] }
   | { t: 'fileDone' }
   | { t: 'fileErr'; message: string }
+  // Host handoff: `becomeHost` tells the chosen guest to open its own room;
+  // `migrate` tells everyone else to reconnect to that new room's code.
+  | { t: 'becomeHost' }
+  | { t: 'migrate'; code: string }
   | { t: 'bye' };
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -312,6 +321,8 @@ export function parseGuestMsg(raw: string): GuestMsg | null {
     }
     case 'pong':
       return num(v.at) ? { t: 'pong', at: v.at } : null;
+    case 'hostReady':
+      return isRoomCode(v.code) ? { t: 'hostReady', code: v.code } : null;
     case 'fileReq':
     case 'bye':
       return { t: v.t };
@@ -362,7 +373,10 @@ export function parseHostMsg(raw: string): HostMsg | null {
     }
     case 'fileDone':
     case 'bye':
+    case 'becomeHost':
       return { t: v.t };
+    case 'migrate':
+      return isRoomCode(v.code) ? { t: 'migrate', code: v.code } : null;
     case 'ping':
       return num(v.at) ? { t: 'ping', at: v.at } : null;
     case 'go':

@@ -99,16 +99,21 @@ export function currentRoom(): RoomPeer | null {
   return room && !room.ended ? room : null;
 }
 
-/** Tear down whatever exists and return to idle. Safe in any state. */
-export function leaveRoom(): void {
+/** Detach handlers, drop the peer + its channels, and clear all room state —
+ *  WITHOUT touching the UI state. Shared by leaveRoom (→ idle) and the host
+ *  handoff (→ reconnecting). Detaching onClosed first keeps a channel's async
+ *  close from painting a "CONNECTION LOST" error over a deliberate teardown. */
+function teardownRoom(): void {
   hosted?.close();
   hosted = null;
   if (room) {
-    // Detach BEFORE leaving: the channel's async close event must not fire
-    // onClosed and paint a "CONNECTION LOST" error over a deliberate exit.
     room.onClosed = undefined;
     room.onUpdate = undefined;
     room.onSong = undefined;
+    if (room instanceof RoomGuest) {
+      room.onBecomeHost = undefined;
+      room.onMigrate = undefined;
+    }
     room.leave();
   }
   room = null;
@@ -122,26 +127,16 @@ export function leaveRoom(): void {
   sink = null;
   follow = { k: 'none' };
   followToken++;
+}
+
+/** Tear down whatever exists and return to idle. Safe in any state. */
+export function leaveRoom(): void {
+  teardownRoom();
   setState({ k: 'idle' });
 }
 
-/** Clear an error banner back to idle (no-op elsewhere). */
-export function dismissRoomError(): void {
-  if (state.k === 'error') setState({ k: 'idle' });
-}
-
-// ---- hosting -----------------------------------------------------------------------
-
-/** Open a room (no song needed — pick one whenever). Resolves once hosting. */
-export async function hostRoom(): Promise<void> {
-  if (state.k === 'busy' || currentRoom()) return;
-  setState({ k: 'busy', message: 'CREATING ROOM…' });
-  const channel = await createRoomChannel(getIdentity().name);
-  if (!channel) {
-    setState({ k: 'error', message: 'MULTIPLAYER UNAVAILABLE (SERVER OFFLINE?)' });
-    return;
-  }
-  const host = new RoomHost(channel.code, { name: getIdentity().name });
+/** Wire a fresh RoomHost + its signaling channel into the store globals. */
+function wireHost(host: RoomHost, channel: HostedRoomChannel): void {
   hosted = channel;
   room = host;
   host.onUpdate = () => {
@@ -150,6 +145,12 @@ export async function hostRoom(): Promise<void> {
     notify();
   };
   host.onFileReq = (guestId) => void serveSongTransfer(host, guestId);
+  // Host handoff: the guest we promoted opened its room and reported the code —
+  // send everyone (including us) there.
+  host.onHostReady = (code) => {
+    host.sendMigrate(code);
+    void migrateSelfTo(code);
+  };
   channel.onPeer = (conn) => {
     const id = host.attachGuest({
       send: (d) => conn.channel.send(d),
@@ -169,7 +170,34 @@ export async function hostRoom(): Promise<void> {
     // open channels, but the code can't admit anyone new.
     notify();
   };
+}
+
+/** Clear an error banner back to idle (no-op elsewhere). */
+export function dismissRoomError(): void {
+  if (state.k === 'error') setState({ k: 'idle' });
+}
+
+// ---- hosting -----------------------------------------------------------------------
+
+/** Open a room (no song needed — pick one whenever). Resolves once hosting. */
+export async function hostRoom(): Promise<void> {
+  if (state.k === 'busy' || currentRoom()) return;
+  setState({ k: 'busy', message: 'CREATING ROOM…' });
+  const channel = await createRoomChannel(getIdentity().name);
+  if (!channel) {
+    setState({ k: 'error', message: 'MULTIPLAYER UNAVAILABLE (SERVER OFFLINE?)' });
+    return;
+  }
+  const host = new RoomHost(channel.code, { name: getIdentity().name });
+  wireHost(host, channel);
   setState({ k: 'in-room', room: host, follow });
+}
+
+/** Host handoff (host UI): ask a player to become the new host. Everyone then
+ *  reconnects to their fresh room (wireHost's onHostReady drives the rest). */
+export function transferHostTo(id: number): void {
+  const r = currentRoom();
+  if (r instanceof RoomHost) r.promote(id);
 }
 
 /**
@@ -262,6 +290,35 @@ async function serveSongTransfer(host: RoomHost, guestId: number): Promise<void>
 
 // ---- joining -----------------------------------------------------------------------
 
+/** Wire a fresh RoomGuest + its connection into the store globals. */
+function wireGuest(guest: RoomGuest, conn: VersusConnection): void {
+  guestConnection = conn;
+  room = guest;
+  conn.channel.binaryType = 'arraybuffer';
+  conn.channel.addEventListener('message', (e) => {
+    if (typeof e.data === 'string') guest.handleMessage(e.data);
+    else if (e.data instanceof ArrayBuffer) sink?.push(e.data);
+  });
+  conn.channel.addEventListener('close', () => guest.handleClose());
+  guest.onUpdate = notify;
+  guest.onSong = (song) => void followSong(guest, song);
+  // Host handoff: we were chosen as the new host, or told to move to a new one.
+  guest.onBecomeHost = () => void becomeNewHost(guest, conn);
+  guest.onMigrate = (code) => void migrateSelfTo(code);
+  guest.onClosed = (reason) => {
+    const message =
+      reason === 'host-left'
+        ? 'THE HOST CLOSED THE ROOM'
+        : reason === 'full'
+          ? 'ROOM IS FULL'
+          : reason === 'version'
+            ? 'VERSION MISMATCH — RELOAD FOR THE LATEST BUILD'
+            : 'CONNECTION LOST';
+    leaveRoom();
+    setState({ k: 'error', message });
+  };
+}
+
 /** Join a room by arrow code. Resolves true once in the room. */
 export async function joinRoomByCode(code: string): Promise<boolean> {
   if (currentRoom()) return false;
@@ -275,30 +332,40 @@ export async function joinRoomByCode(code: string): Promise<boolean> {
     { send: (d) => conn.channel.send(d), close: () => conn.close() },
     { name: getIdentity().name },
   );
-  guestConnection = conn;
-  room = guest;
-  conn.channel.binaryType = 'arraybuffer';
-  conn.channel.addEventListener('message', (e) => {
-    if (typeof e.data === 'string') guest.handleMessage(e.data);
-    else if (e.data instanceof ArrayBuffer) sink?.push(e.data);
-  });
-  conn.channel.addEventListener('close', () => guest.handleClose());
-  guest.onUpdate = notify;
-  guest.onSong = (song) => void followSong(guest, song);
-  guest.onClosed = (reason) => {
-    const message =
-      reason === 'host-left'
-        ? 'THE HOST CLOSED THE ROOM'
-        : reason === 'full'
-          ? 'ROOM IS FULL'
-          : reason === 'version'
-            ? 'VERSION MISMATCH — RELOAD FOR THE LATEST BUILD'
-            : 'CONNECTION LOST';
-    leaveRoom();
-    setState({ k: 'error', message });
-  };
+  wireGuest(guest, conn);
   setState({ k: 'in-room', room: guest, follow });
   return true;
+}
+
+// ---- host handoff (reconnect the room around a new host) -----------------------------
+
+/** We were chosen as the new host: open our own room, report its code back over
+ *  the old channel so the old host can redirect everyone, then switch to hosting.
+ *  If we can't host, the handoff silently aborts and we stay a guest. */
+async function becomeNewHost(oldGuest: RoomGuest, oldConn: VersusConnection): Promise<void> {
+  const channel = await createRoomChannel(getIdentity().name);
+  if (!channel) return;
+  oldGuest.reportHostCode(channel.code); // flushes before we close the old channel
+  // Detach the old guest so its impending close doesn't surface as an error.
+  oldGuest.onClosed = undefined;
+  oldGuest.onUpdate = undefined;
+  oldGuest.onSong = undefined;
+  oldGuest.onBecomeHost = undefined;
+  oldGuest.onMigrate = undefined;
+  oldConn.close();
+  guestConnection = null;
+  sink = null;
+  follow = { k: 'none' };
+  followToken++;
+  const host = new RoomHost(channel.code, { name: getIdentity().name });
+  wireHost(host, channel);
+  setState({ k: 'in-room', room: host, follow });
+}
+
+/** Move ourselves to the new host's room (the old room is being dissolved). */
+async function migrateSelfTo(code: string): Promise<void> {
+  teardownRoom();
+  await joinRoomByCode(code); // owns the busy / in-room / error UI state
 }
 
 // ---- guest song follow ----------------------------------------------------------------

@@ -14,7 +14,7 @@ import { CodeArrows } from './PadArrow';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { STEP_AC as AC } from './Stage';
-import { dismissRoomError, leaveRoom, type RoomUiState } from './roomStore';
+import { dismissRoomError, leaveRoom, transferHostTo, type RoomUiState } from './roomStore';
 
 const READY = '#59f07f';
 const DONE = '#38f0ff';
@@ -36,13 +36,25 @@ function DiffChip({ pick }: { pick: VersusChartMeta | null }) {
 
 type RowState = 'ready' | 'not' | 'done' | 'left';
 
-function RosterRow({ p, you }: { p: PlayerState; you: boolean }) {
+function RosterRow({
+  p,
+  you,
+  canPromote,
+}: {
+  p: PlayerState;
+  you: boolean;
+  /** The viewer is the host and the room is idle enough to hand it off. */
+  canPromote: boolean;
+}) {
   const host = p.id === 0;
   const state: RowState = p.left ? 'left' : p.done ? 'done' : p.ready ? 'ready' : 'not';
   const dot = state === 'ready' ? READY : state === 'done' ? DONE : 'rgba(236,236,236,.28)';
   const label = { left: 'LEFT', done: 'DONE', ready: 'READY', not: 'NOT READY' }[state];
   const labelColor = state === 'ready' ? READY : state === 'done' ? DONE : 'rgba(236,236,236,.5)';
   const lit = state === 'ready' || state === 'done';
+  // The host can hand the room to any other present player (mouse-only — a niche
+  // action; the pad path stays the 6 core inputs).
+  const promotable = canPromote && !host && !you && !p.left;
   return (
     <div
       className="flex items-center gap-2.5 rounded-[3px] px-2 py-[6px]"
@@ -66,6 +78,16 @@ function RosterRow({ p, you }: { p: PlayerState; you: boolean }) {
           <span className="ml-1.5 text-[9px] tracking-[0.16em] text-[#ececec]/40">· YOU</span>
         )}
       </span>
+      {promotable && (
+        <button
+          onClick={() => transferHostTo(p.id)}
+          title={`Make ${p.name} the host`}
+          className="flex-none whitespace-nowrap rounded-[3px] border px-1.5 py-[1px] text-[9px] font-bold tracking-[0.12em] text-[#ececec]/70 hover:text-[#ececec]"
+          style={{ borderColor: AC + '80' }}
+        >
+          MAKE HOST
+        </button>
+      )}
       <DiffChip pick={p.pick} />
       <span
         className="w-[68px] flex-none text-right text-[10px] font-bold tracking-[0.1em]"
@@ -159,7 +181,12 @@ export function RoomDock({ vs, status }: { vs: RoomUiState; status?: string }) {
             {vs.room.players
               .filter((p) => !p.left)
               .map((p) => (
-                <RosterRow key={p.id} p={p} you={p.id === vs.room.selfId} />
+                <RosterRow
+                  key={p.id}
+                  p={p}
+                  you={p.id === vs.room.selfId}
+                  canPromote={vs.room.isHost && vs.room.phase === 'lobby'}
+                />
               ))}
             {status && (
               <div className="mt-1 px-1 text-[11px] leading-snug tracking-[0.06em] text-[#ececec]/55">
