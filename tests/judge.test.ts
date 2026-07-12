@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseSimfile } from '../src/parse/loader';
 import { Judge } from '../src/gameplay/judge';
+import { gradeFromPercent } from '../src/gameplay/scoring';
 import { DEFAULT_WINDOWS } from '../src/gameplay/windows';
 import { NoteData } from '../src/notes/noteData';
 import { TimingData } from '../src/timing/timingData';
@@ -270,5 +271,17 @@ describe('Judge: note selection ties and jacks', () => {
     expect(ev?.tns).toBe(TapNoteScore.W1);
     expect(b.tns).toBe(TapNoteScore.W1);
     expect(a.tns).toBe(TapNoteScore.None);
+  });
+
+  it('displayPercent overrides the computed score (rival mirror judge)', () => {
+    // A rival's mirror judge is fed tns for rendering but never re-scored, so its
+    // accumulators stay empty; the streamed snap percent drives its display.
+    const j = judgeOf([[1, 0]]);
+    expect(j.percentDancePoints).toBe(0); // self-scored, nothing hit
+    j.displayPercent = 0.75;
+    expect(j.percentDancePoints).toBe(0.75);
+    expect(j.grade).toBe(gradeFromPercent(0.75)); // grade follows the override
+    j.displayPercent = null;
+    expect(j.percentDancePoints).toBe(0); // back to self-scoring
   });
 });

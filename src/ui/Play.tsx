@@ -297,6 +297,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         if (snap) {
           rv.judge.combo = snap.combo;
           rv.judge.life = snap.life;
+          // The mirror judge is never re-scored (it only gets tns for rendering),
+          // so drive its displayed score/grade straight from the streamed percent.
+          rv.judge.displayPercent = snap.percent;
         }
       }
       if (tick++ % 2 === 0) {
