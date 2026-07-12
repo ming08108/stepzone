@@ -29,7 +29,13 @@ function roomDockStatus(view: View, vs: RoomUiState): string | undefined {
   const room = vs.room;
   const present = room.players.filter((p) => !p.left).length;
   if (view === 'playoptions') {
-    if (room.self?.ready) return 'WAITING FOR EVERYONE TO READY UP…';
+    if (room.self?.ready) {
+      const readyCount = room.players.filter((p) => !p.left && p.ready).length;
+      // A readied host who's still waiting can begin now with whoever's ready.
+      if (room.isHost && present > readyCount && readyCount >= 2)
+        return 'WAITING FOR PLAYERS — OR PRESS START TO BEGIN NOW';
+      return 'WAITING FOR EVERYONE TO READY UP…';
+    }
     if (present < 2) return 'WAITING FOR PLAYERS — SHARE THE CODE OR LINK';
     return 'PICK YOUR DIFFICULTY, THEN PRESS START TO READY UP';
   }

@@ -40,6 +40,7 @@ import {
   announceSong,
   clearAnnouncedSong,
   dismissRoomError,
+  forceStartRoom,
   hostRoom,
   leaveRoom,
   roomState,
@@ -123,6 +124,14 @@ export function PlayerOptions({
   const versusActive = vs.k !== 'idle';
   const room = vs.k === 'in-room' ? vs.room : null;
   const selfReady = room?.self?.ready ?? false;
+  // Host "start now" override: once the host has readied, if someone present
+  // still isn't ready (a stuck transfer, an AFK player) the host can begin with
+  // whoever's ready rather than wait forever — needs at least 2 ready total.
+  const present = room?.players.filter((p) => !p.left) ?? [];
+  const readyCount = present.filter((p) => p.ready).length;
+  const hostWaiting =
+    !!room?.isHost && selfReady && room.phase === 'lobby' && present.length > readyCount;
+  const canForceStart = hostWaiting && readyCount >= 2;
   // Guests play at the room's rate (the host's setting when announcing); the
   // host's own rate row IS the room rate — changing it re-announces.
   const effRate = room && !room.isHost ? room.musicRate : settings.musicRate;
@@ -236,6 +245,10 @@ export function PlayerOptions({
       // actual start comes from the room's load/go choreography below.
       if (room && !selfReady && room.phase === 'lobby' && room.song) {
         room.ready(pickOf(req.song, chart));
+      } else if (canForceStart) {
+        // Readied host, still waiting on someone: a second START begins now
+        // with whoever's ready (the rest spectate and join the next song).
+        forceStartRoom();
       }
       return;
     }
@@ -510,9 +523,11 @@ export function PlayerOptions({
           <span>◀▶ CHANGE</span>
           <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>
             {vs.k === 'in-room'
-              ? selfReady
-                ? 'WAITING FOR PLAYERS…'
-                : 'START — READY'
+              ? canForceStart
+                ? 'START — BEGIN NOW'
+                : selfReady
+                  ? 'WAITING FOR PLAYERS…'
+                  : 'START — READY'
               : versusActive
                 ? 'WAITING…'
                 : 'START — PLAY'}
@@ -699,14 +714,18 @@ export function PlayerOptions({
             {/* The room roster (RoomDock) is pinned bottom-right globally by App. */}
             <button
               onClick={go}
-              disabled={versusActive && (vs.k !== 'in-room' || selfReady || !room?.song)}
+              disabled={
+                versusActive && (vs.k !== 'in-room' || !room?.song || (selfReady && !canForceStart))
+              }
               className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em] disabled:opacity-40"
               style={{ background: AC, color: '#0b0c0e' }}
             >
               {vs.k === 'in-room'
-                ? selfReady
-                  ? 'WAITING FOR PLAYERS…'
-                  : 'READY ▸'
+                ? canForceStart
+                  ? 'START NOW ▸'
+                  : selfReady
+                    ? 'WAITING FOR PLAYERS…'
+                    : 'READY ▸'
                 : versusActive
                   ? 'WAITING…'
                   : practice.on

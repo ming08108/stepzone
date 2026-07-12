@@ -518,7 +518,22 @@ export class RoomHost extends RoomPeer {
     if (this.phase !== 'lobby' || !this.song) return;
     const active = this.active();
     if (active.length < 2 || !active.every((p) => p.ready)) return;
-    this.racers = new Set(active.map((p) => p.id));
+    this.beginLoad(active);
+  }
+
+  /** Host override: start now with whoever is ready, leaving the rest to
+   *  spectate and join the next cycle (a stuck/AFK player can't wedge the room
+   *  forever). Host must be readied and at least one other player ready too. */
+  forceStart(): void {
+    if (this.ended || this.phase !== 'lobby' || !this.song || !this.self?.ready) return;
+    const ready = this.active().filter((p) => p.ready);
+    if (ready.length < 2) return;
+    this.beginLoad(ready);
+  }
+
+  /** Lock the racer set and kick off the load/probe/go choreography. */
+  private beginLoad(racers: PlayerState[]): void {
+    this.racers = new Set(racers.map((p) => p.id));
     this.phase = 'loading';
     this.broadcastRoster();
     this.broadcast({ t: 'load' });

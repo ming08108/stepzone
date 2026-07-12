@@ -209,6 +209,14 @@ function applyWantSong(): void {
   r.setSong(wantSong.ref, wantSong.rate);
 }
 
+/** Host override on PLAYER OPTIONS: begin the race now with whoever is ready,
+ *  leaving unready players to spectate and join the next song. No-op unless the
+ *  host is readied and at least one other player is too. */
+export function forceStartRoom(): void {
+  const r = currentRoom();
+  if (r instanceof RoomHost) r.forceStart();
+}
+
 /** Host backed out of PLAYER OPTIONS — no song on the table. */
 export function clearAnnouncedSong(): void {
   const r = currentRoom();

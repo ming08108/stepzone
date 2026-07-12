@@ -430,6 +430,53 @@ describe('room choreography', () => {
     expect(r.guests[0].song?.title).toBe('Next');
   });
 
+  it('the host can force-start with whoever is ready, leaving the rest to spectate', () => {
+    const r = room(2);
+    r.host.setSong(song(), 1);
+    r.flush();
+    r.host.ready(pick(5));
+    r.guests[0].ready(pick(6)); // G1 readies; G2 is stuck/AFK and never does
+    r.flush();
+    expect(r.host.phase).toBe('lobby'); // normally blocked on G2
+    r.host.forceStart();
+    r.flush();
+    expect(r.host.phase).toBe('loading'); // began with host + G1 only
+    r.host.loaded();
+    r.guests[0].loaded();
+    r.flush();
+    expect(r.host.phase).toBe('playing');
+    expect(r.guests[0].phase).toBe('playing');
+    expect(r.guests[1].self?.ready).toBe(false); // G2 never joined the race
+    // The two racers settle the cycle — G2 was never a racer, never gated it.
+    r.host.finish(result(0.9));
+    r.guests[0].finish(result(0.8));
+    r.flush();
+    expect(r.host.phase).toBe('lobby');
+  });
+
+  it('force-start needs at least two ready — a lone ready host is a no-op', () => {
+    const r = room(1);
+    r.host.setSong(song(), 1);
+    r.flush();
+    r.host.ready(pick(5)); // only the host is ready
+    r.flush();
+    r.host.forceStart();
+    r.flush();
+    expect(r.host.phase).toBe('lobby');
+  });
+
+  it('force-start is a no-op until the host itself is ready', () => {
+    const r = room(2);
+    r.host.setSong(song(), 1);
+    r.flush();
+    r.guests[0].ready(pick(6));
+    r.guests[1].ready(pick(7)); // both guests ready, host has not
+    r.flush();
+    r.host.forceStart();
+    r.flush();
+    expect(r.host.phase).toBe('lobby'); // the host must ready first
+  });
+
   it('a lone host cannot start a song', () => {
     const r = room(1);
     r.host.setSong(song(), 1);
