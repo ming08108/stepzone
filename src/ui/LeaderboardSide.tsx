@@ -17,7 +17,7 @@ export function LeaderboardSide({ entry, diff }: { entry: LibraryEntry | null; d
   if (board === 'offline') return null;
   const me = getIdentity().playerId;
   return (
-    <div className="hidden w-[300px] flex-none flex-col overflow-hidden border-l border-white/[0.09] px-[18px] py-3 min-[1100px]:flex">
+    <div className="flex flex-none flex-col overflow-hidden px-[18px] py-3">
       <div className="mb-2 flex flex-none items-baseline gap-3">
         <span className="text-[11px] tracking-[0.2em] text-[#ececec]/40">RANKS</span>
         <span className="h-px flex-1 bg-white/[0.07]" />

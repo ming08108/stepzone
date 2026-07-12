@@ -1321,8 +1321,14 @@ export function SongSelect({
           </div>
         </div>
 
-        {!inPacks && <ChartStatsSide entry={song?.entry ?? null} diff={diff} />}
-        {!inPacks && <LeaderboardSide entry={song?.entry ?? null} diff={diff} />}
+        {!inPacks && (
+          // One right column: leaderboard on top, chart stats stacked below it
+          // (so it costs no extra width, and its height changes push nothing).
+          <div className="hidden w-[300px] flex-none flex-col overflow-hidden border-l border-white/[0.09] min-[1100px]:flex">
+            <LeaderboardSide entry={song?.entry ?? null} diff={diff} />
+            <ChartStatsSide entry={song?.entry ?? null} diff={diff} />
+          </div>
+        )}
       </div>
 
       {versusOpen && (

@@ -1,10 +1,11 @@
 /**
- * Chart info panel beside the song list (left of RANKS): the ITG-style note and
- * tech breakdown for the highlighted chart's current difficulty slot — a
- * notes-per-second density graph with peak NPS, the step/jump/hold/… tallies,
- * and Crossovers/Footswitches/Sideswitches/Jacks/Brackets. Read-only, takes no
- * focus, so pad navigation is untouched. Hides on narrow viewports (it needs the
- * width) and when no chart is highlighted.
+ * Chart info panel — the ITG-style note and tech breakdown for the highlighted
+ * chart's current difficulty slot: a notes-per-second density graph with peak
+ * NPS, the step/jump/hold/… tallies, and Crossovers/Footswitches/Sideswitches/
+ * Jacks/Brackets. Rendered as the bottom section of the right-hand column, under
+ * the leaderboard (RANKS), so it costs no extra width. Read-only, takes no focus.
+ * Always shown while a song is highlighted (a 'NO CHART' note when the selected
+ * difficulty is absent; 'COMPUTING…' while the solver settles).
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { LibraryEntry } from '../io/songFiles';
@@ -107,12 +108,12 @@ export function ChartStatsSide({ entry, diff }: { entry: LibraryEntry | null; di
   const showStats = current && stats;
 
   return (
-    <div className="hidden w-[300px] flex-none flex-col gap-3 overflow-hidden border-l border-white/[0.09] px-[18px] py-3 min-[1400px]:flex">
+    <div className="flex flex-none flex-col gap-3 overflow-hidden border-t border-white/[0.09] px-[18px] py-3">
       {showStats ? (
         <ChartStatsBody stats={stats} t={stats.tech} />
       ) : (
-        <div className="flex flex-1 items-center justify-center text-[11px] tracking-[0.22em] text-[#ececec]/30">
-          {chart ? 'COMPUTING…' : '—'}
+        <div className="flex items-center justify-center py-8 text-[11px] tracking-[0.22em] text-[#ececec]/30">
+          {chart ? 'COMPUTING…' : 'NO CHART'}
         </div>
       )}
     </div>
