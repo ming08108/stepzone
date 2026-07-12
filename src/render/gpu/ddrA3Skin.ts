@@ -17,6 +17,7 @@ import type { Feedback, TapNoteStyle } from '../types';
 import {
   A3_EXPLOSION,
   A3_JUDGMENT,
+  ARROW_OUTER,
   COMBO_PLAIN,
   COMBO_TINT,
   GOLD_DARK,
@@ -46,6 +47,7 @@ import {
   paintReceptor,
   paintSongPanel,
   traceSegments,
+  tracePoly,
   type HoldSkin,
 } from './ddrA3Art';
 import { measureWidth, roundFont } from './text';
@@ -111,6 +113,9 @@ export class DdrA3GpuSkin implements GpuSkin {
   private readonly noteSprites = new Map<string, AtlasRect | null>();
   // Reused opts for the per-note rotation push (avoids a `{rot}` alloc/note).
   private readonly rotOpt: QuadOpts = { rot: 0 };
+  // Reused opts for the interior shine scroll (mask + tiling + phase), so a note
+  // gets the flowing highlight without a per-note alloc.
+  private readonly shineOpt: QuadOpts = { rot: 0, mask: undefined, repeatV: 1, phaseV: 0 };
   /** Per-view eased money score (0..1) + last timestamp, so the panel counts
    *  up smoothly toward the real score instead of snapping on each hit. */
   private readonly scoreShown = new Map<string, { v: number; t: number }>();
@@ -133,6 +138,33 @@ export class DdrA3GpuSkin implements GpuSkin {
     });
     this.noteSprites.set(band[1], rect);
     return rect;
+  }
+
+  /** Arrow silhouette as a white alpha mask, so the shine clips to the note. */
+  private sprArrowMask(ctx: SkinCtx): AtlasRect | null {
+    const m = ctx.arrowS + 9 * ctx.ds;
+    return ctx.atlas.sprite('note:mask', 2 * m, 2 * m, (c) => {
+      c.translate(m, m);
+      tracePoly(c, ARROW_OUTER, ctx.arrowS);
+      c.fillStyle = '#ffffff';
+      c.fill();
+    });
+  }
+
+  /** One period of the interior highlight band (transparent → bright → transparent),
+   *  tiled + scrolled through the arrow each frame for the flowing A3 animation. */
+  private sprShine(ctx: SkinCtx): AtlasRect | null {
+    const m = ctx.arrowS + 9 * ctx.ds;
+    return ctx.atlas.sprite('note:shine', 2 * m, 2 * m, (c) => {
+      const g = c.createLinearGradient(0, 0, 0, 2 * m);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.4, 'rgba(255,255,255,0)');
+      g.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+      g.addColorStop(0.6, 'rgba(255,255,255,0)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, 2 * m, 2 * m);
+    });
   }
 
   private sprReceptor(ctx: SkinCtx, kind: 'dim' | 'bright' | 'press') {
@@ -439,8 +471,23 @@ export class DdrA3GpuSkin implements GpuSkin {
     // "pulse in" with the music. A dead head sits still.
     const m = (ctx.arrowS + 9 * ctx.ds) * (dead ? 1 : 1 + 0.15 * beatSine(beat));
     if (spr) {
-      this.rotOpt.rot = ctx.angle(track);
+      const rot = ctx.angle(track);
+      this.rotOpt.rot = rot;
       b.push(ctx.laneX(track), y, 2 * m, 2 * m, spr, 1, 1, 1, 1, this.rotOpt);
+      // Flowing interior highlight: a bright band tiled + scrolled up through the
+      // arrow, clipped to its silhouette (one period per beat). Dead heads sit still.
+      if (!dead) {
+        const mask = this.sprArrowMask(ctx);
+        const shine = this.sprShine(ctx);
+        if (mask && shine) {
+          const o = this.shineOpt;
+          o.rot = rot;
+          o.mask = mask;
+          o.repeatV = 2.2;
+          o.phaseV = -(beat - Math.floor(beat));
+          b.push(ctx.laneX(track), y, 2 * m, 2 * m, shine, 1, 1, 1, 1, o);
+        }
+      }
     }
   }
 
@@ -879,6 +926,8 @@ export class DdrA3GpuSkin implements GpuSkin {
       }
       this.sprNote(ctx, NOTE_GREEN, QUANT_TUBE[NoteType.N12TH]);
       this.sprNote(ctx, NOTE_GREY, TUBE_GREY);
+      this.sprArrowMask(ctx); // shared interior-shine mask + band
+      this.sprShine(ctx);
 
       // Receptors: idle dim, beat-bright, press flash.
       this.sprReceptor(ctx, 'dim');
