@@ -11,7 +11,10 @@
  * edges (a quad per segment) with endpoint colors.
  */
 
-export type ColorFn = (x: number, y: number) => readonly [number, number, number, number];
+/** Writes the vertex color (r,g,b,a in 0..1) into `out` — no per-vertex array
+ *  allocation. `out` is a reused scratch owned by the batch; read it right away
+ *  (a gradient reads `y`, a flat fill ignores x/y). */
+export type ColorFn = (x: number, y: number, out: [number, number, number, number]) => void;
 
 const WGSL = /* wgsl */ `
 struct View { size: vec2f, _pad: vec2f };
@@ -40,6 +43,10 @@ export class ShapeBatch {
   private data = new Float32Array(FLOATS_PER_VERT * 512);
   private buffer: GPUBuffer;
   private count = 0;
+  /** Reused each begin() so the uniform write allocates nothing per frame. */
+  private readonly viewScratch = new Float32Array(4);
+  /** Reused per vertex so a ColorFn write costs no allocation. */
+  private readonly colorScratch: [number, number, number, number] = [0, 0, 0, 0];
 
   constructor(
     private readonly device: GPUDevice,
@@ -97,7 +104,10 @@ export class ShapeBatch {
   begin(viewW: number, viewH: number): void {
     this.count = 0;
     this.originX = 0;
-    this.device.queue.writeBuffer(this.uniform, 0, new Float32Array([viewW, viewH, 0, 0]));
+    const v = this.viewScratch;
+    v[0] = viewW;
+    v[1] = viewH;
+    this.device.queue.writeBuffer(this.uniform, 0, v);
   }
 
   private vert(x: number, y: number, color: ColorFn): void {
@@ -112,12 +122,14 @@ export class ShapeBatch {
       });
     }
     const o = this.count * FLOATS_PER_VERT;
-    const [r, g, b, a] = color(x, y);
+    const col = this.colorScratch;
+    color(x, y, col);
+    const a = col[3];
     this.data[o] = x + this.originX;
     this.data[o + 1] = y;
-    this.data[o + 2] = r * a; // premultiplied
-    this.data[o + 3] = g * a;
-    this.data[o + 4] = b * a;
+    this.data[o + 2] = col[0] * a; // premultiplied
+    this.data[o + 3] = col[1] * a;
+    this.data[o + 4] = col[2] * a;
     this.data[o + 5] = a;
     this.count++;
   }

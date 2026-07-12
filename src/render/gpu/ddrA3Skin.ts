@@ -75,9 +75,19 @@ function parseColor(s: string): [number, number, number, number] {
 const SCORE_BRIGHT: Tint = parseColor('#f6f6f8');
 const SCORE_DIM: Tint = parseColor('#494a4f');
 
-// Panel-geometry colors (ShapeBatch fills/strokes).
-const PANEL_BG_COL: ColorFn = () => parseColor(PANEL_BG);
-const GOLD_MID_COL: ColorFn = () => parseColor(GOLD_MID);
+/** Copy a precomputed rgba tuple into a ColorFn's out param (no allocation). */
+function writeCol(out: [number, number, number, number], c: Tint): void {
+  out[0] = c[0];
+  out[1] = c[1];
+  out[2] = c[2];
+  out[3] = c[3];
+}
+
+// Panel-geometry colors (ShapeBatch fills/strokes) — parsed once, not per vertex.
+const PANEL_BG_RGBA = parseColor(PANEL_BG);
+const GOLD_MID_RGBA = parseColor(GOLD_MID);
+const PANEL_BG_COL: ColorFn = (_x, _y, o) => writeCol(o, PANEL_BG_RGBA);
+const GOLD_MID_COL: ColorFn = (_x, _y, o) => writeCol(o, GOLD_MID_RGBA);
 const GOLD_L = parseColor(GOLD_LIGHT);
 const GOLD_D = parseColor(GOLD_DARK);
 
@@ -525,7 +535,7 @@ export class DdrA3GpuSkin implements GpuSkin {
     const { ds } = ctx;
     const cx = ctx.fieldLeft + (ctx.numTracks * ctx.colW) / 2;
     const dir = ctx.reverse ? -1 : 1;
-    const yMid = ctx.receptorY + dir * 2.42 * ctx.colW;
+    const yMid = ctx.receptorY + dir * 3.1 * ctx.colW;
     const tint = (fb.lastJudgment && COMBO_TINT[fb.lastJudgment.tns]) || COMBO_PLAIN;
     const c = judge.combo;
     const count = String(c);
@@ -760,14 +770,12 @@ export class DdrA3GpuSkin implements GpuSkin {
     ];
     sh.poly(hex, PANEL_BG_COL);
     const top = py + sy;
-    const trim: ColorFn = (_x, y) => {
+    const trim: ColorFn = (_x, y, o) => {
       const t = Math.max(0, Math.min(1, (y - top) / scoreH));
-      return [
-        GOLD_L[0] + (GOLD_D[0] - GOLD_L[0]) * t,
-        GOLD_L[1] + (GOLD_D[1] - GOLD_L[1]) * t,
-        GOLD_L[2] + (GOLD_D[2] - GOLD_L[2]) * t,
-        1,
-      ];
+      o[0] = GOLD_L[0] + (GOLD_D[0] - GOLD_L[0]) * t;
+      o[1] = GOLD_L[1] + (GOLD_D[1] - GOLD_L[1]) * t;
+      o[2] = GOLD_L[2] + (GOLD_D[2] - GOLD_L[2]) * t;
+      o[3] = 1;
     };
     sh.outline(hex, 1.6 * ds, trim);
 

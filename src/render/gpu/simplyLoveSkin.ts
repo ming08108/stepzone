@@ -108,6 +108,13 @@ export class SimplyLoveGpuSkin implements GpuSkin {
   private readonly rotOpt: QuadOpts = { rot: 0 };
   private readonly stripeOpt: QuadOpts = { rot: 0, mask: undefined, phaseV: 0 };
   private readonly repeatOpt: QuadOpts = { repeatV: 0 };
+  /** Reused 4-point buffer for the density trapezoids (no per-bin array alloc). */
+  private readonly densitySeg: [number, number][] = [
+    [0, 0],
+    [0, 0],
+    [0, 0],
+    [0, 0],
+  ];
 
   fieldLeft(bare: boolean, width: number, numTracks: number, colW: number, ds: number): number {
     if (bare) return (width - numTracks * colW) / 2;
@@ -295,11 +302,21 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const x0 = ctx.fieldLeft - 8 * ds;
     const w = fieldW + 16 * ds;
     const h = ctx.height;
-    const dark: ColorFn = () => [3 / 255, 4 / 255, 6 / 255, 0.5];
+    const dark: ColorFn = (_x, _y, o) => {
+      o[0] = 3 / 255;
+      o[1] = 4 / 255;
+      o[2] = 6 / 255;
+      o[3] = 0.5;
+    };
     ctx.underShapes.poly(rect(x0, 0, w, h), dark);
     if (!judge.failed && judge.life < 0.25) {
       const a = 0.06 + 0.1 * beatPulse;
-      const red: ColorFn = () => [1, 32 / 255, 32 / 255, a];
+      const red: ColorFn = (_x, _y, o) => {
+        o[0] = 1;
+        o[1] = 32 / 255;
+        o[2] = 32 / 255;
+        o[3] = a;
+      };
       ctx.underShapes.poly(rect(x0, 0, w, h), red);
     }
   }
@@ -464,8 +481,12 @@ export class SimplyLoveGpuSkin implements GpuSkin {
 
     const fill = (x: number, y: number, w: number, h: number, col: string): void => {
       const c = parseColor(col);
-      const fn: ColorFn = () => c;
-      ctx.shapes.poly(rect(x, y, w, h), fn);
+      ctx.shapes.poly(rect(x, y, w, h), (_x, _y, o) => {
+        o[0] = c[0];
+        o[1] = c[1];
+        o[2] = c[2];
+        o[3] = c[3];
+      });
     };
 
     // Song meter: white frame, black well, accent progress.
@@ -576,38 +597,47 @@ export class SimplyLoveGpuSkin implements GpuSkin {
     const lo = parseColor(SL_GRAPH_LO);
     const hi = parseColor(SL_GRAPH_HI);
     const bg = parseColor(SL_GRAPH_BG);
-    ctx.underShapes.poly(rect(0, top, width, H), () => bg);
+    ctx.underShapes.poly(rect(0, top, width, H), (_x, _y, o) => {
+      o[0] = bg[0];
+      o[1] = bg[1];
+      o[2] = bg[2];
+      o[3] = bg[3];
+    });
     const xOf = (t: number): number => (t / dg.lastT) * width;
     // Vertical blue→purple gradient by height above the baseline.
-    const grad: ColorFn = (_x, y) => {
+    const grad: ColorFn = (_x, y, o) => {
       const t = Math.max(0, Math.min(1, (height - y) / H));
-      return [
-        lo[0] + (hi[0] - lo[0]) * t,
-        lo[1] + (hi[1] - lo[1]) * t,
-        lo[2] + (hi[2] - lo[2]) * t,
-        1,
-      ];
+      o[0] = lo[0] + (hi[0] - lo[0]) * t;
+      o[1] = lo[1] + (hi[1] - lo[1]) * t;
+      o[2] = lo[2] + (hi[2] - lo[2]) * t;
+      o[3] = 1;
     };
     // Draw each measure segment as a trapezoid (baseline → the two bin tops).
+    // One reused 4-point buffer instead of a fresh array-of-pairs per bin.
+    const seg = this.densitySeg;
     for (let i = 0; i < dg.bins.length - 1; i++) {
       const a = dg.bins[i];
       const b = dg.bins[i + 1];
       const xa = xOf(a.t0);
       const xb = xOf(b.t0);
-      const ya = height - a.h * H;
-      const yb = height - b.h * H;
-      ctx.underShapes.poly(
-        [
-          [xa, height],
-          [xa, ya],
-          [xb, yb],
-          [xb, height],
-        ],
-        grad,
-      );
+      seg[0][0] = xa;
+      seg[0][1] = height;
+      seg[1][0] = xa;
+      seg[1][1] = height - a.h * H;
+      seg[2][0] = xb;
+      seg[2][1] = height - b.h * H;
+      seg[3][0] = xb;
+      seg[3][1] = height;
+      ctx.underShapes.poly(seg, grad);
     }
     const played = Math.max(0, Math.min(1, now / dg.lastT)) * width;
-    if (played > 0) ctx.underShapes.poly(rect(0, top, played, H), () => [0, 0, 0, 0.85]);
+    if (played > 0)
+      ctx.underShapes.poly(rect(0, top, played, H), (_x, _y, o) => {
+        o[0] = 0;
+        o[1] = 0;
+        o[2] = 0;
+        o[3] = 0.85;
+      });
   }
 
   /** Per-measure NPS histogram (ported from SimplyLoveTheme.buildDensity). */
@@ -736,7 +766,7 @@ export class SimplyLoveGpuSkin implements GpuSkin {
         'slcombo',
         text,
         cx - half,
-        anchorY + 36 * ds,
+        anchorY + 76 * ds,
         o,
         'left',
         () => tint,
