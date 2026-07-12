@@ -111,6 +111,29 @@ const packCardArt = (page, pack) =>
 
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
+/** Wait until the pack's blob-URL card art has actually decoded (and, if
+ *  `notSrc` is given, differs from a prior src), then return it. Decode is async,
+ *  so checking too early — especially on slow CI — spuriously sees naturalWidth 0. */
+async function waitPackArt(page, pack, notSrc = null, timeout = 12_000) {
+  await page
+    .waitForFunction(
+      ({ name, old }) => {
+        for (const img of document.querySelectorAll('img')) {
+          if (!img.src.startsWith('blob:')) continue;
+          const card = img.closest('div[class]')?.parentElement;
+          if (card && card.textContent.includes(name)) {
+            return img.complete && img.naturalWidth > 0 && (!old || img.src !== old);
+          }
+        }
+        return false;
+      },
+      { name: pack, old: notSrc },
+      { timeout },
+    )
+    .catch(() => {});
+  return packCardArt(page, pack);
+}
+
 /** Wait until the on-screen text contains `needle` (substring). Returns as soon
  *  as it appears — no fixed sleep. */
 const waitText = (page, needle, timeout = 20_000) =>
@@ -247,27 +270,13 @@ try {
   step('dropped pack appears in the grid', (await bodyText(page)).includes('E2E Pack'));
   const minted1 = await page.evaluate(() => window.__urlLog.minted.length);
   step('drop minted banner/pack-art blob URLs', minted1 >= 3, `${minted1} minted`);
-  const art1 = await packCardArt(page, 'E2E Pack');
+  const art1 = await waitPackArt(page, 'E2E Pack'); // wait for the art to decode
   step('pack card art renders from a blob URL', !!art1 && art1.decoded, art1?.src ?? 'no art img');
 
   // 4. Re-drop the same pack: fresh scan replaces pack art, stale URL revoked.
   await dropPack(page);
-  // Wait for the pack card to actually re-render with a new blob src.
-  await page
-    .waitForFunction(
-      (oldSrc) => {
-        for (const img of document.querySelectorAll('img')) {
-          if (!img.src.startsWith('blob:')) continue;
-          const card = img.closest('div[class]')?.parentElement;
-          if (card && card.textContent.includes('E2E Pack')) return img.src !== oldSrc;
-        }
-        return false;
-      },
-      art1?.src ?? '',
-      { timeout: 10_000 },
-    )
-    .catch(() => {});
-  const art2 = await packCardArt(page, 'E2E Pack');
+  // Wait for the card to re-render with a NEW blob src that has decoded.
+  const art2 = await waitPackArt(page, 'E2E Pack', art1?.src ?? null);
   const revoked = await page.evaluate(() => window.__urlLog.revoked);
   step('re-drop replaces the pack art URL', !!art2 && !!art1 && art2.src !== art1.src);
   step('stale pack art URL was revoked', !!art1 && revoked.includes(art1.src));
