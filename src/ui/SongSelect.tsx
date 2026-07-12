@@ -27,6 +27,7 @@ import { loadStats } from '../app/stats';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import { GlobalBest } from './GlobalBest';
 import { buildChartSeed, type ChartSeed } from './devSeed';
+import { ChartStatsSide } from './ChartStatsSide';
 import { LeaderboardSide } from './LeaderboardSide';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
@@ -1320,6 +1321,7 @@ export function SongSelect({
           </div>
         </div>
 
+        {!inPacks && <ChartStatsSide entry={song?.entry ?? null} diff={diff} />}
         {!inPacks && <LeaderboardSide entry={song?.entry ?? null} diff={diff} />}
       </div>
 
