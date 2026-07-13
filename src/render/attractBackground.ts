@@ -357,6 +357,7 @@ export class AttractBackground {
   private readonly startMs = performance.now();
   private raf = 0;
   private running = false;
+  private lastDraw = 0;
 
   // Baked-once assets.
   private readonly scanlines: CanvasPattern;
@@ -418,9 +419,19 @@ export class AttractBackground {
   start(): void {
     if (this.running) return;
     this.running = true;
-    const tick = (): void => {
+    this.lastDraw = 0;
+    // Cap at ~30fps. It's a background — 30fps is imperceptible here, halves the
+    // draw + per-frame GPU-upload cost (which otherwise scales with the display's
+    // refresh rate, up to 240Hz), and matches the 30fps motion-JPEG loops the
+    // real DDR "common movies" ran at. It also keeps the two-page versus render
+    // from starving.
+    const FRAME_MS = 1000 / 30;
+    const tick = (now: number): void => {
       if (!this.running) return;
-      this.draw();
+      if (now - this.lastDraw >= FRAME_MS - 1) {
+        this.lastDraw = now;
+        this.draw();
+      }
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
