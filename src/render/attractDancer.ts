@@ -385,178 +385,261 @@ function sampleClip(c: Clip, phase: number, out: Float32Array, mirrored: boolean
 // swing channels use hold keys (0…0, then rise to 1 and hold) so feet stay
 // locked, leave late, and arrive exactly at 1 on impact.
 
-/** IDLE GROOVE — 2-beat loop. Down INTO each beat (dancers pulse down on the
- *  count), weight rocking right on beat 1 / left on beat 2, shoulders counter-
- *  twisting, elbows pumping, head bobbing with a little roll. The second half
- *  is the exact mirror of the first so the loop never drifts. */
+/** IDLE GROOVE — 2-beat loop, 8 keys (4 authored + exact mirrors so the loop
+ *  never drifts). A real dancer's bounce: she drops INTO each count (crouch +
+ *  head dip land together), rides back up through the "and", and rocks her
+ *  weight right on count 1 / left on count 2 with the shoulders countering
+ *  the hips. Fists ride UP in front of the chest (boxer/DDR-player groove,
+ *  not arms-at-sides) and pump alternately — the accent-side fist punches
+ *  high on its count. */
 const IDLE = (() => {
+  // ON the count: pulse DOWN, weight over the right foot, right fist high.
   const k0: KeyOver = {
-    [CH_CROUCH]: 0.052,
-    [CH_SWAY]: 0.042,
-    [CH_LIST]: 0.016,
-    [CH_LEAN]: 0.05,
-    [CH_TWIST]: -0.13,
-    [CH_YAW]: 0.1,
-    [CH_SIDE]: -0.012,
-    [CH_PELVZ]: 0.012,
-    [CH_HROLL]: -0.06,
-    [CH_HPIT]: 0.05,
-    [CH_LABD]: 0.2,
-    [CH_LFWD]: 0.12,
-    [CH_LELB]: 0.55,
+    [CH_CROUCH]: 0.06,
+    [CH_SWAY]: 0.05,
+    [CH_LIST]: 0.022,
+    [CH_LEAN]: 0.065,
+    [CH_TWIST]: -0.17,
+    [CH_YAW]: 0.13,
+    [CH_SIDE]: -0.015,
+    [CH_PELVZ]: 0.014,
+    [CH_HROLL]: -0.075,
+    [CH_HPIT]: 0.07,
+    [CH_HYAW]: 0.06,
+    [CH_LABD]: 0.3,
+    [CH_LFWD]: 0.32,
+    [CH_LELB]: 2.15,
     [CH_LLOF]: 0.55,
-    [CH_RABD]: 0.3,
-    [CH_RFWD]: 0.22,
-    [CH_RELB]: 0.85,
-    [CH_RLOF]: 0.4,
+    [CH_RABD]: 0.4,
+    [CH_RFWD]: 0.45,
+    [CH_RELB]: 2.6,
+    [CH_RLOF]: 0.35,
   };
+  // Rebound: riding up out of the hit, arms releasing.
   const k1: KeyOver = {
-    [CH_CROUCH]: 0.016,
-    [CH_SWAY]: 0.026,
-    [CH_LIST]: 0.01,
-    [CH_LEAN]: 0.03,
-    [CH_TWIST]: -0.05,
-    [CH_YAW]: 0.05,
-    [CH_SIDE]: -0.006,
-    [CH_HROLL]: -0.02,
-    [CH_HPIT]: -0.035,
-    [CH_LABD]: 0.17,
-    [CH_LFWD]: 0.1,
-    [CH_LELB]: 0.35,
+    [CH_CROUCH]: 0.02,
+    [CH_SWAY]: 0.042,
+    [CH_LIST]: 0.014,
+    [CH_LEAN]: 0.04,
+    [CH_TWIST]: -0.1,
+    [CH_YAW]: 0.08,
+    [CH_SIDE]: -0.009,
+    [CH_HROLL]: -0.03,
+    [CH_HPIT]: -0.04,
+    [CH_HYAW]: 0.03,
+    [CH_LABD]: 0.26,
+    [CH_LFWD]: 0.2,
+    [CH_LELB]: 2.0,
     [CH_LLOF]: 0.5,
-    [CH_RABD]: 0.22,
-    [CH_RFWD]: 0.15,
-    [CH_RELB]: 0.6,
+    [CH_RABD]: 0.36,
+    [CH_RFWD]: 0.28,
+    [CH_RELB]: 2.3,
+    [CH_RLOF]: 0.42,
+  };
+  // The "and": tallest point, weight passing through center, fists level.
+  const k2: KeyOver = {
+    [CH_CROUCH]: 0.006,
+    [CH_SWAY]: 0,
+    [CH_HPIT]: -0.07,
+    [CH_HYAW]: -0.02,
+    [CH_LABD]: 0.32,
+    [CH_LFWD]: 0.3,
+    [CH_LELB]: 2.2,
+    [CH_LLOF]: 0.45,
+    [CH_RABD]: 0.32,
+    [CH_RFWD]: 0.3,
+    [CH_RELB]: 2.2,
     [CH_RLOF]: 0.45,
+  };
+  // Falling INTO the next count on the left side (anticipation).
+  const k3: KeyOver = {
+    [CH_CROUCH]: 0.035,
+    [CH_SWAY]: -0.028,
+    [CH_LIST]: -0.012,
+    [CH_LEAN]: -0.04,
+    [CH_TWIST]: 0.1,
+    [CH_YAW]: -0.08,
+    [CH_SIDE]: 0.009,
+    [CH_HROLL]: 0.035,
+    [CH_HPIT]: 0.02,
+    [CH_HYAW]: -0.04,
+    [CH_LABD]: 0.42,
+    [CH_LFWD]: 0.36,
+    [CH_LELB]: 2.45,
+    [CH_LLOF]: 0.4,
+    [CH_RABD]: 0.28,
+    [CH_RFWD]: 0.24,
+    [CH_RELB]: 1.0,
+    [CH_RLOF]: 0.48,
   };
   const r0 = row(k0);
   const r1 = row(k1);
-  return clipFromRows(2, 0, true, [0, 0.25, 0.5, 0.75], [r0, r1, mirrorRow(r0), mirrorRow(r1)]);
+  const r2 = row(k2);
+  const r3 = row(k3);
+  return clipFromRows(
+    2,
+    0,
+    true,
+    [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875],
+    [r0, r1, r2, r3, mirrorRow(r0), mirrorRow(r1), mirrorRow(r2), mirrorRow(r3)],
+  );
 })();
 
 /** STEP to the LEFT panel, canonical left foot. Eyes the panel early, coils
- *  over the right (support) foot, then opens: left arm flung out along the
- *  step line, right arm pulled across the ribs, head and torso committed. */
+ *  DEEP over the right (support) foot with the left arm wrapped across the
+ *  ribs, then whips open: left arm flung out along the step line (a touch of
+ *  elbow so the hand reads), right fist pulled hard across, head and torso
+ *  committed with a real side lean. The arm carries PAST the hit (follow-
+ *  through key) before recoiling into the fists-up groove. */
 const STEP_L = makeClip(1.5, 0.6, false, [
   [
     0,
     {
-      [CH_CROUCH]: 0.035,
-      [CH_SWAY]: 0.02,
-      [CH_TWIST]: 0.06,
-      [CH_YAW]: 0.05,
-      [CH_HYAW]: -0.1,
-      [CH_LABD]: 0.12,
-      [CH_LFWD]: 0.22,
-      [CH_LELB]: 0.9,
-      [CH_LLOF]: 0.3,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.12,
-      [CH_RELB]: 0.5,
-      [CH_RLOF]: 0.4,
+      [CH_CROUCH]: 0.03,
+      [CH_SWAY]: 0.022,
+      [CH_TWIST]: 0.07,
+      [CH_YAW]: 0.06,
+      [CH_HYAW]: -0.12,
+      [CH_HPIT]: -0.02,
+      [CH_LABD]: 0.3,
+      [CH_LFWD]: 0.3,
+      [CH_LELB]: 2.2,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.34,
+      [CH_RFWD]: 0.3,
+      [CH_RELB]: 2.2,
+      [CH_RLOF]: 0.45,
     },
   ],
   [
     0.3,
     {
-      [CH_CROUCH]: 0.05,
-      [CH_SWAY]: 0.058,
-      [CH_LIST]: 0.022,
-      [CH_LEAN]: 0.05,
-      [CH_TWIST]: 0.16,
-      [CH_YAW]: 0.12,
-      [CH_SIDE]: -0.015,
-      [CH_HYAW]: -0.22,
-      [CH_HROLL]: 0.04,
-      [CH_LABD]: 0.1,
-      [CH_LFWD]: 0.3,
-      [CH_LELB]: 1.35,
-      [CH_LLOF]: 0.25,
-      [CH_RABD]: 0.42,
-      [CH_RFWD]: 0.1,
-      [CH_RELB]: 0.7,
-      [CH_LIFTL]: 0.032,
+      [CH_CROUCH]: 0.062,
+      [CH_SWAY]: 0.062,
+      [CH_LIST]: 0.024,
+      [CH_LEAN]: 0.07,
+      [CH_TWIST]: 0.2,
+      [CH_YAW]: 0.16,
+      [CH_SIDE]: -0.016,
+      [CH_HYAW]: -0.24,
+      [CH_HROLL]: 0.05,
+      [CH_HPIT]: 0.03,
+      [CH_LABD]: 0.14,
+      [CH_LFWD]: 0.42,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.2,
+      [CH_RABD]: 0.55,
+      [CH_RFWD]: 0.16,
+      [CH_RELB]: 0.9,
+      [CH_RLOF]: 0.3,
+      [CH_LIFTL]: 0.035,
     },
   ],
   [
     0.45,
     {
-      [CH_CROUCH]: 0.042,
-      [CH_SWAY]: 0.045,
-      [CH_LIST]: 0.014,
-      [CH_TWIST]: 0.02,
-      [CH_YAW]: 0.02,
-      [CH_HYAW]: -0.27,
-      [CH_LABD]: 0.9,
-      [CH_LFWD]: 0.15,
-      [CH_LELB]: 0.7,
-      [CH_LLOF]: 0.12,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.2,
-      [CH_RELB]: 0.95,
+      [CH_CROUCH]: 0.045,
+      [CH_SWAY]: 0.05,
+      [CH_LIST]: 0.015,
+      [CH_LEAN]: 0.02,
+      [CH_TWIST]: 0.04,
+      [CH_YAW]: 0.04,
+      [CH_HYAW]: -0.28,
+      [CH_LABD]: 1.0,
+      [CH_LFWD]: 0.18,
+      [CH_LELB]: 0.6,
+      [CH_LLOF]: 0.15,
+      [CH_RABD]: 0.4,
+      [CH_RFWD]: 0.22,
+      [CH_RELB]: 1.9,
       [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.085,
+      [CH_LIFTL]: 0.09,
     },
   ],
   [
     0.6,
     {
-      [CH_CROUCH]: 0.045,
-      [CH_SWAY]: -0.012,
-      [CH_LIST]: -0.02,
-      [CH_LEAN]: -0.07,
-      [CH_TWIST]: -0.18,
-      [CH_YAW]: -0.13,
-      [CH_SIDE]: 0.015,
+      [CH_CROUCH]: 0.052,
+      [CH_SWAY]: -0.015,
+      [CH_LIST]: -0.024,
+      [CH_LEAN]: -0.095,
+      [CH_TWIST]: -0.22,
+      [CH_YAW]: -0.16,
+      [CH_SIDE]: 0.018,
       [CH_HYAW]: -0.3,
-      [CH_HROLL]: -0.08,
-      [CH_HPIT]: 0.03,
-      [CH_LABD]: 1.8,
-      [CH_LFWD]: 0.05,
-      [CH_LELB]: 0.18,
-      [CH_LLOF]: 0.05,
-      [CH_RABD]: 0.15,
-      [CH_RFWD]: 0.35,
-      [CH_RELB]: 1.35,
+      [CH_HROLL]: -0.1,
+      [CH_HPIT]: 0.04,
+      [CH_LABD]: 1.75,
+      [CH_LFWD]: 0.06,
+      [CH_LELB]: 0.28,
+      [CH_LLOF]: 0.08,
+      [CH_RABD]: 0.2,
+      [CH_RFWD]: 0.42,
+      [CH_RELB]: 2.4,
       [CH_RLOF]: 0.3,
       [CH_SWGL]: 1,
       [CH_LIFTL]: 0,
     },
   ],
   [
-    0.8,
+    0.72,
     {
-      [CH_CROUCH]: 0.034,
-      [CH_SWAY]: -0.028,
-      [CH_LIST]: -0.012,
-      [CH_LEAN]: -0.04,
-      [CH_TWIST]: -0.08,
-      [CH_YAW]: -0.08,
-      [CH_HYAW]: -0.16,
-      [CH_HROLL]: -0.04,
-      [CH_LABD]: 1.15,
-      [CH_LELB]: 0.45,
-      [CH_LLOF]: 0.2,
-      [CH_RABD]: 0.22,
-      [CH_RFWD]: 0.2,
-      [CH_RELB]: 0.8,
+      [CH_CROUCH]: 0.04,
+      [CH_SWAY]: -0.03,
+      [CH_LIST]: -0.018,
+      [CH_LEAN]: -0.075,
+      [CH_TWIST]: -0.16,
+      [CH_YAW]: -0.12,
+      [CH_HYAW]: -0.24,
+      [CH_HROLL]: -0.07,
+      [CH_LABD]: 1.9,
+      [CH_LFWD]: 0.04,
+      [CH_LELB]: 0.15,
+      [CH_LLOF]: 0.04,
+      [CH_RABD]: 0.16,
+      [CH_RFWD]: 0.38,
+      [CH_RELB]: 2.5,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.033,
+      [CH_SWAY]: -0.03,
+      [CH_LIST]: -0.01,
+      [CH_LEAN]: -0.035,
+      [CH_TWIST]: -0.06,
+      [CH_YAW]: -0.06,
+      [CH_HYAW]: -0.12,
+      [CH_HROLL]: -0.03,
+      [CH_HPIT]: -0.03,
+      [CH_LABD]: 1.05,
+      [CH_LELB]: 0.7,
+      [CH_LLOF]: 0.25,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0.3,
+      [CH_RELB]: 2.3,
       [CH_SWGL]: 1,
     },
   ],
   [
     1,
     {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: -0.016,
+      [CH_CROUCH]: 0.045,
+      [CH_SWAY]: -0.02,
       [CH_LEAN]: -0.01,
       [CH_YAW]: -0.03,
-      [CH_HYAW]: -0.04,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.12,
-      [CH_LELB]: 0.5,
-      [CH_RABD]: 0.22,
-      [CH_RFWD]: 0.12,
-      [CH_RELB]: 0.45,
+      [CH_HYAW]: -0.03,
+      [CH_HPIT]: 0.02,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.5,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
       [CH_SWGL]: 1,
     },
   ],
@@ -565,207 +648,243 @@ const STEP_L = makeClip(1.5, 0.6, false, [
 /** STEP to the RIGHT panel = exact mirror of STEP_L (canonical right foot). */
 const STEP_R = mirrorClip(STEP_L);
 
-/** STEP to the UP (far) panel, canonical right foot. A tall forward reach:
- *  small bow to coil, then the chest opens, both arms rise into a V overhead
- *  (this is the row that fires the hand-burst), face lifts. */
+/** STEP to the UP (far) panel, canonical right foot. A tall reach: deep bow
+ *  to coil with both arms swept behind her, then the chest opens and the arms
+ *  whip into an ASYMMETRIC V overhead (lead arm higher — this is the row that
+ *  fires the hand-burst), face thrown up, body stretching PAST the hit before
+ *  melting back into the groove. */
 const STEP_U = makeClip(1.5, 0.6, false, [
   [
     0,
     {
-      [CH_CROUCH]: 0.045,
-      [CH_SWAY]: -0.025,
-      [CH_PITCH]: 0.05,
-      [CH_HPIT]: 0.07,
-      [CH_LABD]: 0.16,
-      [CH_LFWD]: -0.1,
-      [CH_LELB]: 0.35,
-      [CH_LLOF]: 0.1,
-      [CH_RABD]: 0.16,
-      [CH_RFWD]: -0.14,
-      [CH_RELB]: 0.3,
-      [CH_RLOF]: 0.1,
+      [CH_CROUCH]: 0.04,
+      [CH_SWAY]: -0.02,
+      [CH_PITCH]: 0.03,
+      [CH_HPIT]: 0.04,
+      [CH_LABD]: 0.3,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.4,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.4,
     },
   ],
   [
     0.3,
     {
-      [CH_CROUCH]: 0.055,
-      [CH_SWAY]: -0.052,
-      [CH_LIST]: -0.02,
-      [CH_PITCH]: 0.08,
-      [CH_LEAN]: -0.03,
-      [CH_HPIT]: 0.1,
-      [CH_LABD]: 0.22,
-      [CH_LFWD]: -0.22,
-      [CH_LELB]: 0.5,
-      [CH_LLOF]: 0.05,
-      [CH_RABD]: 0.22,
-      [CH_RFWD]: -0.26,
-      [CH_RELB]: 0.45,
-      [CH_RLOF]: 0.05,
-      [CH_LIFTR]: 0.032,
+      [CH_CROUCH]: 0.062,
+      [CH_SWAY]: -0.055,
+      [CH_LIST]: -0.022,
+      [CH_PITCH]: 0.1,
+      [CH_LEAN]: -0.035,
+      [CH_HPIT]: 0.12,
+      [CH_LABD]: 0.2,
+      [CH_LFWD]: -0.28,
+      [CH_LELB]: 0.4,
+      [CH_LLOF]: -0.05,
+      [CH_RABD]: 0.2,
+      [CH_RFWD]: -0.32,
+      [CH_RELB]: 0.35,
+      [CH_RLOF]: -0.05,
+      [CH_LIFTR]: 0.035,
     },
   ],
   [
     0.45,
     {
-      [CH_CROUCH]: 0.03,
+      [CH_CROUCH]: 0.025,
       [CH_SWAY]: -0.04,
-      [CH_PITCH]: 0.02,
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 1.5,
-      [CH_LELB]: 0.4,
+      [CH_PITCH]: 0,
+      [CH_HPIT]: -0.05,
+      [CH_LABD]: 1.6,
+      [CH_LELB]: 0.35,
       [CH_LLOF]: 0.05,
       [CH_RABD]: 1.5,
-      [CH_RELB]: 0.4,
+      [CH_RELB]: 0.3,
       [CH_RLOF]: 0.05,
       [CH_SWGR]: 0.55,
-      [CH_LIFTR]: 0.092,
+      [CH_LIFTR]: 0.095,
     },
   ],
   [
     0.6,
     {
-      [CH_CROUCH]: -0.012,
-      [CH_SWAY]: -0.02,
-      [CH_PITCH]: -0.07,
-      [CH_PELVZ]: -0.02,
-      [CH_TWIST]: -0.05,
-      [CH_LEAN]: 0.02,
-      [CH_HPIT]: -0.16,
-      [CH_LABD]: 2.75,
-      [CH_LFWD]: 0.1,
-      [CH_LELB]: 0.12,
+      [CH_CROUCH]: -0.018,
+      [CH_SWAY]: -0.018,
+      [CH_PITCH]: -0.09,
+      [CH_PELVZ]: -0.025,
+      [CH_TWIST]: -0.08,
+      [CH_LEAN]: 0.035,
+      [CH_HPIT]: -0.2,
+      [CH_HROLL]: 0.05,
+      [CH_LABD]: 2.95,
+      [CH_LFWD]: 0.08,
+      [CH_LELB]: 0.1,
       [CH_LLOF]: 0.05,
-      [CH_RABD]: 2.75,
-      [CH_RFWD]: 0.1,
-      [CH_RELB]: 0.12,
-      [CH_RLOF]: 0.05,
+      [CH_RABD]: 2.45,
+      [CH_RFWD]: 0.12,
+      [CH_RELB]: 0.28,
+      [CH_RLOF]: 0.1,
       [CH_SWGR]: 1,
       [CH_LIFTR]: 0,
     },
   ],
   [
-    0.8,
+    0.72,
     {
-      [CH_CROUCH]: 0.018,
-      [CH_PITCH]: -0.03,
-      [CH_HPIT]: -0.07,
-      [CH_LABD]: 2.25,
-      [CH_LELB]: 0.3,
-      [CH_RABD]: 2.25,
-      [CH_RELB]: 0.3,
+      [CH_CROUCH]: -0.002,
+      [CH_PITCH]: -0.06,
+      [CH_HPIT]: -0.16,
+      [CH_HROLL]: 0.03,
+      [CH_LABD]: 3.05,
+      [CH_LELB]: 0.08,
+      [CH_RABD]: 2.6,
+      [CH_RELB]: 0.22,
+      [CH_SWGR]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.03,
+      [CH_PITCH]: -0.02,
+      [CH_HPIT]: -0.06,
+      [CH_LABD]: 2.0,
+      [CH_LELB]: 0.35,
+      [CH_RABD]: 1.6,
+      [CH_RELB]: 0.5,
       [CH_SWGR]: 1,
     },
   ],
   [
     1,
     {
-      [CH_CROUCH]: 0.038,
+      [CH_CROUCH]: 0.042,
       [CH_SWAY]: -0.02,
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.35,
-      [CH_LELB]: 0.4,
-      [CH_LLOF]: 0.4,
+      [CH_LABD]: 0.34,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
       [CH_RABD]: 0.3,
-      [CH_RELB]: 0.4,
-      [CH_RLOF]: 0.4,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
       [CH_SWGR]: 1,
     },
   ],
 ]);
 
 /** STEP to the DOWN (near) panel, canonical left foot. A stomp toward the
- *  viewer: lifts a touch first (anticipation UP before the down hit), then
- *  dips deep over the near panel, fists pulled to the ribs, head down. */
+ *  viewer: rises a touch first (anticipation UP before the down hit), then
+ *  SITS deep over the near panel — fists yanked to the ribs, head slammed
+ *  down with the hit — and whips the head back up on the rebound. */
 const STEP_D = makeClip(1.5, 0.6, false, [
   [
     0,
     {
-      [CH_CROUCH]: 0.02,
-      [CH_SWAY]: 0.024,
-      [CH_HPIT]: -0.04,
+      [CH_CROUCH]: 0.018,
+      [CH_SWAY]: 0.026,
+      [CH_HPIT]: -0.05,
       [CH_LABD]: 0.5,
-      [CH_LFWD]: 0.18,
-      [CH_LELB]: 0.6,
-      [CH_LLOF]: 0.3,
+      [CH_LFWD]: 0.24,
+      [CH_LELB]: 1.0,
+      [CH_LLOF]: 0.35,
       [CH_RABD]: 0.5,
-      [CH_RFWD]: 0.18,
-      [CH_RELB]: 0.6,
-      [CH_RLOF]: 0.3,
+      [CH_RFWD]: 0.24,
+      [CH_RELB]: 1.0,
+      [CH_RLOF]: 0.35,
     },
   ],
   [
     0.3,
     {
-      [CH_CROUCH]: 0.024,
-      [CH_SWAY]: 0.055,
+      [CH_CROUCH]: 0.02,
+      [CH_SWAY]: 0.058,
       [CH_LIST]: 0.02,
-      [CH_YAW]: 0.08,
-      [CH_TWIST]: 0.1,
-      [CH_LEAN]: 0.04,
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.62,
-      [CH_LFWD]: 0.22,
-      [CH_LELB]: 0.75,
-      [CH_RABD]: 0.62,
-      [CH_RFWD]: 0.22,
-      [CH_RELB]: 0.75,
-      [CH_LIFTL]: 0.035,
+      [CH_YAW]: 0.09,
+      [CH_TWIST]: 0.12,
+      [CH_LEAN]: 0.05,
+      [CH_HPIT]: -0.06,
+      [CH_HYAW]: 0.06,
+      [CH_LABD]: 0.7,
+      [CH_LFWD]: 0.1,
+      [CH_LELB]: 0.7,
+      [CH_RABD]: 0.75,
+      [CH_RFWD]: 0.1,
+      [CH_RELB]: 0.7,
+      [CH_LIFTL]: 0.04,
     },
   ],
   [
     0.44,
     {
-      [CH_CROUCH]: 0.05,
-      [CH_SWAY]: 0.04,
-      [CH_PITCH]: 0.06,
-      [CH_HPIT]: 0.05,
-      [CH_LABD]: 0.35,
-      [CH_LFWD]: 0.3,
-      [CH_LELB]: 1.2,
-      [CH_RABD]: 0.35,
-      [CH_RFWD]: 0.3,
-      [CH_RELB]: 1.2,
+      [CH_CROUCH]: 0.055,
+      [CH_SWAY]: 0.045,
+      [CH_PITCH]: 0.07,
+      [CH_HPIT]: 0.06,
+      [CH_LABD]: 0.4,
+      [CH_LFWD]: 0.36,
+      [CH_LELB]: 2.0,
+      [CH_RABD]: 0.4,
+      [CH_RFWD]: 0.36,
+      [CH_RELB]: 2.0,
       [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.075,
+      [CH_LIFTL]: 0.08,
     },
   ],
   [
     0.6,
     {
-      [CH_CROUCH]: 0.105,
-      [CH_SWAY]: 0.012,
-      [CH_PITCH]: 0.13,
-      [CH_PELVZ]: 0.02,
-      [CH_LEAN]: -0.03,
-      [CH_YAW]: -0.05,
-      [CH_TWIST]: -0.09,
-      [CH_HPIT]: 0.15,
-      [CH_LABD]: 0.1,
-      [CH_LFWD]: 0.4,
-      [CH_LELB]: 1.85,
-      [CH_LLOF]: 0.25,
-      [CH_RABD]: 0.1,
-      [CH_RFWD]: 0.4,
-      [CH_RELB]: 1.85,
-      [CH_RLOF]: 0.25,
+      [CH_CROUCH]: 0.115,
+      [CH_SWAY]: 0.01,
+      [CH_PITCH]: 0.15,
+      [CH_PELVZ]: 0.025,
+      [CH_LEAN]: -0.04,
+      [CH_YAW]: -0.06,
+      [CH_TWIST]: -0.11,
+      [CH_HPIT]: 0.17,
+      [CH_HYAW]: -0.03,
+      [CH_LABD]: 0.15,
+      [CH_LFWD]: 0.35,
+      [CH_LELB]: 2.5,
+      [CH_LLOF]: 0.4,
+      [CH_RABD]: 0.15,
+      [CH_RFWD]: 0.35,
+      [CH_RELB]: 2.5,
+      [CH_RLOF]: 0.4,
       [CH_SWGL]: 1,
       [CH_LIFTL]: 0,
     },
   ],
   [
-    0.8,
+    0.72,
     {
-      [CH_CROUCH]: 0.06,
-      [CH_PITCH]: 0.06,
-      [CH_HPIT]: 0.07,
-      [CH_LABD]: 0.2,
-      [CH_LFWD]: 0.25,
-      [CH_LELB]: 1.1,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: 0.25,
-      [CH_RELB]: 1.1,
+      [CH_CROUCH]: 0.09,
+      [CH_PITCH]: 0.1,
+      [CH_HPIT]: 0.1,
+      [CH_LABD]: 0.12,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.6,
+      [CH_RABD]: 0.12,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.6,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.045,
+      [CH_PITCH]: 0.03,
+      [CH_HPIT]: -0.06,
+      [CH_LABD]: 0.28,
+      [CH_LFWD]: 0.3,
+      [CH_LELB]: 2.25,
+      [CH_RABD]: 0.28,
+      [CH_RFWD]: 0.3,
+      [CH_RELB]: 2.25,
       [CH_SWGL]: 1,
     },
   ],
@@ -773,7 +892,16 @@ const STEP_D = makeClip(1.5, 0.6, false, [
     1,
     {
       [CH_CROUCH]: 0.038,
-      [CH_PITCH]: 0.01,
+      [CH_PITCH]: 0.005,
+      [CH_HPIT]: -0.01,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.5,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
       [CH_SWGL]: 1,
     },
   ],
@@ -860,24 +988,55 @@ const JUMP = makeClip(1.7, 0.65, false, [
       [CH_CROUCH]: 0.042,
       [CH_PITCH]: 0.02,
       [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.6,
-      [CH_LELB]: 0.55,
-      [CH_LLOF]: 0.35,
-      [CH_RABD]: 0.6,
-      [CH_RELB]: 0.55,
-      [CH_RLOF]: 0.35,
+      [CH_LABD]: 0.4,
+      [CH_LFWD]: 0.28,
+      [CH_LELB]: 2.0,
+      [CH_LLOF]: 0.4,
+      [CH_RABD]: 0.4,
+      [CH_RFWD]: 0.28,
+      [CH_RELB]: 2.0,
+      [CH_RLOF]: 0.4,
       [CH_SWGL]: 1,
       [CH_SWGR]: 1,
     },
   ],
-  [1, { [CH_CROUCH]: 0.036, [CH_SWGL]: 1, [CH_SWGR]: 1 }],
+  [
+    1,
+    {
+      [CH_CROUCH]: 0.038,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+      [CH_SWGL]: 1,
+      [CH_SWGR]: 1,
+    },
+  ],
 ]);
 
 /** FLOURISH — a 2-beat body-roll wave for long gaps: yaw sweeps left→right
  *  with a counter-twist while one arm winds up and releases overhead. Feet
  *  never move (no swing channels), so plants stay locked. */
 const FLOURISH = makeClip(2, 0, false, [
-  [0, { [CH_CROUCH]: 0.04, [CH_YAW]: -0.06 }],
+  [
+    0,
+    {
+      [CH_CROUCH]: 0.04,
+      [CH_YAW]: -0.06,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+    },
+  ],
   [
     0.22,
     {
@@ -929,17 +1088,451 @@ const FLOURISH = makeClip(2, 0, false, [
       [CH_RELB]: 0.6,
     },
   ],
-  [1, { [CH_YAW]: 0.03, [CH_CROUCH]: 0.04 }],
+  [
+    1,
+    {
+      [CH_YAW]: 0.03,
+      [CH_CROUCH]: 0.04,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+    },
+  ],
 ]);
 
+// ---- B-VARIANT STEP CLIPS -------------------------------------------------------
+// A second styling for every panel, alternated with the A clips step by step so
+// runs of the same arrow don't loop one gesture. Same timing contract as the A
+// clips (beats/impact/foot channels identical — the scheduler treats them
+// interchangeably); only the upper-body choreography differs.
+
+/** STEP_L variant — hip-led rock-back with the LEFT fist pumped overhead
+ *  (flexed elbow) while the right arm punches down-back. Reads "victory hit"
+ *  where the A clip reads "reach along the arrow". Canonical left foot. */
+const STEP_L_B = makeClip(1.5, 0.6, false, [
+  [
+    0,
+    {
+      [CH_CROUCH]: 0.032,
+      [CH_SWAY]: 0.02,
+      [CH_TWIST]: 0.05,
+      [CH_HYAW]: -0.1,
+      [CH_LABD]: 0.3,
+      [CH_LFWD]: 0.28,
+      [CH_LELB]: 2.2,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.28,
+      [CH_RELB]: 2.2,
+      [CH_RLOF]: 0.45,
+    },
+  ],
+  [
+    0.3,
+    {
+      [CH_CROUCH]: 0.06,
+      [CH_SWAY]: 0.06,
+      [CH_LIST]: 0.022,
+      [CH_LEAN]: 0.06,
+      [CH_TWIST]: 0.18,
+      [CH_YAW]: 0.14,
+      [CH_HYAW]: -0.2,
+      [CH_HPIT]: 0.05,
+      [CH_LABD]: 0.2,
+      [CH_LFWD]: -0.15,
+      [CH_LELB]: 0.5,
+      [CH_LLOF]: 0.1,
+      [CH_RABD]: 0.25,
+      [CH_RFWD]: -0.2,
+      [CH_RELB]: 0.45,
+      [CH_RLOF]: 0.1,
+      [CH_LIFTL]: 0.035,
+    },
+  ],
+  [
+    0.45,
+    {
+      [CH_CROUCH]: 0.04,
+      [CH_SWAY]: 0.045,
+      [CH_TWIST]: 0.02,
+      [CH_HYAW]: -0.26,
+      [CH_LABD]: 1.3,
+      [CH_LFWD]: 0.1,
+      [CH_LELB]: -0.1,
+      [CH_LLOF]: 0.1,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0,
+      [CH_RELB]: 0.7,
+      [CH_SWGL]: 0.55,
+      [CH_LIFTL]: 0.085,
+    },
+  ],
+  [
+    0.6,
+    {
+      [CH_CROUCH]: 0.05,
+      [CH_SWAY]: -0.014,
+      [CH_LIST]: -0.022,
+      [CH_LEAN]: -0.1,
+      [CH_TWIST]: -0.26,
+      [CH_YAW]: -0.18,
+      [CH_SIDE]: 0.016,
+      [CH_HYAW]: -0.26,
+      [CH_HROLL]: -0.09,
+      [CH_HPIT]: -0.06,
+      [CH_LABD]: 2.25,
+      [CH_LFWD]: 0.12,
+      [CH_LELB]: -0.5,
+      [CH_LLOF]: 0.15,
+      [CH_RABD]: 0.12,
+      [CH_RFWD]: -0.28,
+      [CH_RELB]: 0.35,
+      [CH_RLOF]: 0,
+      [CH_SWGL]: 1,
+      [CH_LIFTL]: 0,
+    },
+  ],
+  [
+    0.72,
+    {
+      [CH_CROUCH]: 0.04,
+      [CH_SWAY]: -0.028,
+      [CH_LIST]: -0.016,
+      [CH_LEAN]: -0.085,
+      [CH_TWIST]: -0.2,
+      [CH_YAW]: -0.14,
+      [CH_HYAW]: -0.2,
+      [CH_HROLL]: -0.06,
+      [CH_HPIT]: -0.09,
+      [CH_LABD]: 2.35,
+      [CH_LELB]: -0.42,
+      [CH_RABD]: 0.1,
+      [CH_RFWD]: -0.3,
+      [CH_RELB]: 0.4,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.032,
+      [CH_SWAY]: -0.028,
+      [CH_LEAN]: -0.04,
+      [CH_TWIST]: -0.1,
+      [CH_YAW]: -0.07,
+      [CH_HYAW]: -0.1,
+      [CH_HPIT]: -0.04,
+      [CH_LABD]: 1.4,
+      [CH_LELB]: 0.5,
+      [CH_LLOF]: 0.25,
+      [CH_RABD]: 0.24,
+      [CH_RFWD]: 0.1,
+      [CH_RELB]: 0.8,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    1,
+    {
+      [CH_CROUCH]: 0.044,
+      [CH_SWAY]: -0.02,
+      [CH_YAW]: -0.03,
+      [CH_HYAW]: -0.03,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.5,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+      [CH_SWGL]: 1,
+    },
+  ],
+]);
+
+/** STEP_D variant — both fists PUNCH down past the hips on the stomp
+ *  (shoulders shrugged into it), then the head whips back up. Canonical
+ *  left foot. */
+const STEP_D_B = makeClip(1.5, 0.6, false, [
+  [
+    0,
+    {
+      [CH_CROUCH]: 0.02,
+      [CH_SWAY]: 0.024,
+      [CH_HPIT]: -0.04,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+    },
+  ],
+  [
+    0.3,
+    {
+      [CH_CROUCH]: 0.02,
+      [CH_SWAY]: 0.055,
+      [CH_LIST]: 0.02,
+      [CH_LEAN]: 0.045,
+      [CH_TWIST]: 0.1,
+      [CH_HPIT]: -0.08,
+      [CH_LABD]: 0.55,
+      [CH_LFWD]: 0.35,
+      [CH_LELB]: 2.4,
+      [CH_RABD]: 0.55,
+      [CH_RFWD]: 0.35,
+      [CH_RELB]: 2.4,
+      [CH_LIFTL]: 0.04,
+    },
+  ],
+  [
+    0.44,
+    {
+      [CH_CROUCH]: 0.05,
+      [CH_SWAY]: 0.04,
+      [CH_PITCH]: 0.06,
+      [CH_HPIT]: 0,
+      [CH_LABD]: 0.35,
+      [CH_LFWD]: 0.2,
+      [CH_LELB]: 1.0,
+      [CH_RABD]: 0.35,
+      [CH_RFWD]: 0.2,
+      [CH_RELB]: 1.0,
+      [CH_SWGL]: 0.55,
+      [CH_LIFTL]: 0.08,
+    },
+  ],
+  [
+    0.6,
+    {
+      [CH_CROUCH]: 0.12,
+      [CH_SWAY]: 0.008,
+      [CH_PITCH]: 0.13,
+      [CH_PELVZ]: 0.02,
+      [CH_TWIST]: 0.06,
+      [CH_HPIT]: 0.13,
+      [CH_LABD]: 0.22,
+      [CH_LFWD]: -0.34,
+      [CH_LELB]: 0.18,
+      [CH_LLOF]: -0.05,
+      [CH_RABD]: 0.22,
+      [CH_RFWD]: -0.34,
+      [CH_RELB]: 0.18,
+      [CH_RLOF]: -0.05,
+      [CH_SWGL]: 1,
+      [CH_LIFTL]: 0,
+    },
+  ],
+  [
+    0.72,
+    {
+      [CH_CROUCH]: 0.095,
+      [CH_PITCH]: 0.09,
+      [CH_HPIT]: 0.02,
+      [CH_LABD]: 0.2,
+      [CH_LFWD]: -0.38,
+      [CH_LELB]: 0.15,
+      [CH_RABD]: 0.2,
+      [CH_RFWD]: -0.38,
+      [CH_RELB]: 0.15,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.05,
+      [CH_PITCH]: 0,
+      [CH_HPIT]: -0.09,
+      [CH_LABD]: 0.3,
+      [CH_LFWD]: 0.24,
+      [CH_LELB]: 2.2,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0.24,
+      [CH_RELB]: 2.2,
+      [CH_SWGL]: 1,
+    },
+  ],
+  [
+    1,
+    {
+      [CH_CROUCH]: 0.038,
+      [CH_HPIT]: -0.02,
+      [CH_LABD]: 0.32,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.5,
+      [CH_RABD]: 0.32,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+      [CH_SWGL]: 1,
+    },
+  ],
+]);
+
+/** STEP_U variant — a single skyward reach: LEFT arm shoots straight up while
+ *  the right fist stays cocked at the hip, chest open, chin thrown up. The
+ *  asymmetry keeps back-to-back Up arrows from strobing the same V pose.
+ *  Canonical right foot. */
+const STEP_U_B = makeClip(1.5, 0.6, false, [
+  [
+    0,
+    {
+      [CH_CROUCH]: 0.04,
+      [CH_SWAY]: -0.02,
+      [CH_PITCH]: 0.03,
+      [CH_HPIT]: 0.04,
+      [CH_LABD]: 0.3,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.4,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.4,
+    },
+  ],
+  [
+    0.3,
+    {
+      [CH_CROUCH]: 0.06,
+      [CH_SWAY]: -0.055,
+      [CH_LIST]: -0.02,
+      [CH_PITCH]: 0.09,
+      [CH_LEAN]: -0.03,
+      [CH_HPIT]: 0.11,
+      [CH_LABD]: 0.18,
+      [CH_LFWD]: -0.3,
+      [CH_LELB]: 0.35,
+      [CH_LLOF]: -0.05,
+      [CH_RABD]: 0.2,
+      [CH_RFWD]: -0.26,
+      [CH_RELB]: 0.4,
+      [CH_RLOF]: 0,
+      [CH_LIFTR]: 0.035,
+    },
+  ],
+  [
+    0.45,
+    {
+      [CH_CROUCH]: 0.02,
+      [CH_SWAY]: -0.04,
+      [CH_PITCH]: 0,
+      [CH_HPIT]: -0.04,
+      [CH_LABD]: 0.9,
+      [CH_LELB]: 0.3,
+      [CH_RABD]: 1.4,
+      [CH_RELB]: 0.3,
+      [CH_SWGR]: 0.55,
+      [CH_LIFTR]: 0.09,
+    },
+  ],
+  [
+    0.6,
+    {
+      [CH_CROUCH]: -0.015,
+      [CH_SWAY]: -0.02,
+      [CH_PITCH]: -0.08,
+      [CH_PELVZ]: -0.02,
+      [CH_TWIST]: 0.14,
+      [CH_LEAN]: 0.06,
+      [CH_HPIT]: -0.18,
+      [CH_HYAW]: 0.08,
+      [CH_HROLL]: 0.06,
+      [CH_LABD]: 3.1,
+      [CH_LFWD]: 0.12,
+      [CH_LELB]: 0.05,
+      [CH_LLOF]: 0.05,
+      [CH_RABD]: 0.15,
+      [CH_RFWD]: -0.18,
+      [CH_RELB]: 0.9,
+      [CH_RLOF]: 0.2,
+      [CH_SWGR]: 1,
+      [CH_LIFTR]: 0,
+    },
+  ],
+  [
+    0.72,
+    {
+      [CH_CROUCH]: -0.005,
+      [CH_PITCH]: -0.06,
+      [CH_TWIST]: 0.1,
+      [CH_LEAN]: 0.05,
+      [CH_HPIT]: -0.14,
+      [CH_LABD]: 3.2,
+      [CH_LELB]: 0.03,
+      [CH_RABD]: 0.15,
+      [CH_RFWD]: -0.15,
+      [CH_RELB]: 0.95,
+      [CH_SWGR]: 1,
+    },
+  ],
+  [
+    0.85,
+    {
+      [CH_CROUCH]: 0.03,
+      [CH_PITCH]: -0.02,
+      [CH_HPIT]: -0.05,
+      [CH_LABD]: 2.0,
+      [CH_LELB]: 0.4,
+      [CH_RABD]: 0.3,
+      [CH_RELB]: 1.0,
+      [CH_SWGR]: 1,
+    },
+  ],
+  [
+    1,
+    {
+      [CH_CROUCH]: 0.042,
+      [CH_SWAY]: -0.02,
+      [CH_LABD]: 0.34,
+      [CH_LFWD]: 0.32,
+      [CH_LELB]: 2.3,
+      [CH_LLOF]: 0.45,
+      [CH_RABD]: 0.3,
+      [CH_RFWD]: 0.32,
+      [CH_RELB]: 2.3,
+      [CH_RLOF]: 0.45,
+      [CH_SWGR]: 1,
+    },
+  ],
+]);
+
+/** Right-side B variant = exact mirror of the left one. */
+const STEP_R_B = mirrorClip(STEP_L_B);
+
 /** The clip registry. Indices are stable (players store an index). */
-const CLIPS: readonly Clip[] = [IDLE, STEP_L, STEP_D, STEP_U, STEP_R, JUMP, FLOURISH];
+const CLIPS: readonly Clip[] = [
+  IDLE,
+  STEP_L,
+  STEP_D,
+  STEP_U,
+  STEP_R,
+  JUMP,
+  FLOURISH,
+  STEP_L_B,
+  STEP_D_B,
+  STEP_U_B,
+  STEP_R_B,
+];
 const CLIP_JUMP = 5;
 const CLIP_FLOURISH = 6;
-/** Panel (0=L,1=D,2=U,3=R) → step clip index. */
+/** Panel (0=L,1=D,2=U,3=R) → step clip index, per styling variant. Both
+ *  variants share beats/impact, so the scheduler can pick either freely. */
 const PANEL_CLIP: readonly number[] = [1, 2, 3, 4];
+const PANEL_CLIP_B: readonly number[] = [7, 8, 9, 10];
 /** Canonical stepping foot per clip (-1 = none/both). */
-const CLIP_FOOT: readonly number[] = [-1, 0, 0, 1, 1, -1, -1];
+const CLIP_FOOT: readonly number[] = [-1, 0, 0, 1, 1, -1, -1, 0, 0, 1, 1];
 
 // ---- chart step type -----------------------------------------------------------
 
@@ -1059,6 +1652,23 @@ const N_PLAYERS = 6;
 const FADE_IN = 0.18;
 const FADE_OUT = 0.25;
 
+/** Channels run through the post-blend follow-through springs: the head and
+ *  both arms — the parts that whip fastest between clip poses and sell
+ *  secondary motion when they carry a little past the target. */
+const SMOOTH_CH: readonly number[] = [
+  CH_HYAW,
+  CH_HPIT,
+  CH_HROLL,
+  CH_LABD,
+  CH_LFWD,
+  CH_LELB,
+  CH_LLOF,
+  CH_RABD,
+  CH_RFWD,
+  CH_RELB,
+  CH_RLOF,
+];
+
 // ---- dance pad ----------------------------------------------------------------
 // A 4-panel + laid FLAT on the floor plane (world y = FOOT_Y), each panel
 // centered on the SAME 3D spot the corresponding foot steps to, so a planted
@@ -1136,6 +1746,7 @@ export class AttractDancer {
   private synthSched = -1e9;
   private lastFlourish = -1e9;
   private lastFoot = 1; // which foot stepped last (alternation for U/D)
+  private stepAlt = 0; // A/B styling alternator (toggles every single-foot step)
 
   // ---- feet (3D plants + active swing ownership; 0 = left, 1 = right) ----
   private readonly plantX = new Float64Array(2); // committed plant (x, z)
@@ -1167,11 +1778,12 @@ export class AttractDancer {
   private armFarLeft = true;
   private legFarLeft = true;
 
-  // ---- arm-channel follow-through smoothing (post-blend, critically damped
-  //      so the hands EASE and settle instead of snapping between clip poses;
-  //      8 channels LABD,LFWD,LELB,LLOF,RABD,RFWD,RELB,RLOF; NaN ⇒ snap) ----
-  private readonly armX = new Float32Array(8).fill(NaN);
-  private readonly armV = new Float32Array(8);
+  // ---- head+arm follow-through smoothing (post-blend, slightly UNDER-damped
+  //      springs so the hands and head carry a little past each clip pose and
+  //      settle — real follow-through, not just easing; SMOOTH_CH lists the
+  //      channels; NaN ⇒ snap) ----
+  private readonly armX = new Float32Array(SMOOTH_CH.length).fill(NaN);
+  private readonly armV = new Float32Array(SMOOTH_CH.length);
 
   // ---- hair / cloth secondary state (NaN = uninitialized, snaps to rest) ----
   private tailLX = NaN;
@@ -1301,6 +1913,7 @@ export class AttractDancer {
     this.lastFlourish = -1e9;
     this.hitBeat = -1e9;
     this.padFlash.fill(-1e9);
+    this.stepAlt = 0;
     this.armFarLeft = true;
     this.legFarLeft = true;
     this.plActive.fill(0);
@@ -1423,16 +2036,43 @@ export class AttractDancer {
       }
     }
 
-    // ---- 2b. arm follow-through: a critically-damped filter on the eight
-    //         arm channels. Cross-fades and clip changes can hand the arms a
-    //         fast-moving target; this makes the hands EASE toward it and
-    //         settle (secondary action) instead of snapping/stuttering — no
-    //         overshoot, framerate-independent, NaN-guarded. --------------
+    // ---- 2a. groove overlay: a small beat-locked pulse LAYERED over the
+    //         blend so she is never still — she drops into each count (crouch
+    //         + head dip + a nudge toward the camera, peaking exactly ON the
+    //         beat) while the hips/shoulders ride a 2-beat weight cycle.
+    //         Deliberately subtle: the clips carry the dance, this carries
+    //         the heartbeat (and it never touches the foot channels). ------
     {
-      const omega = 26; // rad/s natural frequency (~150ms settle)
-      const e = Math.exp(-omega * dt);
-      for (let k = 0; k < 8; k++) {
-        const target = acc[CH_LABD + k];
+      const gb = valid ? beat : time * 1.05; // lead-in: same pulse as idle
+      const gph = gb - Math.floor(gb);
+      const bop = 0.5 + 0.5 * Math.cos(gph * Math.PI * 2); // 1 ON the count
+      const lfo = Math.sin(gb * Math.PI); // 2-beat side-to-side cycle
+      acc[CH_CROUCH] += 0.014 * bop - 0.005;
+      acc[CH_HPIT] += 0.05 * bop - 0.02;
+      acc[CH_PELVZ] += 0.006 * bop;
+      acc[CH_SWAY] += lfo * 0.008;
+      acc[CH_LIST] += lfo * 0.006;
+      acc[CH_LEAN] += lfo * 0.02;
+      acc[CH_TWIST] -= lfo * 0.045;
+      acc[CH_HROLL] -= lfo * 0.028;
+    }
+
+    // ---- 2b. follow-through: slightly under-damped springs on the head and
+    //         arm channels. Cross-fades and clip changes hand these channels
+    //         fast-moving targets; the spring makes them WHIP toward the pose,
+    //         carry ~9% past it, and settle (secondary action / follow-
+    //         through) instead of snapping. Closed-form underdamped solution,
+    //         framerate-independent and NaN-guarded. ----------------------
+    {
+      const zeta = 0.6; // damping ratio (<1 ⇒ a small, quick overshoot)
+      const omega = 26; // rad/s natural frequency (~150ms to the pose)
+      const wd = omega * Math.sqrt(1 - zeta * zeta);
+      const e = Math.exp(-zeta * omega * dt);
+      const cw = Math.cos(wd * dt);
+      const sw = Math.sin(wd * dt);
+      for (let k = 0; k < SMOOTH_CH.length; k++) {
+        const chI = SMOOTH_CH[k];
+        const target = acc[chI];
         let x = this.armX[k];
         let vel = this.armV[k];
         if (!Number.isFinite(x) || !Number.isFinite(vel)) {
@@ -1440,11 +2080,12 @@ export class AttractDancer {
           vel = 0;
         }
         const dsp = x - target;
-        const nx = target + (dsp + (vel + omega * dsp) * dt) * e;
-        const nv = (vel - (vel + omega * dsp) * omega * dt) * e;
+        const bC = (vel + zeta * omega * dsp) / wd;
+        const nx = target + e * (dsp * cw + bC * sw);
+        const nv = e * (vel * cw - (zeta * omega * bC + wd * dsp) * sw);
         this.armX[k] = Number.isFinite(nx) ? nx : target;
         this.armV[k] = Number.isFinite(nv) ? nv : 0;
-        acc[CH_LABD + k] = this.armX[k];
+        acc[chI] = this.armX[k];
       }
     }
 
@@ -1680,7 +2321,10 @@ export class AttractDancer {
       else if (panel === 3) foot = 1;
       else foot = 1 - this.lastFoot;
     }
-    const clipIdx = PANEL_CLIP[panel];
+    // Alternate the two stylings per step so repeated arrows don't loop one
+    // gesture (deterministic: the toggle resets with the chart cursors).
+    const clipIdx = (this.stepAlt === 0 ? PANEL_CLIP : PANEL_CLIP_B)[panel];
+    this.stepAlt ^= 1;
     const clip = CLIPS[clipIdx];
     const mirrored = foot !== CLIP_FOOT[clipIdx];
     // Crossover: the foot targets the opposite side's panel — flag the
