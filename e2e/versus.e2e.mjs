@@ -31,7 +31,7 @@ const skip = (name, why) => console.log(`SKIP ${name} — ${why}`);
  *  `hasGpu` probe passes and single-field gameplay runs — yet lose the device
  *  once two headless pages render rival fields at once. That's an environment
  *  limit, not a regression, so we SKIP those legs (like an absent adapter). The
- *  app announces the loss with its own RENDERING FAILED banner; a bar-stream
+ *  app announces the loss with its own RENDERING FAILED banner; a snapshot-stream
  *  miss WITHOUT that banner is a real failure and still fails. */
 class GpuLostSkip extends Error {}
 
@@ -45,7 +45,7 @@ const bannerShowing = async (pages) =>
 
 /** Poll briefly for the WebGPU-lost banner (it can take a moment to paint after
  *  the device drops), so a device loss is recognised as an environment skip
- *  rather than mistaken for a bar-stream regression. */
+ *  rather than mistaken for a snapshot-stream regression. */
 const renderLost = async (pages, ms = 5000) => {
   const deadline = Date.now() + ms;
   do {
@@ -225,9 +225,11 @@ try {
     });
     step('gameplay clock advances', advanced);
 
-    // 7. The live rival bars stream on both screens. Generous timeout —
-    // two headless WebGPU sessions can run single-digit FPS on CI-ish
-    // machines; dump the visible text on failure so a miss is diagnosable.
+    // 7. Each peer's live snapshot streams into the other's room state — the
+    // data the fields draw from and the standings tally (the in-play rival
+    // overlay was removed). Generous timeout: two headless WebGPU sessions can
+    // run single-digit FPS on CI-ish machines. Dump the room roster on failure
+    // so a miss is diagnosable.
     let barsOk = true;
     let barDump = '';
     for (const [page, rival] of [
@@ -235,16 +237,28 @@ try {
       [bravo, 'ALPHA'],
     ]) {
       const ok = await page
-        .waitForFunction((r) => new RegExp(`${r} .*%`).test(document.body.innerText), rival, {
-          timeout: 30_000,
-        })
+        .waitForFunction(
+          (r) => {
+            const room = window.__nfRoom;
+            const p = room && room.players.find((x) => x.name === r);
+            return !!(p && p.snap);
+          },
+          rival,
+          { timeout: 30_000 },
+        )
         .then(
           () => true,
           () => false,
         );
       if (!ok) {
         barsOk = false;
-        barDump += ` | ${rival}'s screen: ${JSON.stringify((await bodyText(page)).slice(0, 200))}`;
+        const roster = await page.evaluate(() => {
+          const r = window.__nfRoom;
+          return r
+            ? r.players.map((p) => ({ name: p.name, snap: p.snap, result: p.result, left: p.left }))
+            : null;
+        });
+        barDump += ` | ${rival}'s room: ${JSON.stringify(roster).slice(0, 200)}`;
       }
     }
     // A miss because this environment's WebGPU device was lost (the app shows
@@ -253,7 +267,7 @@ try {
     if (!barsOk && (await renderLost([alpha, bravo]))) {
       throw new GpuLostSkip('WebGPU device lost under the two-page versus render (no GPU here)');
     }
-    step('rival bars stream live on both machines', barsOk, barDump);
+    step('rival snapshots stream into room state on both machines', barsOk, barDump);
 
     // 7b. Arcade 2P: ONE canvas renders both players' fields (uniform shared
     // background); the session exposes the rival view for testing.
@@ -272,9 +286,16 @@ try {
     // finish on the bar and keeps playing; BRAVO lands back on song select
     // with the room dock still up.
     await quitSong(bravo);
-    await alpha.waitForFunction(() => /BRAVO .*(DONE|FAIL)/.test(document.body.innerText), null, {
-      timeout: 15_000,
-    });
+    // ALPHA sees BRAVO's DNF land in room state (the quitter's result/done is
+    // set), and keeps playing — the quit ends BRAVO's leg, not the room.
+    await alpha.waitForFunction(
+      () => {
+        const p = window.__nfRoom?.players.find((x) => x.name === 'BRAVO');
+        return !!(p && (p.result || p.done || p.left));
+      },
+      null,
+      { timeout: 15_000 },
+    );
     const stillPlaying = await alpha.evaluate(() => window.__nfSession.songNow > 0);
     step('a quit shows as a DNF while the local game keeps running', stillPlaying);
     await bravo.waitForFunction(
@@ -452,7 +473,10 @@ try {
   step('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   if (err instanceof GpuLostSkip) {
-    skip('gameplay rendering legs (rival bars, dual field, DNF, transfer, standings)', err.message);
+    skip(
+      'gameplay rendering legs (rival snapshots, dual field, DNF, transfer, standings)',
+      err.message,
+    );
     // The device loss itself logs WebGPU errors — ignore those, still flag any
     // unrelated page error so real regressions in the legs that DID run surface.
     const other = pageErrors.filter((e) => !/webgpu|gpu|device.*lost|adapter/i.test(e));

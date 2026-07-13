@@ -705,6 +705,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
     if (import.meta.env.DEV) {
       (window as unknown as { __nfSession?: GameSession }).__nfSession = session;
+      // The live room peer, so tests can observe rival progress/DNF from room
+      // state (what the end-of-song standings render) now that the in-play
+      // rival overlay is gone. Null in solo/practice.
+      (window as unknown as { __nfRoom?: unknown }).__nfRoom = req.versus?.room ?? null;
     }
     setResult(null);
     // Keep the LOADING splash up through GPU init + audio decode + prewarm, and
