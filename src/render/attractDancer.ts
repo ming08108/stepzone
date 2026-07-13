@@ -571,8 +571,8 @@ const STEP_L = makeClip(1.5, 0.6, false, [
       [CH_HPIT]: 0.04,
       [CH_LABD]: 1.75,
       [CH_LFWD]: 0.06,
-      [CH_LELB]: 0.28,
-      [CH_LLOF]: 0.08,
+      [CH_LELB]: 0.48, // soft C-curve at full reach, never a ruler
+      [CH_LLOF]: 0.16,
       [CH_RABD]: 0.2,
       [CH_RFWD]: 0.42,
       [CH_RELB]: 2.4,
@@ -594,8 +594,8 @@ const STEP_L = makeClip(1.5, 0.6, false, [
       [CH_HROLL]: -0.07,
       [CH_LABD]: 1.9,
       [CH_LFWD]: 0.04,
-      [CH_LELB]: 0.15,
-      [CH_LLOF]: 0.04,
+      [CH_LELB]: 0.36, // keeps the curve through the follow-through
+      [CH_LLOF]: 0.12,
       [CH_RABD]: 0.16,
       [CH_RFWD]: 0.38,
       [CH_RELB]: 2.5,
@@ -721,12 +721,12 @@ const STEP_U = makeClip(1.5, 0.6, false, [
       [CH_HROLL]: 0.05,
       [CH_LABD]: 2.95,
       [CH_LFWD]: 0.08,
-      [CH_LELB]: 0.1,
-      [CH_LLOF]: 0.05,
+      [CH_LELB]: 0.34, // overhead reach curves, doesn't lock
+      [CH_LLOF]: 0.12,
       [CH_RABD]: 2.45,
       [CH_RFWD]: 0.12,
-      [CH_RELB]: 0.28,
-      [CH_RLOF]: 0.1,
+      [CH_RELB]: 0.44,
+      [CH_RLOF]: 0.14,
       [CH_SWGR]: 1,
       [CH_LIFTR]: 0,
     },
@@ -739,9 +739,9 @@ const STEP_U = makeClip(1.5, 0.6, false, [
       [CH_HPIT]: -0.16,
       [CH_HROLL]: 0.03,
       [CH_LABD]: 3.05,
-      [CH_LELB]: 0.08,
+      [CH_LELB]: 0.3,
       [CH_RABD]: 2.6,
-      [CH_RELB]: 0.22,
+      [CH_RELB]: 0.4,
       [CH_SWGR]: 1,
     },
   ],
@@ -955,11 +955,11 @@ const JUMP = makeClip(1.7, 0.65, false, [
       [CH_PITCH]: -0.06,
       [CH_HPIT]: -0.13,
       [CH_LABD]: 2.55,
-      [CH_LELB]: 0.18,
-      [CH_LLOF]: 0.05,
+      [CH_LELB]: 0.34,
+      [CH_LLOF]: 0.1,
       [CH_RABD]: 2.55,
-      [CH_RELB]: 0.18,
-      [CH_RLOF]: 0.05,
+      [CH_RELB]: 0.34,
+      [CH_RLOF]: 0.1,
       [CH_SWGL]: 0.7,
       [CH_SWGR]: 0.7,
       [CH_LIFTL]: 0.095,
@@ -1083,7 +1083,7 @@ const FLOURISH = makeClip(2, 0, false, [
       [CH_HYAW]: 0.2,
       [CH_HROLL]: -0.07,
       [CH_LABD]: 2.45,
-      [CH_LELB]: 0.18,
+      [CH_LELB]: 0.36,
       [CH_RABD]: 0.5,
       [CH_RELB]: 0.6,
     },
@@ -1451,8 +1451,8 @@ const STEP_U_B = makeClip(1.5, 0.6, false, [
       [CH_HROLL]: 0.06,
       [CH_LABD]: 3.1,
       [CH_LFWD]: 0.12,
-      [CH_LELB]: 0.05,
-      [CH_LLOF]: 0.05,
+      [CH_LELB]: 0.32, // the skyward reach is a curve, not a flagpole
+      [CH_LLOF]: 0.12,
       [CH_RABD]: 0.15,
       [CH_RFWD]: -0.18,
       [CH_RELB]: 0.9,
@@ -1470,7 +1470,7 @@ const STEP_U_B = makeClip(1.5, 0.6, false, [
       [CH_LEAN]: 0.05,
       [CH_HPIT]: -0.14,
       [CH_LABD]: 3.2,
-      [CH_LELB]: 0.03,
+      [CH_LELB]: 0.28,
       [CH_RABD]: 0.15,
       [CH_RFWD]: -0.15,
       [CH_RELB]: 0.95,
@@ -1668,6 +1668,26 @@ const SMOOTH_CH: readonly number[] = [
   CH_RELB,
   CH_RLOF,
 ];
+
+/** Per-channel spring tuning, parallel to SMOOTH_CH. The arm chain is
+ *  deliberately STAGGERED down the limb — the shoulder channels (ABD/FWD) are
+ *  stiff and settle first, the elbow is softer and trails them, and the
+ *  forearm offset (LOF) is softest of all — so on every pose change the upper
+ *  arm leads, the forearm whips in after it and settles with a small
+ *  overshoot (lead-and-lag / follow-through) instead of the whole arm
+ *  arriving at once as one rigid unit. */
+// prettier-ignore
+const SPRING_ZETA = new Float32Array([
+  0.6, 0.6, 0.6,        // head yaw/pitch/roll (unchanged feel)
+  0.7, 0.7, 0.5, 0.42,  // L: abd, fwd, elbow, forearm
+  0.7, 0.7, 0.5, 0.42,  // R: abd, fwd, elbow, forearm
+]);
+// prettier-ignore
+const SPRING_OMEGA = new Float32Array([
+  26, 26, 26,
+  28, 28, 18, 14,
+  28, 28, 18, 14,
+]);
 
 // ---- dance pad ----------------------------------------------------------------
 // A 4-panel + laid FLAT on the floor plane (world y = FOOT_Y), each panel
@@ -2055,6 +2075,17 @@ export class AttractDancer {
       acc[CH_LEAN] += lfo * 0.02;
       acc[CH_TWIST] -= lfo * 0.045;
       acc[CH_HROLL] -= lfo * 0.028;
+      // Arm breathing: elbows squeeze a touch INTO each count and release
+      // through the "and" (slightly out of phase left/right off the weight
+      // cycle), the whole arm floating on the same pulse — so elbow flexion
+      // is always moving across the beat instead of parking at a clip's fixed
+      // angle. Runs BEFORE the follow-through springs, which round it off.
+      acc[CH_LELB] += 0.1 * bop - 0.04 + lfo * 0.03;
+      acc[CH_RELB] += 0.1 * bop - 0.04 - lfo * 0.03;
+      acc[CH_LABD] += 0.022 * bop - 0.008;
+      acc[CH_RABD] += 0.022 * bop - 0.008;
+      acc[CH_LFWD] += 0.03 * bop - 0.012;
+      acc[CH_RFWD] += 0.03 * bop - 0.012;
     }
 
     // ---- 2b. follow-through: slightly under-damped springs on the head and
@@ -2064,13 +2095,13 @@ export class AttractDancer {
     //         through) instead of snapping. Closed-form underdamped solution,
     //         framerate-independent and NaN-guarded. ----------------------
     {
-      const zeta = 0.6; // damping ratio (<1 ⇒ a small, quick overshoot)
-      const omega = 26; // rad/s natural frequency (~150ms to the pose)
-      const wd = omega * Math.sqrt(1 - zeta * zeta);
-      const e = Math.exp(-zeta * omega * dt);
-      const cw = Math.cos(wd * dt);
-      const sw = Math.sin(wd * dt);
       for (let k = 0; k < SMOOTH_CH.length; k++) {
+        const zeta = SPRING_ZETA[k]; // <1 ⇒ a small overshoot, per channel
+        const omega = SPRING_OMEGA[k]; // rad/s — stiff shoulders, soft wrists
+        const wd = omega * Math.sqrt(1 - zeta * zeta);
+        const e = Math.exp(-zeta * omega * dt);
+        const cw = Math.cos(wd * dt);
+        const sw = Math.sin(wd * dt);
         const chI = SMOOTH_CH[k];
         const target = acc[chI];
         let x = this.armX[k];
@@ -2087,6 +2118,23 @@ export class AttractDancer {
         this.armV[k] = Number.isFinite(nv) ? nv : 0;
         acc[chI] = this.armX[k];
       }
+    }
+
+    // ---- 2c. torso follows the reach: couple a little lean/pitch to the
+    //         SPRUNG arm heights, so a big reach pulls the shoulder line and
+    //         chest with it (and trails it, since the source is post-spring)
+    //         instead of the arm hinging off a statically pinned socket.
+    //         Tiny by design — the clips author the real body line, this just
+    //         keeps the socket alive through transitions. -------------------
+    {
+      const la = acc[CH_LABD];
+      const ra = acc[CH_RABD];
+      // Asymmetric reach ⇒ lean toward the high arm (left arm high ⇒ lean
+      // screen-left, matching the clips' authored sign convention).
+      acc[CH_LEAN] += (ra - la) * 0.02;
+      // Both arms high (overhead V / skyward) ⇒ the chest opens back.
+      const rise = Math.max(0, (la + ra) * 0.5 - 1.1);
+      acc[CH_PITCH] -= rise * 0.035;
     }
 
     // ---- 3. foot kinematics: locked plants + owned swings -------------------
@@ -2558,7 +2606,15 @@ export class AttractDancer {
       const sgn = f === 0 ? -1 : 1;
       const abd = clamp(ch[f === 0 ? CH_LABD : CH_RABD], -0.6, 3.3);
       const fw = clamp(ch[f === 0 ? CH_LFWD : CH_RFWD], -1.2, 1.2);
-      const elb = clamp(ch[f === 0 ? CH_LELB : CH_RELB], -0.5, 2.6);
+      let elb = clamp(ch[f === 0 ? CH_LELB : CH_RELB], -0.5, 2.6);
+      // Soft elbow — the anti-mannequin rule: a human arm never locks dead
+      // straight, so blend in a residual bend that peaks (+0.26 rad) exactly
+      // where the channel would flatten the arm into a ruler and fades out
+      // quadratically by |elb|=0.68. Continuous everywhere (no snap when a
+      // blend sweeps through zero), and intentional bends pass untouched, so
+      // "straight" reaches render as a soft C-curve.
+      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.68), 1);
+      elb += 0.26 * straight * straight;
       const lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
       const soI = f === 0 ? SHL : SHR;
       const elI = f === 0 ? ELL : ELR;
