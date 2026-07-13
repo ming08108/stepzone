@@ -33,3 +33,7 @@ todos*.txt
 robot-test.html
 vrm-test.html
 .*.mjs
+
+# Licensed-character models (e.g. real Hatsune Miku) — local use only, never
+# committed; the character's license (Crypton Piapro) restricts redistribution.
+public/models/Miku*.vrm
