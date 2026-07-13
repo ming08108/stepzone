@@ -110,11 +110,13 @@ export function Options({
   onCalibrate,
   onBenchmark,
   onInputTest,
+  onDancerTest,
 }: {
   onBack: () => void;
   onCalibrate: () => void;
   onBenchmark: () => void;
   onInputTest: () => void;
+  onDancerTest: () => void;
 }) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -410,6 +412,18 @@ export function Options({
               </button>
               <span className="text-[12px] text-[#ececec]/55">
                 controller update rate + timing granularity
+              </span>
+            </Row>
+            <Row label="DANCER TEST">
+              <button
+                onClick={onDancerTest}
+                className="border px-4 py-1.5 text-[13px] tracking-wide"
+                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
+              >
+                Drive the dancer ▸
+              </button>
+              <span className="text-[12px] text-[#ececec]/55">
+                arrow keys step the attract dancer (also at ?dancer)
               </span>
             </Row>
           </Section>

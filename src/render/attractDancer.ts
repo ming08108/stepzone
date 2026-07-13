@@ -1276,6 +1276,16 @@ export class AttractDancer {
     this.rewind();
   }
 
+  /** Live-inject a step (the keyboard test mode). Appended at/after the last
+   *  step's beat so the forward scheduler cursors stay valid — no rewind, so
+   *  the groove/springs don't reset. cols = L/D/U/R mask; lCol/rCol = foot
+   *  panels (or -1 to let the heuristic pick the foot). */
+  pushStep(atBeat: number, cols: number, lCol: number, rCol: number): void {
+    const last = this.steps.length ? this.steps[this.steps.length - 1].beat : -Infinity;
+    const beat = Math.max(atBeat, last + 1e-3);
+    this.steps = [...this.steps, { beat, cols, lCol, rCol }];
+  }
+
   /** The solved 3D skeleton after the most recent build() — [x,y,z] per joint
    *  (design space: x right, y DOWN, z toward viewer). Indexed by
    *  DANCER_SKELETON. For retargeting our animation onto a real model. */

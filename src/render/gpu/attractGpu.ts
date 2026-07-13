@@ -503,6 +503,11 @@ export class AttractGpu {
     this.modelRecolored = false; // re-apply the palette to the model
   }
 
+  /** Live-inject a dance step (keyboard test mode). */
+  pushStep(atBeat: number, cols: number, lCol: number, rCol: number): void {
+    this.dancer?.pushStep(atBeat, cols, lCol, rCol);
+  }
+
   /** Grow (or lazily create) a vertex buffer to hold `arr`. */
   private ensureVB(buf: GPUBuffer | null, arr: Float32Array): GPUBuffer {
     if (buf && buf.size >= arr.byteLength) return buf;

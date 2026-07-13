@@ -358,6 +358,11 @@ export class GpuNoteField {
     }
   }
 
+  /** Live-inject a dance step into the attract dancer (keyboard test mode). */
+  pushAttractStep(atBeat: number, cols: number, lCol: number, rCol: number): void {
+    this.attract?.pushStep(atBeat, cols, lCol, rCol);
+  }
+
   /** Per-beat elapsed times (see beatTimes()) enabling the guide-line pass;
    *  null turns beat lines off. */
   setBeatTimes(times: Float64Array | null): void {
