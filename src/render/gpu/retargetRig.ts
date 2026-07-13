@@ -95,8 +95,15 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
   { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
   { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
+  // The clavicle follows the arm PARTWAY (low damp) so a raised arm doesn't
+  // concentrate the whole bend at the deltoid — that linear-blend-skinning pinch
+  // is what distorts the shoulder. It's aimed at the same target as the upper arm
+  // but only ~30%, so the socket elevates a little to spread the deformation
+  // without the over-reach a full clavicle aim caused (the old compounding bug).
+  { bone: 'leftShoulder', restChild: 'leftUpperArm', from: 'shoulderR', to: 'elbowR', damp: 0.3 },
   { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderR', to: 'elbowR' },
   { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowR', to: 'handR' },
+  { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderL', to: 'elbowL', damp: 0.3 },
   { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderL', to: 'elbowL' },
   { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowL', to: 'handL' },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
