@@ -22,6 +22,9 @@ const LOOKAHEAD = 0.28; // beats of wind-up before a keyed step lands
 
 export function DancerTest({ onExit }: { onExit: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // `?dancer&model=0` forces the light procedural dancer (skips the 3D avatar) —
+  // handy for eyeballing the source animation itself, apart from retargeting.
+  const useModel = new URLSearchParams(location.search).get('model') !== '0';
 
   useEffect(() => {
     const canvas = ref.current;
@@ -67,7 +70,7 @@ export function DancerTest({ onExit }: { onExit: () => void }) {
         e.preventDefault();
       } else if (e.key === 'v' || e.key === 'V') {
         variant = (variant + 1) % 4;
-        gpuField.setAttract({ variant, steps: [] });
+        gpuField.setAttract({ variant, steps: [], model: useModel });
       } else if (PANELS[e.key]) {
         const p = PANELS[e.key];
         gpuField.pushAttractStep(at, p.cols, p.l, p.r);
@@ -98,7 +101,7 @@ export function DancerTest({ onExit }: { onExit: () => void }) {
         gpuField = null;
         return;
       }
-      gpuField.setAttract({ variant, steps: [] });
+      gpuField.setAttract({ variant, steps: [], model: useModel });
       resize();
       ro = new ResizeObserver(() => resize());
       ro.observe(canvas);
@@ -112,7 +115,7 @@ export function DancerTest({ onExit }: { onExit: () => void }) {
       ro?.disconnect();
       gpuField?.destroy();
     };
-  }, [onExit]);
+  }, [onExit, useModel]);
 
   return (
     <div className="fixed inset-0 z-50 bg-black">

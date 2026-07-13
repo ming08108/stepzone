@@ -554,10 +554,12 @@ export class AttractGpu {
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     this.dancer.build(now, b); // solves the 3D skeleton (skel3)
     model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
-    // The VRM avatar keeps its own textures (a flat recolor would wash them
-    // out); the neon scene + dim carry the mood. Only the dim tint is applied.
-    const k = Math.max(0, 1 - Math.max(0, Math.min(1, dim))); // match the bg dim
-    model.setTint(k, k, k);
+    // The dancer is the STAR of the attract scene, not a background element —
+    // keep her vivid and full-bright (with a slight boost so she pops off the
+    // dimmed tunnel) regardless of the field's bg dim. Dimming her down was what
+    // turned the face into a murky, hollow-eyed smudge in-game.
+    void dim;
+    model.setTint(1.12, 1.12, 1.12);
     // Dynamic camera: a slow orbit + gentle breathe, with an on-beat push-in,
     // around the framed model. (The background shader sways to match.)
     const c = model.center;

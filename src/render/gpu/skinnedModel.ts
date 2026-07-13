@@ -73,24 +73,30 @@ interface BoneChain {
   from: string;
   to: string;
   damp?: number;
+  /** Hold the bone's bind WORLD orientation instead of aiming — the foot stays
+   *  level (sole down) rather than inheriting the shin's tilt and pointing its
+   *  toe at the floor. `from`/`to`/`restChild` are ignored when set. */
+  hold?: boolean;
 }
 const BONE_CHAINS: readonly BoneChain[] = [
-  { bone: 'Hips', restChild: 'Abdomen', from: 'pelvis', to: 'chest' },
+  // One aiming bone per segment (see VRM_CHAINS): never two in-series bones at
+  // the same target, which compounds rotations and stretches/crosses the limb.
+  // Hips and the clavicles stay at bind and inherit their parent's rotation.
   { bone: 'Abdomen', restChild: 'Torso', from: 'pelvis', to: 'chest' },
   { bone: 'Torso', restChild: 'Neck', from: 'chest', to: 'neck' },
   // Neck follows the head but damped; the Head bone stays rigid to the neck so
   // the head reads upright instead of cocking on the tiny neck→head segment.
   { bone: 'Neck', restChild: 'Head', from: 'neck', to: 'head', damp: 0.5 },
-  { bone: 'Shoulder.L', restChild: 'UpperArm.L', from: 'shoulderL', to: 'elbowL' },
   { bone: 'UpperArm.L', restChild: 'LowerArm.L', from: 'shoulderL', to: 'elbowL' },
   { bone: 'LowerArm.L', restChild: 'Palm2.L', from: 'elbowL', to: 'handL' },
-  { bone: 'Shoulder.R', restChild: 'UpperArm.R', from: 'shoulderR', to: 'elbowR' },
   { bone: 'UpperArm.R', restChild: 'LowerArm.R', from: 'shoulderR', to: 'elbowR' },
   { bone: 'LowerArm.R', restChild: 'Palm2.R', from: 'elbowR', to: 'handR' },
   { bone: 'UpperLeg.L', restChild: 'LowerLeg.L', from: 'hipL', to: 'kneeL' },
   { bone: 'LowerLeg.L', restChild: 'LowerLeg.L_end', from: 'kneeL', to: 'footL' },
+  { bone: 'Foot.L', restChild: 'Foot.L', from: 'footL', to: 'footL', hold: true },
   { bone: 'UpperLeg.R', restChild: 'LowerLeg.R', from: 'hipR', to: 'kneeR' },
   { bone: 'LowerLeg.R', restChild: 'LowerLeg.R_end', from: 'kneeR', to: 'footR' },
+  { bone: 'Foot.R', restChild: 'Foot.R', from: 'footR', to: 'footR', hold: true },
 ];
 
 /**
@@ -100,21 +106,25 @@ const BONE_CHAINS: readonly BoneChain[] = [
  * (not IK-pinned), so aiming lowerLeg→foot already steps them.
  */
 const VRM_CHAINS: readonly BoneChain[] = [
-  { bone: 'hips', restChild: 'spine', from: 'pelvis', to: 'chest' },
+  // One bone per body segment — never two in-series bones aimed at the SAME
+  // target. Aiming, say, both the clavicle and the upper arm at the elbow
+  // COMPOUNDS their rotations (the clavicle swings out, then the arm swings
+  // again from there), which displaces and visually stretches the limb at the
+  // joint. So the clavicles (shoulder) and upperChest stay at bind and simply
+  // inherit their parent's rotation; the real segment bone does the aiming.
   { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
   { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
-  { bone: 'upperChest', restChild: 'neck', from: 'chest', to: 'neck' },
   { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
-  { bone: 'leftShoulder', restChild: 'leftUpperArm', from: 'shoulderL', to: 'elbowL' },
   { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderL', to: 'elbowL' },
   { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowL', to: 'handL' },
-  { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderR', to: 'elbowR' },
   { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderR', to: 'elbowR' },
   { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowR', to: 'handR' },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL' },
   { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL' },
+  { bone: 'leftFoot', restChild: 'leftFoot', from: 'footL', to: 'footL', hold: true },
   { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR' },
   { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR' },
+  { bone: 'rightFoot', restChild: 'rightFoot', from: 'footR', to: 'footR', hold: true },
 ];
 
 /** A resolved retarget bone: node + palette slot + precomputed rest aim dir. */
@@ -125,6 +135,7 @@ interface RetargetBone {
   from: string;
   to: string;
   damp: number; // 1 = full aim, <1 steadies toward rest
+  hold: boolean; // hold bind world orientation (level foot) instead of aiming
 }
 
 interface GpuPrimitive {
@@ -431,17 +442,19 @@ export class SkinnedModel {
       if (node < 0) continue;
       const palette = paletteOfNode.get(node);
       if (palette === undefined) continue; // bone must be a skin joint
-      const child = resolveChild(node, chain.restChild);
-      if (child < 0) continue;
       const dir = new Float32Array(3);
-      dir[0] = bindGlobals[child * 16 + 12] - bindGlobals[node * 16 + 12];
-      dir[1] = bindGlobals[child * 16 + 13] - bindGlobals[node * 16 + 13];
-      dir[2] = bindGlobals[child * 16 + 14] - bindGlobals[node * 16 + 14];
-      const len = Math.hypot(dir[0], dir[1], dir[2]);
-      if (len < 1e-6) continue; // degenerate rest bone — leave at bind
-      dir[0] /= len;
-      dir[1] /= len;
-      dir[2] /= len;
+      if (!chain.hold) {
+        const child = resolveChild(node, chain.restChild);
+        if (child < 0) continue;
+        dir[0] = bindGlobals[child * 16 + 12] - bindGlobals[node * 16 + 12];
+        dir[1] = bindGlobals[child * 16 + 13] - bindGlobals[node * 16 + 13];
+        dir[2] = bindGlobals[child * 16 + 14] - bindGlobals[node * 16 + 14];
+        const len = Math.hypot(dir[0], dir[1], dir[2]);
+        if (len < 1e-6) continue; // degenerate rest bone — leave at bind
+        dir[0] /= len;
+        dir[1] /= len;
+        dir[2] /= len;
+      }
       const bone: RetargetBone = {
         node,
         palette,
@@ -449,6 +462,7 @@ export class SkinnedModel {
         from: chain.from,
         to: chain.to,
         damp: chain.damp ?? 1,
+        hold: chain.hold ?? false,
       };
       this.retargetBones.push(bone);
       this.retargetByNode[node] = bone;
@@ -774,7 +788,37 @@ export class SkinnedModel {
       const bone = this.retargetByNode[node];
 
       let mapped = false;
-      if (bone) {
+      if (bone && bone.hold) {
+        // Hold the bind WORLD orientation: newWorld = bindGlobal, local =
+        // inv(parentCurGlobal) * bindGlobal. Keeps the foot level regardless of
+        // how the shin above it is aimed.
+        q[0] = this.bindGlobalQuat[bone.node * 4];
+        q[1] = this.bindGlobalQuat[bone.node * 4 + 1];
+        q[2] = this.bindGlobalQuat[bone.node * 4 + 2];
+        q[3] = this.bindGlobalQuat[bone.node * 4 + 3];
+        if (parentOff >= 0) quatInvMul(ql, 0, this.curGlobalQuat, parentOff, q, 0);
+        else {
+          ql[0] = q[0];
+          ql[1] = q[1];
+          ql[2] = q[2];
+          ql[3] = q[3];
+        }
+        this.curGlobalQuat[node * 4] = q[0];
+        this.curGlobalQuat[node * 4 + 1] = q[1];
+        this.curGlobalQuat[node * 4 + 2] = q[2];
+        this.curGlobalQuat[node * 4 + 3] = q[3];
+        composeTRSAt(
+          this.retargetLocals,
+          bone.palette * 16,
+          this.bindLocalTrans,
+          bone.node * 3,
+          ql,
+          0,
+          this.bindLocalScale,
+          bone.node * 3,
+        );
+        mapped = true;
+      } else if (bone) {
         const fi = idx[bone.from];
         const ti = idx[bone.to];
         if (fi !== undefined && ti !== undefined) {
