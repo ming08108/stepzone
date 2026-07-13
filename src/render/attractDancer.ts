@@ -7,35 +7,52 @@
  * silhouette edges, the scaled rim-glow silhouette behind her, and the
  * hand-burst spikes.
  *
- * The animation is layered instead of pose-lerped:
+ * The animation is layered instead of pose-lerped, and leans on established
+ * animation craft — the 12 principles (anticipation, follow-through &
+ * overlapping action, slow-in/out, arcs, secondary action, squash & stretch),
+ * gait biomechanics (weight transfer before swing, 60/40 stance/swing), foot
+ * locking from game locomotion, and contrapposto (support hip hikes, shoulder
+ * line counter-tilts, ribcage counter-shifts into an S-curve, head stays
+ * level like a dancer spotting):
  *
  *  FEET (the point): each note row swings a foot onto the arrow's panel.
  *  When a row carries the StepParity solver's placement (Step.lCol/rCol) the
  *  dancer foots the chart exactly as a player would: each foot plants on its
  *  solved panel — crossovers included, so a left foot on the Right panel
- *  really swings across the body and the legs cross (the IK knees and the
- *  weight-shift pelvis read the twist). Without solver data the heuristic
- *  fallback runs: Left plants the LEFT foot out left, Right the right foot
- *  right, Up throws a foot to the forward panel (with a hop), Down tucks a
- *  foot back into a dip; jumps split both feet across the lit panels, L/R own
- *  their natural foot and U/D alternate off whichever foot stepped last.
- *  Swings start `dur` beats early (anticipation), travel
- *  on a back-ease that overshoots ~8% (snap) and LAND exactly on the beat,
- *  with a sine lift arc sized by step distance. The pelvis is a spring chasing
- *  a weight point biased onto the support foot, and the legs are solved by
- *  2-bone IK from the hips to the animated ankles — so weight visibly shifts
- *  and knees bend into every plant.
+ *  really swings across the body and the legs cross (the hysteretic IK knees
+ *  and the weight-shift pelvis read the twist). Without solver data the
+ *  heuristic fallback runs: Left plants the LEFT foot out left, Right the
+ *  right foot right, U/D alternate off whichever foot stepped last. The four
+ *  panels are four distinct floor spots (pad flat in front of her): L/R
+ *  straddle wide, Up is a forward reach up-screen near the centerline, Down
+ *  steps toward the viewer with the body dipping over it. Jumps launch BOTH
+ *  feet with a deeper pre-hop crouch, the body rides the flight arc, and the
+ *  feet land the two panels together in a straddle with weight centered.
+ *  FOOT LOCKING: a planted foot is pinned to its landing spot until its next
+ *  swing — no skating. Swings start `dur` beats early (anticipation), travel
+ *  on a smoothstep (ease-in/out, zero positional overshoot — overshoot on a
+ *  foot IS a slide) under a lift arc that peaks early so the toe reaches and
+ *  lowers into the plant, and LAND exactly on the beat.
+ *
+ *  WEIGHT: launching a swing fires an unweighting knee-dip (you can't lift a
+ *  weighted foot), the pelvis spring carries the COM ~3/4 over the support
+ *  foot, the support hip hikes (pelvic list), the shoulder line answers with
+ *  a LAGGED counter-tilt (overlap), the ribcage shifts back over the base —
+ *  contrapposto — and the head counters the lean (vestibular stabilization)
+ *  while dragging a touch behind fast pelvis moves. The root grooves DOWN
+ *  into each beat and every plant lands with a small weight drop.
  *
  *  UPPER BODY: a separate 9-channel target (lean/head/arms/crouch/rise/shift)
- *  taken from the direction-pose vocabulary (STEP_L/R/U/D, JUMP) with the
- *  same anticipatory ease toward the next arrow, then run through an
+ *  taken from the direction-pose vocabulary (STEP_L/R/U/D, JUMP) with an
+ *  anticipatory back-ease toward the next arrow, then run through an
  *  underdamped velocity spring — hits overshoot and settle, momentum carries
  *  across fast streams, sparse charts breathe. A continuous time-based groove
  *  (hip sway, head bob, forearm wobble) is added on top so she never freezes.
  *
- *  SECONDARY: the twin-tail velocity springs, ahoge and skirt lag points are
- *  carried over (dt-scaled so 240fps and 30fps behave identically), plus the
- *  beat bounce baked into the root and squash-and-stretch about the foot line.
+ *  SECONDARY: twin-tail velocity springs, the ahoge lag point, and a sprung
+ *  skirt anchor whose hem trails, swings through and settles after every hip
+ *  move (dt-scaled so 240fps and 30fps behave identically), plus the beat
+ *  bounce baked into the root and squash-and-stretch about the foot line.
  *
  * With no chart the feet dance a synthesized L/D/R/U pattern while the upper
  * body performs the classic 8-beat POSES loop; with no beat (NaN/negative
@@ -351,8 +368,8 @@ export class AttractDancer {
   // ---- scratch (owned, refilled per frame — never allocated in build) ----
   private readonly poly = new Float64Array(64); // current polygon, x,y pairs
   private np = 0; // point count in `poly`
-  private readonly hem = new Float64Array(14); // skirt hem points
-  private readonly hemTop = new Float64Array(14); // skirt waistband points
+  private readonly hem = new Float64Array(18); // skirt hem points (9)
+  private readonly hemTop = new Float64Array(18); // skirt waistband points (9)
   private readonly pt = new Float64Array(2); // panelTarget out
   private readonly jit = new Float32Array(24); // fixed burst jitter
   private readonly skel = new Float32Array(JOINTS * 2);
@@ -378,6 +395,7 @@ export class AttractDancer {
   private readonly swB1 = new Float64Array(2);
   private readonly swLift = new Float64Array(2);
   private lastFoot = 1; // which foot stepped last (alternation for U/D)
+  private lastDuo = false; // last swing was a jump (both feet) → land centered
 
   // ---- accents fired by note hits ----
   private hitBeat = -1e9;
@@ -397,6 +415,18 @@ export class AttractDancer {
   private rootX = CX;
   private rootVX = 0;
 
+  // ---- weight-transfer rig (contrapposto): all springs, all NaN-guarded ----
+  private wgt = 0; // where the weight is: -1 = left foot, +1 = right
+  private wgtV = 0;
+  private pelvPx = 0; // pelvic list in px (+ = right hip hiked up)
+  private pelvPxV = 0;
+  private shTilt = 0; // shoulder counter-tilt in px, lags the pelvis
+  private shTiltV = 0;
+  private ribShift = 0; // ribcage counter-shift back over the base (S-curve)
+  private readonly kneeSide = new Float64Array(2); // knee pole side, hysteretic
+  private antBeat = -1e9; // pre-step unweighting dip (anticipation)
+  private antAmt = 0;
+
   // ---- hair / cloth secondary state (NaN = uninitialized, snaps to rest) ----
   private tailLX = NaN;
   private tailLY = NaN;
@@ -410,6 +440,8 @@ export class AttractDancer {
   private ahogeY = NaN;
   private skirtX = NaN;
   private skirtY = NaN;
+  private skirtVX = 0;
+  private skirtVY = 0;
 
   // ---- per-frame paint parameters ----
   private sx = 1; // squash-and-stretch about (CX, FOOT_Y)
@@ -488,6 +520,7 @@ export class AttractDancer {
       this.swB0[f] = 0;
       this.swB1[f] = -1e9;
       this.swLift[f] = 0;
+      this.kneeSide[f] = f === 0 ? -1 : 1; // knees bow gently outward at rest
     }
 
     // Upper-body spring rests on NEUTRAL.
@@ -512,6 +545,7 @@ export class AttractDancer {
     this.hitBeat = -1e9;
     this.dipBeat = -1e9;
     this.hopBeat = -1e9;
+    this.antBeat = -1e9;
     // Cancel active swings in place (feet keep their current position).
     for (let f = 0; f < 2; f++) {
       if (Number.isFinite(this.footX[f]) && Number.isFinite(this.footY[f])) {
@@ -552,8 +586,10 @@ export class AttractDancer {
     const B = BODY_H;
     const phase = valid ? beat - Math.floor(beat) : (time * 1.4) % 1;
     const kick = valid ? Math.exp(-6 * phase) : 0;
+    // Down-groove: the body is LOWEST on the beat (dancers pulse down into the
+    // count) and rebounds through the off-beat.
     const bob = valid
-      ? 0.02 * B * (1 - Math.abs(Math.sin(PI * phase)))
+      ? 0.02 * B * Math.abs(Math.sin(PI * phase))
       : 0.015 * B * (0.5 + 0.5 * Math.sin(time * 2.4));
 
     // ---- 1. chart triggering: fire hits that just passed, launch upcoming
@@ -590,9 +626,17 @@ export class AttractDancer {
     }
 
     // ---- 2. evaluate the feet ----------------------------------------------
+    // FOOT LOCKING: a planted foot is pinned to its landed position (swX1/swY1
+    // verbatim) until its next swing launches — zero skate. The swing itself
+    // is a smoothstep (ease-in/out, peak velocity mid-swing like a gait swing
+    // phase, and NO positional overshoot — overshoot on a foot IS sliding),
+    // under a lift arc that peaks early (~44%) so the toe reaches and lowers
+    // into the plant instead of dropping straight down.
     const stanceYv = FOOT_Y - L_SHOE * B;
     let swinging0 = false;
     let swinging1 = false;
+    let lift0 = 0;
+    let lift1 = 0;
     if (valid) {
       for (let f = 0; f < 2; f++) {
         const b0 = this.swB0[f];
@@ -607,11 +651,17 @@ export class AttractDancer {
           y = this.swY0[f];
         } else {
           const p = (beat - b0) / (b1 - b0);
-          const e = easeSnap(p);
+          const e = p * p * (3 - 2 * p);
+          const lift = this.swLift[f] * Math.sin(PI * Math.pow(p, 0.82));
           x = this.swX0[f] + (this.swX1[f] - this.swX0[f]) * e;
-          y = this.swY0[f] + (this.swY1[f] - this.swY0[f]) * e - this.swLift[f] * Math.sin(PI * p);
-          if (f === 0) swinging0 = true;
-          else swinging1 = true;
+          y = this.swY0[f] + (this.swY1[f] - this.swY0[f]) * e - lift;
+          if (f === 0) {
+            swinging0 = true;
+            lift0 = lift;
+          } else {
+            swinging1 = true;
+            lift1 = lift;
+          }
         }
         if (Number.isFinite(x) && Number.isFinite(y)) {
           this.footX[f] = x;
@@ -642,6 +692,11 @@ export class AttractDancer {
     const dip = valid && dd >= 0 && dd < 4 ? this.dipAmt * Math.exp(-5 * dd) : 0;
     const hd = beat - this.hopBeat;
     const hop = valid && hd >= 0 && hd < 4 ? this.hopAmt * Math.exp(-5 * hd) : 0;
+    // Anticipation: a small unweighting knee-dip fired at swing LAUNCH — the
+    // body sinks before the foot leaves the floor (you can't lift a weighted
+    // foot), then rebounds through the step.
+    const ad = beat - this.antBeat;
+    const ant = valid && ad >= 0 && ad < 2 ? this.antAmt * Math.exp(-6 * ad) : 0;
     const bd = beat - this.hitBeat;
     const burstLife = valid && bd >= 0 && bd < 0.22 && raisesHand(this.hitCols) ? 1 - bd / 0.22 : 0;
 
@@ -701,27 +756,78 @@ export class AttractDancer {
     const aLL = this.upX[3] + 0.06 * g * grooveOn;
     const aRU = this.upX[4];
     const aRL = this.upX[5] - 0.06 * g * grooveOn;
-    const crouch = clamp(0.015 + this.upX[6] * 0.8 + dip, -0.03, 0.24);
+    const crouch = clamp(0.02 + this.upX[6] * 0.8 + dip + ant, -0.03, 0.26);
     const rise = Math.max(0, this.upX[7] * 0.8 + hop);
 
-    // ---- 5. pelvis: weight shifts onto the support foot --------------------
+    // ---- 5. weight transfer (contrapposto rig) ------------------------------
+    // The COM moves OVER the support foot: when a foot swings, the pelvis
+    // shifts ~3/4 of the way onto the planted foot (single support), and after
+    // landing it settles onto the foot that just stepped. The support-side hip
+    // hikes up (pelvic list), the shoulder line counter-tilts on a slower
+    // spring (overlapping action), and the ribcage counter-shifts back over
+    // the base of support — the classic contrapposto S-curve, never floating.
     const midX = (this.footX[0] + this.footX[1]) / 2;
-    let bias: number;
-    if (swinging0 && !swinging1) bias = (this.footX[1] - midX) * 0.5;
-    else if (swinging1 && !swinging0) bias = (this.footX[0] - midX) * 0.5;
-    else bias = (this.footX[this.lastFoot] - midX) * 0.35;
-    const rt = clamp(midX + bias + this.upX[8] * 0.5 * B, CX - 0.3 * B, CX + 0.3 * B);
+    const half = (this.footX[1] - this.footX[0]) / 2;
+    let wt: number;
+    if (!valid)
+      wt = 0.35 * Math.sin(time * 1.1); // idle: slow weight rocking, foot to foot
+    else if (swinging0 && swinging1)
+      wt = 0; // jump: airborne, weight centered between the two landing panels
+    else if (swinging0)
+      wt = 1; // left foot swings ⇒ right foot supports
+    else if (swinging1) wt = -1;
+    else if (this.lastDuo)
+      wt = 0; // landed a jump: stay centered
+    else wt = this.lastFoot === 1 ? 0.6 : -0.6; // settled onto the last step
+    if (!Number.isFinite(this.wgt) || !Number.isFinite(this.wgtV)) {
+      this.wgt = wt;
+      this.wgtV = 0;
+    }
+    this.wgtV = (this.wgtV + (wt - this.wgt) * 0.13 * s60) * Math.pow(0.76, s60);
+    this.wgt += this.wgtV * s60;
+
+    const rt = clamp(
+      midX + this.wgt * half * 0.72 + this.upX[8] * 0.35 * B,
+      CX - 0.3 * B,
+      CX + 0.3 * B,
+    );
     if (!Number.isFinite(this.rootX) || !Number.isFinite(this.rootVX)) {
       this.rootX = rt;
       this.rootVX = 0;
     }
-    this.rootVX = (this.rootVX + (rt - this.rootX) * 0.12 * s60) * Math.pow(0.8, s60);
+    this.rootVX = (this.rootVX + (rt - this.rootX) * 0.18 * s60) * Math.pow(0.76, s60);
     this.rootX += this.rootVX * s60;
 
-    const rootY = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * B + crouch * B - rise * B - bob;
+    // Pelvic list: the support hip rises. Shoulders counter-tilt, lagging.
+    const pelvT = this.wgt * 0.032 * B;
+    if (!Number.isFinite(this.pelvPx) || !Number.isFinite(this.pelvPxV)) {
+      this.pelvPx = pelvT;
+      this.pelvPxV = 0;
+    }
+    this.pelvPxV = (this.pelvPxV + (pelvT - this.pelvPx) * 0.11 * s60) * Math.pow(0.8, s60);
+    this.pelvPx += this.pelvPxV * s60;
+    const shT = -this.pelvPx * 0.62;
+    if (!Number.isFinite(this.shTilt) || !Number.isFinite(this.shTiltV)) {
+      this.shTilt = shT;
+      this.shTiltV = 0;
+    }
+    this.shTiltV = (this.shTiltV + (shT - this.shTilt) * 0.07 * s60) * Math.pow(0.84, s60);
+    this.shTilt += this.shTiltV * s60;
+    this.ribShift = clamp(-(this.rootX - midX) * 0.35, -0.07 * B, 0.07 * B);
+
+    // Head stabilization (vestibular): the head counters the torso lean to
+    // stay near-level, and DRAGS a touch behind fast pelvis moves — the head
+    // trails the body (overlapping action) instead of riding it rigidly.
+    const headF = head - lean * 0.45 - clamp(this.rootVX * 0.02, -0.1, 0.1);
+
+    // Jumps: while BOTH feet are airborne the body rides up with them (the
+    // smaller of the two lifts), so a chord reads hop → flight → 2-foot land.
+    const air = Math.min(lift0, lift1) * 0.85;
+
+    const rootY = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * B + crouch * B - rise * B - bob - air;
 
     // ---- 6. solve the skeleton (FK torso/arms, IK legs, spring hair) -------
-    this.solve(this.rootX, rootY, lean, head, aLU, aLL, aRU, aRL, time, s30);
+    this.solve(this.rootX, rootY, lean, headF, aLU, aLL, aRU, aRL, time, s30);
 
     // ---- 7. squash-and-stretch + paint params -------------------------------
     const sq = Math.sin(PI * phase) * (valid ? 1 : 0.4);
@@ -793,6 +899,10 @@ export class AttractDancer {
     rCol?: number,
   ): void {
     const b0 = hitBeat - dur;
+    // Anticipation: every swing launch fires the unweighting dip; a two-foot
+    // jump gets a deeper pre-hop crouch and extra flight on both feet.
+    this.antBeat = b0;
+    this.antAmt = 0.02;
     if (lCol !== undefined || rCol !== undefined) {
       // Solver-decided footing. -1 (or junk) means that foot sits this row.
       const lp = lCol !== undefined && Number.isFinite(lCol) ? Math.trunc(lCol) : -1;
@@ -807,6 +917,8 @@ export class AttractDancer {
         if (lSteps) this.assignSwing(0, lp, b0, hitBeat);
         if (rSteps) this.assignSwing(1, rp, b0, hitBeat);
         this.lastFoot = rSteps ? 1 : 0;
+        this.lastDuo = lSteps && rSteps;
+        if (this.lastDuo) this.boostJump();
         return;
       }
       // Both feet parked (shouldn't happen on a note row) → heuristic below.
@@ -823,6 +935,8 @@ export class AttractDancer {
       this.assignSwing(0, lp, b0, hitBeat);
       this.assignSwing(1, rp, b0, hitBeat);
       this.lastFoot = 1;
+      this.lastDuo = true;
+      this.boostJump();
     } else {
       let foot: number;
       let panel: number;
@@ -838,10 +952,25 @@ export class AttractDancer {
       }
       this.assignSwing(foot, panel, b0, hitBeat);
       this.lastFoot = foot;
+      this.lastDuo = false;
     }
   }
 
-  /** Ankle target for a panel (0=L,1=D,2=U,3=R), per foot. */
+  /** A chord launch: deepen the pre-hop crouch and add flight to both feet so
+   *  the jump reads crouch → airborne → simultaneous two-foot landing. */
+  private boostJump(): void {
+    const B = BODY_H;
+    this.antAmt = 0.045;
+    this.swLift[0] += 0.022 * B;
+    this.swLift[1] += 0.022 * B;
+  }
+
+  /** Ankle target for a panel (0=L,1=D,2=U,3=R), per foot. The pad lies flat
+   *  on the floor in front of her in a + layout, so the four panels are four
+   *  clearly distinct FLOOR spots: Left/Right straddle wide, Up is the far
+   *  panel (the foot reaches forward = up-screen and slightly inward, with
+   *  perspective pulling it higher), Down is the near panel (the foot steps
+   *  toward the viewer = down-screen, paired with the crouch/weight-drop). */
   private panelTarget(panel: number, foot: number): void {
     const B = BODY_H;
     const y = FOOT_Y - L_SHOE * B;
@@ -853,13 +982,15 @@ export class AttractDancer {
       this.pt[0] = CX + 0.24 * B;
       this.pt[1] = y;
     } else if (panel === 2) {
-      // Up: forward panel — up-screen a touch, reads as a forward step/hop.
-      this.pt[0] = CX + s * 0.07 * B;
-      this.pt[1] = y - 0.05 * B;
+      // Up: a real forward reach — the toe lands well up-screen of the
+      // stance line, near the centerline (the far panel is straight ahead).
+      this.pt[0] = CX + s * 0.055 * B;
+      this.pt[1] = y - 0.095 * B;
     } else {
-      // Down: tucked back toward the viewer, pairs with the crouch dip.
-      this.pt[0] = CX + s * 0.09 * B;
-      this.pt[1] = y + 0.04 * B;
+      // Down: the near panel — the foot steps down-screen toward the viewer,
+      // slightly wider, and the body dips over it (onHit fires the dip).
+      this.pt[0] = CX + s * 0.1 * B;
+      this.pt[1] = y + 0.07 * B;
     }
   }
 
@@ -949,8 +1080,11 @@ export class AttractDancer {
     s[PEL * 2] = rootX;
     s[PEL * 2 + 1] = rootY;
 
-    // Torso points up, tilted by lean (angles: 0 = down, sin→x, cos→y).
-    const shx = rootX + Math.sin(PI + lean) * L_TORSO * B;
+    // Torso points up, tilted by lean (angles: 0 = down, sin→x, cos→y), then
+    // the ribcage counter-shifts back over the base of support — with the
+    // pelvis pushed out over the planted foot this bends the body into the
+    // contrapposto S-curve instead of a rigid leaning plank.
+    const shx = rootX + Math.sin(PI + lean) * L_TORSO * B + this.ribShift;
     const shy = rootY + Math.cos(PI + lean) * L_TORSO * B;
     s[SH * 2] = shx;
     s[SH * 2 + 1] = shy;
@@ -963,33 +1097,39 @@ export class AttractDancer {
     s[HEAD * 2] = hx;
     s[HEAD * 2 + 1] = hy;
 
-    // Arms: FK off the shoulder line.
+    // Arms: FK off the shoulder line, which counter-tilts against the pelvic
+    // list (weight-bearing hip UP ⇒ same-side shoulder DOWN) on a lagged
+    // spring, so the upper body visibly answers each weight shift late.
     const slx = shx - W_SHOULDER * B;
     const srx = shx + W_SHOULDER * B;
+    const sly = shy + this.shTilt;
+    const sry = shy - this.shTilt;
     s[SHL * 2] = slx;
-    s[SHL * 2 + 1] = shy;
+    s[SHL * 2 + 1] = sly;
     s[SHR * 2] = srx;
-    s[SHR * 2 + 1] = shy;
+    s[SHR * 2 + 1] = sry;
     const ellx = slx + Math.sin(aLU) * L_UARM * B;
-    const elly = shy + Math.cos(aLU) * L_UARM * B;
+    const elly = sly + Math.cos(aLU) * L_UARM * B;
     s[ELL * 2] = ellx;
     s[ELL * 2 + 1] = elly;
     s[HAL * 2] = ellx + Math.sin(aLL) * L_FARM * B;
     s[HAL * 2 + 1] = elly + Math.cos(aLL) * L_FARM * B;
     const elrx = srx + Math.sin(aRU) * L_UARM * B;
-    const elry = shy + Math.cos(aRU) * L_UARM * B;
+    const elry = sry + Math.cos(aRU) * L_UARM * B;
     s[ELR * 2] = elrx;
     s[ELR * 2 + 1] = elry;
     s[HAR * 2] = elrx + Math.sin(aRL) * L_FARM * B;
     s[HAR * 2 + 1] = elry + Math.cos(aRL) * L_FARM * B;
 
-    // Legs: 2-bone IK from each hip to its animated ankle. The knee bends
-    // toward the side the foot is planted on (outward in neutral stance).
+    // Legs: 2-bone IK from each hip to its animated ankle. Hips ride the
+    // pelvic list (support side hiked). The knee pole side is HYSTERETIC:
+    // it only flips once the foot is clearly across the hip line, so knees
+    // don't flicker mid-crossover, and it defaults gently outward.
     const l1 = L_THIGH * B;
     const l2 = L_SHIN * B;
     for (let f = 0; f < 2; f++) {
       const hipx = rootX + (f === 0 ? -1 : 1) * W_HIP * B;
-      const hipy = rootY;
+      const hipy = rootY + (f === 0 ? this.pelvPx : -this.pelvPx);
       const hipI = f === 0 ? HIPL : HIPR;
       const knI = f === 0 ? KNL : KNR;
       const ftI = f === 0 ? FTL : FTR;
@@ -1011,13 +1151,18 @@ export class AttractDancer {
       }
       const nx = dx / d;
       const ny = dy / d;
-      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.999);
+      // Soft knees: never lock the chain fully straight — a standing dancer
+      // keeps a slight bend (and it kills the rubber-band pop at full reach).
+      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.99);
       const a0 = Math.atan2(nx, ny);
       const ca = clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1);
       const al = Math.acos(ca);
-      let ks = f === 0 ? -1 : 1;
-      if (fx - hipx > 0.02 * B) ks = 1;
-      else if (fx - hipx < -0.02 * B) ks = -1;
+      const rel = fx - hipx;
+      let ks = this.kneeSide[f];
+      if (!(ks === 1 || ks === -1)) ks = f === 0 ? -1 : 1;
+      if (rel > 0.03 * B) ks = 1;
+      else if (rel < -0.03 * B) ks = -1;
+      this.kneeSide[f] = ks;
       const th = a0 + ks * al;
       s[knI * 2] = hipx + Math.sin(th) * l1;
       s[knI * 2 + 1] = hipy + Math.cos(th) * l1;
@@ -1067,15 +1212,30 @@ export class AttractDancer {
     s[AHOGE * 2] = this.ahogeX;
     s[AHOGE * 2 + 1] = this.ahogeY;
 
-    // Skirt anchor: a lagged point under the pelvis; the hem sways off it.
+    // Skirt anchor: an underdamped velocity spring chasing a point under the
+    // pelvis — the hem hangs off it, so the cloth LAGS each hip move, swings
+    // through, overshoots and settles (follow-through), instead of merely
+    // fading toward the body. Deflection is clamped so it never flies away.
     const skRX = rootX;
     const skRY = rootY + 0.1 * B;
-    if (!Number.isFinite(this.skirtX) || !Number.isFinite(this.skirtY)) {
+    if (
+      !Number.isFinite(this.skirtX) ||
+      !Number.isFinite(this.skirtY) ||
+      !Number.isFinite(this.skirtVX) ||
+      !Number.isFinite(this.skirtVY)
+    ) {
       this.skirtX = skRX;
       this.skirtY = skRY;
+      this.skirtVX = 0;
+      this.skirtVY = 0;
     }
-    this.skirtX += (skRX - this.skirtX) * (1 - Math.pow(0.84, s30));
-    this.skirtY += (skRY - this.skirtY) * (1 - Math.pow(0.78, s30));
+    const skD = Math.pow(0.8, s30);
+    this.skirtVX = (this.skirtVX + (skRX - this.skirtX) * 0.075 * s30) * skD;
+    this.skirtVY = (this.skirtVY + (skRY - this.skirtY) * 0.11 * s30) * skD;
+    this.skirtX += this.skirtVX * s30;
+    this.skirtY += this.skirtVY * s30;
+    this.skirtX = clamp(this.skirtX, skRX - 0.09 * B, skRX + 0.09 * B);
+    this.skirtY = clamp(this.skirtY, skRY - 0.05 * B, skRY + 0.06 * B);
     s[SKIRT * 2] = this.skirtX;
     s[SKIRT * 2 + 1] = this.skirtY;
 
@@ -1340,12 +1500,14 @@ export class AttractDancer {
     this.emitTail(1, TAILR);
 
     // Legs: bare skin thighs, knee-high boot shins, cuff band, shoe.
-    this.emitLimb(HIPL, KNL, 0.054, 0.037, ZSKIN, true);
-    this.emitLimb(KNL, FTL, 0.035, 0.016, ZTRIM, true);
+    // Slim: each thigh tapers 0.038→0.026 (vs 0.03 upper arms) so the pair
+    // sits comfortably inside the 0.098 hip plate instead of out-bulking it.
+    this.emitLimb(HIPL, KNL, 0.038, 0.026, ZSKIN, true);
+    this.emitLimb(KNL, FTL, 0.027, 0.013, ZTRIM, true);
     this.emitCuff(KNL, FTL);
     this.emitShoe(KNL, FTL, -1);
-    this.emitLimb(HIPR, KNR, 0.054, 0.037, ZSKIN, true);
-    this.emitLimb(KNR, FTR, 0.035, 0.016, ZTRIM, true);
+    this.emitLimb(HIPR, KNR, 0.038, 0.026, ZSKIN, true);
+    this.emitLimb(KNR, FTR, 0.027, 0.013, ZTRIM, true);
     this.emitCuff(KNR, FTR);
     this.emitShoe(KNR, FTR, 1);
 
@@ -1412,53 +1574,57 @@ export class AttractDancer {
     this.emitCap(SHL, 2);
     this.emitCap(SHR, 0);
 
-    // Pleated skirt: a short A-line cone that DRAPES from a snug waistband
-    // down to a softly scalloped hem well above the knee. Built as a quad
-    // strip (waist→hem) instead of a point fan so it hangs like cloth, with a
-    // gentle key-light shade sweep across the panels rather than alternating
-    // pleat blades. The hem chases the lagged SKIRT point — it sways opposite
-    // lateral moves and lifts/flares a touch while she's moving.
+    // Pleated skirt: a short A-line cone. The WAISTBAND is pinned to the
+    // torso frame (it tilts with the pelvis/lean like real cloth pinned at
+    // the waist), but the HEM hangs in WORLD space under gravity — straight
+    // down from the pelvis, not along the torso axis — which is what makes
+    // it read as drape instead of a plate glued to the body. The hem chases
+    // the spring-lagged SKIRT anchor, so it trails every hip move, swings
+    // through, overshoots and settles (follow-through), flaring slightly
+    // with speed and floating up a beat when the body drops. Short (hem at
+    // mid-thigh) so the footwork always reads.
     {
-      const skm = 0.05 * B;
-      const hemOff = clamp(this.jx(SKIRT) - plx, -skm, skm);
-      const vLag = this.jy(SKIRT) - (ply + 0.1 * B);
-      const sway = Math.min(0.03 * B, Math.abs(hemOff) * 0.55 + Math.abs(vLag) * 0.5);
-      const waistWs = hipW + 0.012 * B; // waistband half-width, hugs the hips
-      const hemW = 0.125 * B + sway * 0.6; // gentle flare — a cone, not a disc
-      const drop = 0.175 * B - sway * 0.4; // hem depth: mid-thigh, above the knee
+      const lagX = clamp(this.jx(SKIRT) - plx, -0.08 * B, 0.08 * B);
+      const vLag = clamp(this.jy(SKIRT) - (ply + 0.1 * B), -0.05 * B, 0.06 * B);
+      const swish = Math.min(0.03 * B, Math.abs(this.skirtVX) * 3);
+      const waistWs = hipW + 0.014 * B; // waistband half-width, hugs the hips
+      const hemW = 0.155 * B + swish; // A-line flare, breathes with motion
+      const hemYc = ply + 0.165 * B + vLag * 0.7; // world-down drop, mid-thigh
       const hem = this.hem;
       const top = this.hemTop;
-      for (let k = 0; k <= 6; k++) {
-        const f = (k - 3) / 3; // -1..1 across the skirt
-        const tw = waistWs * f + hemOff * 0.2;
-        top[k * 2] = this.atX(0.08, tw);
-        top[k * 2 + 1] = this.atY(0.08, tw);
-        // Soft scallop: odd points dip a hair, the sides ride up a touch —
-        // a rounded hem, not a sawtooth.
-        const d2 = drop + (k % 2 === 1 ? 0.008 * B : 0) - Math.abs(f) * 0.008 * B;
-        const w = hemW * f + hemOff;
-        hem[k * 2] = this.atX(-d2 / ul, w);
-        hem[k * 2 + 1] = this.atY(-d2 / ul, w);
+      for (let k = 0; k <= 8; k++) {
+        const f = (k - 4) / 4; // -1..1 across the skirt
+        top[k * 2] = this.atX(0.07, waistWs * f);
+        top[k * 2 + 1] = this.atY(0.07, waistWs * f);
+        // Hem: sides ride up (the 2D read of a cone seen from the front),
+        // odd points dip a hair (soft scallop pleats, not a sawtooth), and
+        // the whole hem swings like a bell off the lagged anchor.
+        hem[k * 2] = plx + hemW * f + lagX * (0.85 - 0.2 * Math.abs(f));
+        hem[k * 2 + 1] =
+          hemYc - Math.abs(f) * 0.02 * B + (k % 2 === 1 ? 0.009 * B : 0) - lagX * f * 0.25;
       }
-      for (let k = 0; k < 6; k++) {
+      for (let k = 0; k < 8; k++) {
         this.beginPoly();
         this.v(top[k * 2], top[k * 2 + 1]);
         this.v(top[k * 2 + 2], top[k * 2 + 3]);
         this.v(hem[k * 2 + 2], hem[k * 2 + 3]);
         this.v(hem[k * 2], hem[k * 2 + 1]);
-        // One skirt with soft shading: lit toward the upper-left key light,
-        // a single shadow step on the far side — not light/dark blades.
-        this.facet(ZSKIRT, k < 2 ? 2 : k < 5 ? 1 : 0);
+        // Soft key-light sweep across the cone (lit upper-left → shadow
+        // right), not alternating light/dark blades.
+        this.facet(ZSKIRT, k < 3 ? 2 : k < 6 ? 1 : 0);
       }
-      // Hem silhouette + just two faint pleat creases on the lower half.
+      // Full silhouette (side seams + scalloped hem, open at the waist) and
+      // three faint pleat creases on the lower half.
       this.beginPoly();
-      for (let k = 0; k <= 6; k++) this.v(hem[k * 2], hem[k * 2 + 1]);
+      this.v(top[0], top[1]);
+      for (let k = 0; k <= 8; k++) this.v(hem[k * 2], hem[k * 2 + 1]);
+      this.v(top[16], top[17]);
       this.edge(false, false);
-      for (let k = 2; k <= 4; k += 2) {
+      for (let k = 2; k <= 6; k += 2) {
         this.beginPoly();
         this.v(
-          top[k * 2] + (hem[k * 2] - top[k * 2]) * 0.5,
-          top[k * 2 + 1] + (hem[k * 2 + 1] - top[k * 2 + 1]) * 0.5,
+          top[k * 2] + (hem[k * 2] - top[k * 2]) * 0.55,
+          top[k * 2 + 1] + (hem[k * 2 + 1] - top[k * 2 + 1]) * 0.55,
         );
         this.v(hem[k * 2], hem[k * 2 + 1]);
         this.edge(true, false);
@@ -1508,7 +1674,7 @@ export class AttractDancer {
     const py = dx;
     const wA = wa * B;
     const wB = wb * B;
-    const wM = Math.max(wA, wB) * 1.12;
+    const wM = Math.max(wA, wB) * 1.07;
     const mx = ax + dx * (len + 2 * o) * 0.45;
     const my = ay + dy * (len + 2 * o) * 0.45;
     const ro = -0.2; // ridge offset → asymmetric lit/shadow faces
@@ -1610,7 +1776,7 @@ export class AttractDancer {
     const py = dx;
     const cx = kx + dx * 0.055 * B;
     const cy = ky + dy * 0.055 * B;
-    const w = 0.042 * B;
+    const w = 0.032 * B;
     const h = 0.013 * B;
     this.beginPoly();
     this.v(cx - px * w - dx * h, cy - py * w - dy * h);
