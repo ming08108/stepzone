@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
-import { AttractBackground } from '../render/attractBackground';
 import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
@@ -239,9 +238,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   doneSelRef.current = doneSel;
   const bgUrlRef = useRef<string | null>(null);
   const bgMediaRef = useRef<HTMLVideoElement | ImageBitmap | null>(null);
-  // The procedural attract loop, drawn behind the field when a song ships no
-  // background of its own.
-  const attractRef = useRef<AttractBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
@@ -368,8 +364,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const rivalsRef = useRef<{ id: number; judge: Judge; feedback: Feedback; cursor: number }[]>([]);
 
   const cleanupBg = () => {
-    attractRef.current?.stop();
-    attractRef.current = null;
     const m = bgMediaRef.current;
     if (m instanceof HTMLVideoElement) {
       m.pause();
@@ -751,17 +745,13 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             // Undecodable image — keep the plain dark background.
           });
       } else {
-        // No background of its own — play the procedural DDR-era attract loop,
-        // beat-locked to this song's clock, with the dancer stepping to this
+        // No background of its own — the GPU attract background (drawn in the
+        // field's render pass at full refresh), with the dancer stepping to this
         // chart's actual notes. Variant is chosen per title for mood variety.
-        const attract = new AttractBackground({
-          beat: () => req.song.timing.getBeatFromElapsedTime(session.songNow),
+        session.setAttract({
           variant: attractVariant(req.song.title),
           steps: chartSteps(req.chart),
         });
-        attract.start();
-        attractRef.current = attract;
-        session.setBackground(attract.canvas);
       }
     }
 

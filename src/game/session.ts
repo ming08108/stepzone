@@ -22,6 +22,7 @@ import {
   type PracticeSection,
 } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
+import type { AttractConfig } from '../render/gpu/attractGpu';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import type { Feedback, NoteFieldConfig } from '../render/fieldConfig';
 import { songMaxBpm } from '../render/scroll';
@@ -58,6 +59,7 @@ export class GameSession {
   private readonly rendererConfig: Partial<NoteFieldConfig>;
   private bgMedia: HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement | null =
     null;
+  private bgAttract: AttractConfig | null = null;
   private readonly beatLineTimes: Float64Array;
   private readonly timing: TimingData;
   private readonly held: boolean[];
@@ -254,6 +256,13 @@ export class GameSession {
     if (this.bgVideo) this.bgVideo.playbackRate = this.musicRate;
   }
 
+  /** Enable (or clear) the procedural GPU attract background — shown when no
+   *  background media is set. The dancer steps to this chart's notes. */
+  setAttract(cfg: AttractConfig | null): void {
+    this.bgAttract = cfg;
+    this.gpuField?.setAttract(cfg);
+  }
+
   /** True once start() picked (and successfully initialized) the GPU field. */
   get usingGpuRenderer(): boolean {
     return this.gpuField !== null;
@@ -311,6 +320,7 @@ export class GameSession {
       gpu.setBeatTimes(this.beatLineTimes);
       if (this.rivalConfigs.length) gpu.setRivals(this.rivalConfigs);
       if (this.bgMedia) gpu.setBackground(this.bgMedia);
+      if (this.bgAttract) gpu.setAttract(this.bgAttract);
       freshField = true;
     }
     if (this.stopped) return false;

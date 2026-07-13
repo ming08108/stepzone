@@ -1,0 +1,534 @@
+/**
+ * GPU-native attract background: the DDR-era "common movie" (a neon hexagon
+ * tunnel over a scrolling checkerboard, plasma void, etc.) rendered as a single
+ * fullscreen WGSL fragment shader — no Canvas 2D, no per-frame texture upload.
+ * Drawn first in the note-field's render pass when a song ships no BGA.
+ *
+ * The whole scene is procedural math driven by uniforms (time, beat, palette),
+ * so "millions of pixels" cost the GPU almost nothing and it runs at the field's
+ * full framerate. The dancer (a real triangle mesh, built CPU-side per frame) is
+ * a separate pass layered on top — added in a later phase.
+ *
+ * This is the GPU counterpart to the (being-retired) Canvas-2D AttractBackground;
+ * the palettes and layer design mirror it 1:1.
+ */
+
+import { AttractDancer } from '../attractDancer';
+
+/** One mood/variant's colors, as 0..1 float RGB ready for the uniform buffer. */
+interface GpuPalette {
+  gradTop: [number, number, number];
+  gradMid: [number, number, number];
+  gradBot: [number, number, number];
+  accentA: [number, number, number];
+  accentB: [number, number, number];
+  accentC: [number, number, number];
+  accentD: [number, number, number];
+  white: [number, number, number];
+  floorWire: number; // 1 = wireframe floor (Healing Vision)
+  sunHero: number; // 1 = sunburst is the dominant layer (Butterfly)
+  petals: number; // 1 = blossom sparkles (Sakura)
+}
+
+const hex = (s: string): [number, number, number] => {
+  const n = parseInt(s.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+};
+
+/** The 4 variants, keyed by index (mirrors the Canvas-2D PALETTES). */
+const PALETTES: readonly GpuPalette[] = [
+  {
+    gradTop: hex('#5B18A8'),
+    gradMid: hex('#2B0B54'),
+    gradBot: hex('#0A0118'),
+    accentA: hex('#FF2E9A'),
+    accentB: hex('#00E5FF'),
+    accentC: hex('#A8FF00'),
+    accentD: hex('#FF7A00'),
+    white: hex('#FFF7FF'),
+    floorWire: 0,
+    sunHero: 0,
+    petals: 0,
+  },
+  {
+    gradTop: hex('#6A1A00'),
+    gradMid: hex('#4A1200'),
+    gradBot: hex('#1A0500'),
+    accentA: hex('#FF0066'),
+    accentB: hex('#FFC400'),
+    accentC: hex('#FF3D2E'),
+    accentD: hex('#FFC400'),
+    white: hex('#FFF7F0'),
+    floorWire: 0,
+    sunHero: 1,
+    petals: 0,
+  },
+  {
+    gradTop: hex('#3A0A3F'),
+    gradMid: hex('#240433'),
+    gradBot: hex('#14001F'),
+    accentA: hex('#FF8AD8'),
+    accentB: hex('#00FFC8'),
+    accentC: hex('#FFFFFF'),
+    accentD: hex('#FF8AD8'),
+    white: hex('#FFFFFF'),
+    floorWire: 0,
+    sunHero: 0,
+    petals: 1,
+  },
+  {
+    gradTop: hex('#003318'),
+    gradMid: hex('#001F0E'),
+    gradBot: hex('#001406'),
+    accentA: hex('#A8FF00'),
+    accentB: hex('#00FFB2'),
+    accentC: hex('#CFFF66'),
+    accentD: hex('#00FFB2'),
+    white: hex('#EAFFEA'),
+    floorWire: 1,
+    sunHero: 0,
+    petals: 0,
+  },
+];
+
+const WGSL = /* wgsl */ `
+struct U {
+  res: vec4f,      // w, h, aspect(w/h), dim
+  tb: vec4f,       // time, beat, kick, downKick
+  gradTop: vec4f, gradMid: vec4f, gradBot: vec4f,
+  accentA: vec4f, accentB: vec4f, accentC: vec4f, accentD: vec4f, white: vec4f,
+  flags: vec4f,    // floorWire, sunHero, petals, variant
+};
+@group(0) @binding(0) var<uniform> u: U;
+
+const PI = 3.14159265;
+const TAU = 6.28318531;
+const VANISH = vec2f(0.5, 0.42);
+const HORIZON = 0.6;
+// Canvas-2D reference sizes, converted from px on the 960x540 canvas to
+// "screen heights" so the look is resolution-independent.
+const TUNNEL_R = 1.5185;   // tunnel max radius (820px / 540)
+const RINGS = 12.0;        // concentric hex rings
+const SUN_R = 1.53;        // sunburst rim (1100px sprite * 1.5 scale / 2 / 540)
+const CELL = 0.12;         // sparkle-field hash cell size
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  // One oversized triangle covering the whole clip space.
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  return vec4f(p[i], 0.0, 1.0);
+}
+
+// Pointy-top hexagon distance from the origin (unit-gradient norm, so a delta
+// in this value is also the screen-space distance to the hexagon's edge).
+fn hexDist(p: vec2f) -> f32 {
+  let q = abs(p);
+  return max(q.x * 0.8660254 + q.y * 0.5, q.y);
+}
+
+fn rot2(p: vec2f, a: f32) -> vec2f {
+  let c = cos(a);
+  let s = sin(a);
+  return vec2f(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+fn hash21(p: vec2f) -> f32 {
+  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+// Positive modulo (WGSL % truncates toward zero; this floors).
+fn modN(x: f32, n: f32) -> f32 {
+  return x - n * floor(x / n);
+}
+
+@fragment
+fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+  let res = u.res.xy;
+  let uv = frag.xy / res;            // 0..1, y down (matches Canvas2D)
+  let asp = u.res.z;
+  let time = u.tb.x;
+  let beat = u.tb.y;
+  let kick = u.tb.z;
+  let downKick = u.tb.w;
+
+  // On-beat "camera kick": everything except the base gradient and the post
+  // zooms slightly about the vanishing point (zoom >= 1: no divide hazard).
+  let zoom = 1.0 + 0.015 * kick;
+  let uvk = VANISH + (uv - VANISH) / zoom;
+  // Aspect-corrected zoomed coords centered on the vanish point, in heights.
+  let pk = vec2f((uvk.x - VANISH.x) * asp, uvk.y - VANISH.y);
+
+  // --- base vertical gradient (3-stop, drawn un-zoomed) ---
+  var col: vec3f;
+  if (uv.y < 0.55) {
+    col = mix(u.gradTop.rgb, u.gradMid.rgb, uv.y / 0.55);
+  } else {
+    col = mix(u.gradMid.rgb, u.gradBot.rgb, (uv.y - 0.55) / 0.45);
+  }
+
+  // --- plasma void: 3 big drifting radial glows, additive but kept dark ---
+  {
+    var centers = array<vec2f, 3>(vec2f(0.3, 0.35), vec2f(0.72, 0.55), vec2f(0.5, 0.75));
+    var tints = array<vec3f, 3>(u.gradMid.rgb, u.accentA.rgb, u.gradTop.rgb);
+    let blobR = 0.42 * asp;          // canvas: W * 0.42, linear falloff to 0
+    for (var i = 0; i < 3; i = i + 1) {
+      let fi = f32(i);
+      let c = centers[i] + 0.12 * vec2f(sin(time * 0.23 + fi * 2.0), cos(time * 0.19 + fi * 3.0));
+      let d = length(vec2f((uvk.x - c.x) * asp, uvk.y - c.y));
+      col = col + tints[i] * (0.13 * max(0.0, 1.0 - d / blobR));
+    }
+  }
+
+  // --- rotating sunburst: 16 alternating god-ray wedges from the vanish point,
+  //     barely there until the downbeat; the hero layer for Butterfly ---
+  {
+    let ang = atan2(pk.y, pk.x + 1e-6) - time * 0.12;
+    let sect = fract(ang / TAU * 8.0);           // 8 lit/dark wedge pairs
+    let wedge = smoothstep(0.0, 0.02, sect) * (1.0 - smoothstep(0.48, 0.5, sect));
+    let rr = clamp(length(pk) / SUN_R, 0.0, 1.0);
+    // Radial alpha that was baked into the sprite: hollow core, bright mid, faded rim.
+    var radMask = mix(0.9, 0.0, (rr - 0.5) / 0.5);
+    if (rr < 0.5) { radMask = mix(0.35, 0.9, rr / 0.5); }
+    let sunA = 0.1 * mix(1.0, 2.6, u.flags.y) + 0.16 * downKick;
+    col = col + u.accentD.rgb * (wedge * radMask * sunA);
+  }
+
+  // --- hexagon tunnel (the hero): thin bright neon hex ring OUTLINES rushing
+  //     outward from the vanish point, pumping 1 ring / 2 beats ---
+  {
+    let sway = 0.35 * sin(time * 0.18);          // slow self-reversing rotation
+    let hd = hexDist(rot2(pk, sway));
+    let pump = beat * 0.5;
+    let fracP = fract(pump);
+    let base = floor(pump);
+    // Rings sit at radius = R*((i + fracP)/N)^2 — invert for the nearest index.
+    let ringF = sqrt(max(hd, 0.0) / TUNNEL_R) * RINGS - fracP;
+    let idx = round(ringF);
+    if (idx >= 0.0 && idx < RINGS) {
+      let pp = (idx + fracP) / RINGS;            // 0 center .. 1 screen edge
+      let radius = TUNNEL_R * pp * pp;           // quadratic = perspective rush
+      if (radius > 0.004) {                      // canvas skips radius < 2px
+        let dist = abs(hd - radius);
+        // Canvas lineWidth 2 + 7p px -> half-width, floored at ~1 device px.
+        let hw = max((1.0 + 3.5 * pp) / 540.0, 1.0 / res.y);
+        let core = 1.0 - smoothstep(hw * 0.4, hw, dist);
+        let glow = exp(-dist * dist / (hw * hw * 9.0));
+        let fade = max(0.0, (1.0 - pp * 0.7) * (0.85 - 0.3 * pp));
+        // Hue cycles per ring through accentA / accentB / accentD.
+        let sel = modN(idx + base, 3.0);
+        var ringCol = u.accentA.rgb;
+        if (sel >= 0.5 && sel < 1.5) { ringCol = u.accentB.rgb; }
+        if (sel >= 1.5) { ringCol = u.accentD.rgb; }
+        // The freshly-spawned innermost ring blooms to white on each beat.
+        if (idx < 0.5) { ringCol = mix(ringCol, u.white.rgb, kick); }
+        col = col + ringCol * ((core + glow * 0.45) * fade);
+      }
+    }
+  }
+
+  // --- perspective checkerboard floor, scrolling toward the viewer ---
+  if (uvk.y > HORIZON) {
+    // Canvas rowY(t) = horizon + 0.4*t*t (t: 0 horizon .. 1 near) — inverted.
+    let t = sqrt((uvk.y - HORIZON) / 0.4);
+    let tc = max(t, 0.02);
+    let cf = (uvk.x - 0.5) * 7.0 / (0.62 * tc);  // column coord, 7 per side
+    let rowPos = t * 14.0 - beat * 2.0;          // 2 cells / beat treadmill
+    let fog = min(1.0, t * 1.6);                 // fade out toward the horizon
+    let inSpread = step(abs(cf), 7.0);
+
+    // Filled checker cells (skipped entirely for the wireframe variant).
+    if (u.flags.x < 0.5) {
+      let checker = modN(floor(rowPos) + floor(cf), 2.0);
+      let cellCol = mix(u.gradMid.rgb, u.accentB.rgb, 0.15 * kick);
+      col = mix(col, cellCol, 0.5 * fog * checker * inSpread);
+    }
+
+    // Horizontal grid rows; every 4th pops toward white on the downbeat.
+    let pxr = 14.0 / (0.8 * tc * res.y);         // row units per device pixel
+    let dr = abs(rowPos - round(rowPos));
+    let rowLine = (1.0 - smoothstep(0.5 * pxr, 1.5 * pxr, dr)) * inSpread;
+    let flash = downKick * step(modN(round(rowPos), 4.0), 0.5);
+    col = col + mix(u.accentB.rgb, u.white.rgb, flash) * (0.5 * fog * rowLine);
+
+    // Converging verticals (horizon -> near edge).
+    let pxc = 7.0 / (0.62 * tc * res.x);         // col units per device pixel
+    let dc = abs(cf - round(cf));
+    let colLine = (1.0 - smoothstep(0.5 * pxc, 1.5 * pxc, dc)) * step(abs(round(cf)), 7.0);
+    col = col + u.accentB.rgb * (0.35 * colLine * min(1.0, t * 3.0));
+  }
+
+  // --- sparkles: hash-seeded twinkle field in the upper 2/3; 4-point stars,
+  //     or 5-petal blossoms for Sakura ---
+  {
+    let su = vec2f(uvk.x * asp, uvk.y);          // square units for round stars
+    let cid = floor(su / CELL);
+    let h0 = hash21(cid);
+    if (h0 < 0.55) {                             // ~half the cells host a star
+      let jx = 0.3 + 0.4 * hash21(cid + vec2f(11.3, 7.7));
+      let jy = 0.3 + 0.4 * hash21(cid + vec2f(2.7, 19.1));
+      let sp = (cid + vec2f(jx, jy)) * CELL;
+      if (sp.y < 0.7) {
+        let phase = hash21(cid + vec2f(31.9, 5.3)) * TAU;
+        let speed = 1.5 + 3.0 * hash21(cid + vec2f(23.1, 13.7));
+        let scale = 0.4 + 0.9 * hash21(cid + vec2f(3.3, 41.7));
+        let tw = sin(phase + time * speed);
+        let b = pow(max(tw, 0.0), 8.0);          // pow(sin,8): sharp snap on
+        // Star radius (canvas: 23px * scale * twinkle), kept inside its cell.
+        let margin = min(min(jx, 1.0 - jx), min(jy, 1.0 - jy)) * CELL;
+        let r = min(0.0426 * scale * b, margin * 0.95);
+        if (r > 0.0012) {
+          let a = min(1.0, b + 0.2);
+          let q = su - sp;
+          let d = length(q);
+          if (u.flags.z > 0.5) {
+            // 5-petal blossom with a bright core, randomly oriented.
+            let angp = atan2(q.y, q.x + 1e-6) + h0 * TAU;
+            let petR = r * (0.62 + 0.38 * cos(5.0 * angp));
+            let petal = 1.0 - smoothstep(petR * 0.7, petR + 1e-5, d);
+            let corec = 1.0 - smoothstep(r * 0.13, r * 0.22, d);
+            col = col + (u.accentA.rgb * (petal * 0.9) + u.white.rgb * corec) * a;
+          } else {
+            // Soft glowing core + 4 sharp axis spikes.
+            let glowS = exp(-d * d / (r * r * 0.28));
+            let armW = max(r * 0.1, 0.0012);
+            let armX = (1.0 - smoothstep(0.0, r, abs(q.x))) * (1.0 - smoothstep(0.0, armW, abs(q.y)));
+            let armY = (1.0 - smoothstep(0.0, r, abs(q.y))) * (1.0 - smoothstep(0.0, armW, abs(q.x)));
+            let arms = max(armX, armY);
+            col = col + (u.accentC.rgb * (glowS * 0.8) + u.white.rgb * (glowS * glowS * 0.6 + arms * 0.9)) * a;
+          }
+        }
+      }
+    }
+  }
+
+  // --- post: CRT scanlines (1 dark row in 3), corner vignette, and a 1-frame
+  //     exposure lift on the downbeat ---
+  col = col * select(1.0, 0.74, fract(frag.y / 3.0) < 0.3334);
+  let vd = length(vec2f((uv.x - 0.5) * asp, uv.y - 0.5));
+  col = col * (1.0 - 0.55 * clamp((vd - 0.25) / 0.5, 0.0, 1.0));
+  col = col + u.white.rgb * (0.08 * downKick);
+
+  col = col * (1.0 - u.res.w);       // background dim, folded in like the media pass
+  return vec4f(col, 1.0);
+}
+`;
+
+// The dancer mesh: real triangles built CPU-side (AttractDancer) in a fixed
+// 960x540 design space (y down), cover-fit to the viewport here, per-vertex
+// colored. Drawn over the background — solid facets, then additive edges/glow.
+const DANCER_WGSL = /* wgsl */ `
+struct DU { p: vec4f };   // viewW, viewH, dim, _
+@group(0) @binding(0) var<uniform> du: DU;
+struct VO { @builtin(position) pos: vec4f, @location(0) col: vec3f };
+@vertex
+fn vs(@location(0) xy: vec2f, @location(1) col: vec3f) -> VO {
+  let vw = du.p.x;
+  let vh = du.p.y;
+  let sc = max(vw / 960.0, vh / 540.0);   // cover-fit the design space
+  let px = (vw - 960.0 * sc) * 0.5 + xy.x * sc;
+  let py = (vh - 540.0 * sc) * 0.5 + xy.y * sc;
+  var o: VO;
+  o.pos = vec4f(px / vw * 2.0 - 1.0, 1.0 - py / vh * 2.0, 0.0, 1.0);
+  o.col = col;
+  return o;
+}
+@fragment
+fn fs(v: VO) -> @location(0) vec4f {
+  return vec4f(v.col * (1.0 - du.p.z), 1.0);   // dim folded in, like the bg
+}
+`;
+
+/** Config for the current song's attract loop. */
+export interface AttractConfig {
+  variant: number;
+  /** Chart step timeline (beats + L/D/U/R column masks) the dancer steps to. */
+  steps?: readonly { beat: number; cols: number }[];
+}
+
+export class AttractGpu {
+  private readonly pipeline: GPURenderPipeline;
+  private readonly uniform: GPUBuffer;
+  private readonly bind: GPUBindGroup;
+  private readonly data = new Float32Array(44); // 11 vec4
+  private pal: GpuPalette = PALETTES[0];
+
+  // Dancer mesh: CPU geometry (AttractDancer) drawn via two blend passes.
+  private readonly solidPipe: GPURenderPipeline;
+  private readonly addPipe: GPURenderPipeline;
+  private readonly dancerUniform: GPUBuffer;
+  private readonly dancerBind: GPUBindGroup;
+  private readonly dancerData = new Float32Array(4); // viewW, viewH, dim, _
+  private solidBuf: GPUBuffer | null = null;
+  private addBuf: GPUBuffer | null = null;
+  private dancer: AttractDancer | null = null;
+
+  constructor(
+    private readonly device: GPUDevice,
+    format: GPUTextureFormat,
+  ) {
+    const module = device.createShaderModule({ code: WGSL });
+    this.pipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vs' },
+      fragment: { module, entryPoint: 'fs', targets: [{ format }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.uniform = device.createBuffer({
+      size: this.data.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.bind = device.createBindGroup({
+      layout: this.pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.uniform } }],
+    });
+
+    // Dancer mesh pipelines: one shared cover-fit shader, two blend modes.
+    const dm = device.createShaderModule({ code: DANCER_WGSL });
+    const vbLayout: GPUVertexBufferLayout = {
+      arrayStride: 20, // x,y,r,g,b = 5 * f32
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x2' },
+        { shaderLocation: 1, offset: 8, format: 'float32x3' },
+      ],
+    };
+    // A shared explicit layout so both blend-variant pipelines accept the same
+    // bind group (an 'auto' layout would give each its own, incompatible one).
+    const dancerBGL = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' },
+        },
+      ],
+    });
+    const dancerPL = device.createPipelineLayout({ bindGroupLayouts: [dancerBGL] });
+    const meshPipe = (blend?: GPUBlendState): GPURenderPipeline =>
+      device.createRenderPipeline({
+        layout: dancerPL,
+        vertex: { module: dm, entryPoint: 'vs', buffers: [vbLayout] },
+        fragment: { module: dm, entryPoint: 'fs', targets: [{ format, blend }] },
+        primitive: { topology: 'triangle-list' },
+      });
+    // Solid: opaque body, src-over (alpha is always 1 → replace where drawn).
+    this.solidPipe = meshPipe({
+      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'zero', operation: 'add' },
+    });
+    // Additive: neon edges + rim glow + sparks glow onto the scene.
+    this.addPipe = meshPipe({
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    });
+    this.dancerUniform = device.createBuffer({
+      size: this.dancerData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.dancerBind = device.createBindGroup({
+      layout: dancerBGL,
+      entries: [{ binding: 0, resource: { buffer: this.dancerUniform } }],
+    });
+  }
+
+  setConfig(cfg: AttractConfig): void {
+    const n = PALETTES.length;
+    const v = (((cfg.variant | 0) % n) + n) % n;
+    this.pal = PALETTES[v];
+    // One dancer per song (fresh spring/cursor state), stepping to this chart.
+    this.dancer = new AttractDancer(v);
+    this.dancer.setSteps(cfg.steps ?? []);
+  }
+
+  /** Grow (or lazily create) a vertex buffer to hold `arr`. */
+  private ensureVB(buf: GPUBuffer | null, arr: Float32Array): GPUBuffer {
+    if (buf && buf.size >= arr.byteLength) return buf;
+    buf?.destroy();
+    return this.device.createBuffer({
+      size: arr.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+  }
+
+  /** Encode the fullscreen background (call first in the pass; it overwrites). */
+  draw(
+    pass: GPURenderPassEncoder,
+    viewW: number,
+    viewH: number,
+    now: number,
+    beat: number,
+    dim = 0,
+  ): void {
+    const d = this.data;
+    const phase = beat - Math.floor(beat);
+    const mBeat = beat - 4 * Math.floor(beat / 4);
+    const valid = Number.isFinite(beat);
+    const b = valid ? beat : now * 1.4;
+    d[0] = viewW;
+    d[1] = viewH;
+    d[2] = viewW / Math.max(1, viewH);
+    d[3] = Math.max(0, Math.min(1, dim));
+    d[4] = now;
+    d[5] = b;
+    d[6] = valid ? Math.exp(-6 * phase) : 0;
+    d[7] = valid ? Math.exp(-3 * mBeat) : 0;
+    const p = this.pal;
+    const set = (off: number, c: [number, number, number]): void => {
+      d[off] = c[0];
+      d[off + 1] = c[1];
+      d[off + 2] = c[2];
+      d[off + 3] = 0;
+    };
+    set(8, p.gradTop);
+    set(12, p.gradMid);
+    set(16, p.gradBot);
+    set(20, p.accentA);
+    set(24, p.accentB);
+    set(28, p.accentC);
+    set(32, p.accentD);
+    set(36, p.white);
+    d[40] = p.floorWire;
+    d[41] = p.sunHero;
+    d[42] = p.petals;
+    d[43] = 0;
+    this.device.queue.writeBuffer(this.uniform, 0, d);
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bind);
+    pass.draw(3);
+
+    // Dancer mesh over the background: solid facets, then additive edges/glow.
+    if (this.dancer) {
+      const dd = this.dancerData;
+      dd[0] = viewW;
+      dd[1] = viewH;
+      dd[2] = Math.max(0, Math.min(1, dim));
+      this.device.queue.writeBuffer(this.dancerUniform, 0, dd);
+      const f = this.dancer.build(now, b);
+      pass.setBindGroup(0, this.dancerBind);
+      if (f.solidCount > 0) {
+        this.solidBuf = this.ensureVB(this.solidBuf, f.solid);
+        this.device.queue.writeBuffer(this.solidBuf, 0, f.solid, 0, f.solidCount * 5);
+        pass.setPipeline(this.solidPipe);
+        pass.setVertexBuffer(0, this.solidBuf);
+        pass.draw(f.solidCount);
+      }
+      if (f.additiveCount > 0) {
+        this.addBuf = this.ensureVB(this.addBuf, f.additive);
+        this.device.queue.writeBuffer(this.addBuf, 0, f.additive, 0, f.additiveCount * 5);
+        pass.setPipeline(this.addPipe);
+        pass.setVertexBuffer(0, this.addBuf);
+        pass.draw(f.additiveCount);
+      }
+    }
+  }
+
+  destroy(): void {
+    try {
+      this.uniform.destroy();
+      this.dancerUniform.destroy();
+      this.solidBuf?.destroy();
+      this.addBuf?.destroy();
+    } catch {
+      // device already lost
+    }
+  }
+}

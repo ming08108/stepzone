@@ -59,6 +59,7 @@ import type { NoteSkin } from '../../game/playOptions';
 import { GpuAtlas } from './atlas';
 import { GlyphBank } from './glyphs';
 import { GpuTimer } from './gpuTimer';
+import { AttractGpu, type AttractConfig } from './attractGpu';
 import { MediaLayer } from './media';
 import { QuadBatch } from './quads';
 import { ShapeBatch } from './shapes';
@@ -213,6 +214,9 @@ export class GpuNoteField {
   private atlasSize = 0;
   private atlasScale = 0;
   private readonly media: MediaLayer;
+  /** Procedural attract background (GPU), drawn when a song ships no BGA. */
+  private attract: AttractGpu | null = null;
+  private attractCfg: AttractConfig | null = null;
   private readonly timer: GpuTimer;
   /** The art plug-in (arcade / ITG), selected by cfg.noteSkin. */
   private skin: GpuSkin;
@@ -342,6 +346,16 @@ export class GpuNoteField {
     media: HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement | null,
   ): void {
     this.media.setSource(media);
+  }
+
+  /** Enable (or clear) the procedural GPU attract background — drawn when no
+   *  song media is set. Lazily builds the pipeline the first time it's used. */
+  setAttract(cfg: AttractConfig | null): void {
+    this.attractCfg = cfg;
+    if (cfg) {
+      this.attract ??= new AttractGpu(this.device, this.format);
+      this.attract.setConfig(cfg);
+    }
   }
 
   /** Per-beat elapsed times (see beatTimes()) enabling the guide-line pass;
@@ -756,7 +770,11 @@ export class GpuNoteField {
       this.passDesc.timestampWrites = this.timer.timestampWrites();
       const enc = this.device.createCommandEncoder();
       const pass = enc.beginRenderPass(this.passDesc);
-      this.media.draw(pass, width, height, this.cfg.bgDim);
+      if (this.attractCfg && this.attract && !this.media.active) {
+        this.attract.draw(pass, width, height, now, beat, this.cfg.bgDim);
+      } else {
+        this.media.draw(pass, width, height, this.cfg.bgDim);
+      }
       this.underShapes.flush(pass); // SL chrome + density, UNDER the notes
       this.batch.flush(pass); // field, notes, explosions (textured quads)
       this.shapes.flush(pass); // HUD backgrounds (geometry) over the field
@@ -950,6 +968,7 @@ export class GpuNoteField {
       this.shapes.destroy();
       this.timer.destroy();
       this.media.destroy();
+      this.attract?.destroy();
       this.atlas.destroy();
       this.device.destroy();
     } catch {
