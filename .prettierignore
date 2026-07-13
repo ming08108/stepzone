@@ -1,6 +1,12 @@
 # Generated function bundles (scripts/buildApi.mjs) — not hand-written code.
 api/*.js
 
+# Binary asset(s) — 3D model files, not code (prettier can't parse them).
+*.glb
+
 # Local-only, gitignored tool state — absent from CI's checkout, so ignore it
 # here too and the pre-commit/pre-push format check matches CI exactly.
 .claude/settings.local.json
+
+# Local scratch (agent/verify tooling), not committed code.
+.tmpbench/
