@@ -354,6 +354,124 @@ function lerpPose(a: Pose, b: Pose, e: number): Pose {
   };
 }
 
+/** One note row on the chart timeline: the beat it lands on and a 4-bit column
+ *  mask (bit0=Left, bit1=Down, bit2=Up, bit3=Right). A jump lights >1 bit. */
+export interface Step {
+  beat: number;
+  cols: number;
+}
+
+// Direction "hit" poses the dancer strikes ON each note — left/right throw an
+// arm to that side, up punches both skyward, down dips, a jump stars out. These
+// are the vocabulary drawDancer blends between as the chart's arrows go by.
+const NEUTRAL: Pose = {
+  crouch: 0.02,
+  rise: 0,
+  shiftX: 0,
+  lean: 0,
+  head: 0,
+  armLUp: -0.35,
+  armLLo: -0.55,
+  armRUp: 0.35,
+  armRLo: 0.55,
+  legLUp: -0.06,
+  legLLo: -0.06,
+  legRUp: 0.06,
+  legRLo: 0.06,
+};
+const STEP_L: Pose = {
+  crouch: 0.02,
+  rise: 0.02,
+  shiftX: -0.05,
+  lean: -0.06,
+  head: -0.12,
+  armLUp: -2.35,
+  armLLo: -2.5,
+  armRUp: 0.55,
+  armRLo: 0.9,
+  legLUp: -0.16,
+  legLLo: -0.12,
+  legRUp: 0.08,
+  legRLo: 0.06,
+};
+const STEP_R: Pose = {
+  crouch: 0.02,
+  rise: 0.02,
+  shiftX: 0.05,
+  lean: 0.06,
+  head: 0.12,
+  armLUp: -0.55,
+  armLLo: -0.9,
+  armRUp: 2.35,
+  armRLo: 2.5,
+  legLUp: -0.08,
+  legLLo: -0.06,
+  legRUp: 0.16,
+  legRLo: 0.12,
+};
+const STEP_U: Pose = {
+  crouch: 0,
+  rise: 0.06,
+  shiftX: 0,
+  lean: 0,
+  head: -0.14,
+  armLUp: -2.95,
+  armLLo: -3.05,
+  armRUp: 2.95,
+  armRLo: 3.05,
+  legLUp: -0.05,
+  legLLo: -0.05,
+  legRUp: 0.05,
+  legRLo: 0.05,
+};
+const STEP_D: Pose = {
+  crouch: 0.11,
+  rise: 0,
+  shiftX: 0,
+  lean: 0.03,
+  head: 0.06,
+  armLUp: -0.25,
+  armLLo: 0.5,
+  armRUp: 0.25,
+  armRLo: -0.5,
+  legLUp: 0.1,
+  legLLo: 0.28,
+  legRUp: -0.1,
+  legRLo: -0.28,
+};
+const JUMP: Pose = {
+  crouch: 0,
+  rise: 0.07,
+  shiftX: 0,
+  lean: 0,
+  head: -0.08,
+  armLUp: -2.25,
+  armLLo: -2.25,
+  armRUp: 2.25,
+  armRLo: 2.25,
+  legLUp: -0.3,
+  legLLo: -0.28,
+  legRUp: 0.3,
+  legRLo: 0.28,
+};
+
+/** The pose for a note row's column mask (bit0=L,1=D,2=U,3=R). */
+function dirPose(cols: number): Pose {
+  const bits = (cols & 1) + ((cols >> 1) & 1) + ((cols >> 2) & 1) + ((cols >> 3) & 1);
+  if (bits >= 2) return JUMP; // jump/chord — star out
+  if (cols & 1) return STEP_L;
+  if (cols & 2) return STEP_D;
+  if (cols & 4) return STEP_U;
+  if (cols & 8) return STEP_R;
+  return NEUTRAL;
+}
+
+/** True if a note row raises a hand skyward (→ trigger the hand-burst sparkles). */
+function raisesHand(cols: number): boolean {
+  const bits = (cols & 1) + ((cols >> 1) & 1) + ((cols >> 2) & 1) + ((cols >> 3) & 1);
+  return bits >= 2 || (cols & 4) !== 0; // jump or an Up
+}
+
 interface Sparkle {
   x: number;
   y: number;
@@ -368,6 +486,10 @@ export class AttractBackground {
 
   private readonly ctx: CanvasRenderingContext2D;
   private readonly beat: () => number;
+  // The chart's step timeline (beats + an L/D/U/R column mask), so the dancer
+  // steps to the actual notes instead of a fixed loop. Empty ⇒ generic loop.
+  private readonly steps: readonly Step[];
+  private stepCursor = 0;
   private readonly pal: Palette;
   // Per-variant dancer fill ramps: [zone][0 shadow | 1 mid | 2 lit] strings.
   private readonly zoneFills: readonly (readonly string[])[];
@@ -403,8 +525,10 @@ export class AttractBackground {
   private skirtX = NaN;
   private skirtY = NaN;
 
-  constructor(opts: { beat: () => number; variant?: number }) {
+  constructor(opts: { beat: () => number; variant?: number; steps?: readonly Step[] }) {
     this.beat = opts.beat;
+    // Sorted ascending by beat so the walking cursor in drawDancer is O(1)/frame.
+    this.steps = opts.steps ? [...opts.steps].sort((a, b) => a.beat - b.beat) : [];
     this.pal =
       PALETTES[(((opts.variant ?? 0) % PALETTES.length) + PALETTES.length) % PALETTES.length];
 
@@ -1440,7 +1564,43 @@ export class AttractBackground {
     let pose: Pose;
     let phase: number;
     let bob: number;
-    if (valid) {
+    let burstLife = 0; // >0 fires the raised-hand sparkle burst this frame
+    if (valid && this.steps.length > 0) {
+      // Chart-driven: dance the actual notes. Move toward the next arrow and
+      // snap onto it with overshoot; in a wide gap, hold the last hit and
+      // groove. Dense streams read as busy, sparse charts as laid-back.
+      const steps = this.steps;
+      let c = this.stepCursor;
+      if (c >= steps.length || steps[c].beat > beat) c = 0; // rewound (loop/seek)
+      while (c + 1 < steps.length && steps[c + 1].beat <= beat) c++;
+      this.stepCursor = c;
+      const cur = steps[c];
+      const next = c + 1 < steps.length ? steps[c + 1] : undefined;
+      let base = dirPose(cur.cols);
+      if (next) {
+        const approach = Math.min(next.beat - cur.beat, 0.55);
+        const toNext = next.beat - beat;
+        if (approach > 0 && toNext <= approach) {
+          const prog = Math.min(1.05, easeSnap(1 - toNext / approach));
+          base = lerpPose(base, dirPose(next.cols), prog);
+        }
+      }
+      // Keep her alive between hits with a small continuous groove wobble.
+      const g = Math.sin(time * 3.0);
+      pose = {
+        ...base,
+        shiftX: base.shiftX + 0.012 * g,
+        lean: base.lean + 0.03 * Math.sin(time * 2.2),
+        head: base.head + 0.05 * Math.sin(time * 2.2 + 0.4),
+        armLLo: base.armLLo + 0.06 * g,
+        armRLo: base.armRLo - 0.06 * g,
+      };
+      phase = beat - Math.floor(beat);
+      bob = 0.02 * BODY_H * (1 - Math.abs(Math.sin(PI * phase)));
+      const sinceHit = beat - cur.beat;
+      if (sinceHit < 0.18 && raisesHand(cur.cols)) burstLife = 1 - sinceHit / 0.18;
+    } else if (valid) {
+      // No chart steps (e.g. an empty/edit chart): the generic 8-beat loop.
       const idx = ((Math.floor(beat) % 8) + 8) % 8;
       phase = beat - Math.floor(beat);
       const e = Math.max(0, Math.min(1.05, easeSnap(phase)));
@@ -1448,6 +1608,7 @@ export class AttractBackground {
       // Mirror the whole loop every 4 measures so it doesn't hypnotize.
       if ((Math.floor(beat / 16) & 1) === 1) pose = this.mirror(pose);
       bob = 0.02 * BODY_H * (1 - Math.abs(Math.sin(PI * phase)));
+      if ((idx === 0 || idx === 2) && phase < 0.22) burstLife = 1 - phase / 0.22;
     } else {
       // Idle: a calm neutral sway that never freezes to a dead pose.
       const sw = Math.sin(time * 1.5);
@@ -1500,24 +1661,20 @@ export class AttractBackground {
     this.drawBody(this.skel, 'body', this.pal.accentA, 0.5 + 0.4 * kick, 0);
     ctx.restore();
 
-    // Hand-burst sparkles on the sky-punch beats (1 & 3).
-    if (valid) {
-      const idx = ((Math.floor(beat) % 8) + 8) % 8;
-      if ((idx === 0 || idx === 2) && phase < 0.22) {
-        const hx = this.skel[HAR * 2];
-        const hy = this.skel[HAR * 2 + 1]; // bob is already baked into the skeleton
-        const life = 1 - phase / 0.22;
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        for (let i = 0; i < 5; i++) {
-          const sz = 30 * life;
-          const jx = this.burstJitter[(i * 2) % this.burstJitter.length];
-          const jy = this.burstJitter[(i * 2 + 1) % this.burstJitter.length];
-          ctx.globalAlpha = life;
-          ctx.drawImage(this.sparkleSprite, hx + jx - sz / 2, hy + jy - sz / 2, sz, sz);
-        }
-        ctx.restore();
+    // Hand-burst sparkles when a raised-hand note (Up / jump) just landed.
+    if (burstLife > 0) {
+      const hx = this.skel[HAR * 2];
+      const hy = this.skel[HAR * 2 + 1]; // bob is already baked into the skeleton
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 5; i++) {
+        const sz = 30 * burstLife;
+        const jx = this.burstJitter[(i * 2) % this.burstJitter.length];
+        const jy = this.burstJitter[(i * 2 + 1) % this.burstJitter.length];
+        ctx.globalAlpha = burstLife;
+        ctx.drawImage(this.sparkleSprite, hx + jx - sz / 2, hy + jy - sz / 2, sz, sz);
       }
+      ctx.restore();
     }
 
     // Record this frame's pose for future trails (fixed-length ring buffer).
