@@ -27,3 +27,8 @@ todos*.txt
 
 .vercel
 .env*
+
+# Local dev/verify scratch (not committed)
+.tmpbench/
+robot-test.html
+.*.mjs

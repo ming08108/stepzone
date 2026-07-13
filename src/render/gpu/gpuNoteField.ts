@@ -769,9 +769,13 @@ export class GpuNoteField {
       this.colorAttachment.view = this.ctx.getCurrentTexture().createView();
       this.passDesc.timestampWrites = this.timer.timestampWrites();
       const enc = this.device.createCommandEncoder();
+      const attractActive = this.attractCfg && this.attract && !this.media.active;
+      // The attract's 3D model (if loaded) renders to its own offscreen target
+      // on this encoder, BEFORE the main pass, so it can use its own depth.
+      if (attractActive) this.attract!.renderModel(enc, width, height, now, beat, this.cfg.bgDim);
       const pass = enc.beginRenderPass(this.passDesc);
-      if (this.attractCfg && this.attract && !this.media.active) {
-        this.attract.draw(pass, width, height, now, beat, this.cfg.bgDim);
+      if (attractActive) {
+        this.attract!.draw(pass, width, height, now, beat, this.cfg.bgDim);
       } else {
         this.media.draw(pass, width, height, this.cfg.bgDim);
       }

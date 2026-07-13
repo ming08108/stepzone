@@ -985,6 +985,30 @@ const PEL = 0,
   COLLAR = 22;
 const JOINTS = 23;
 
+/** Named joint indices into the solved 3D skeleton (getSkeleton3D()), for
+ *  retargeting our animation onto a real rigged model's bones. The buffer is
+ *  [x,y,z] per joint in the dancer's design space: x = screen-right, y = DOWN,
+ *  z = toward the viewer; units are design px (H=540). Chains: pelvis→chest→
+ *  neck→head; shoulder→elbow→hand; hip→knee→foot. */
+export const DANCER_SKELETON = {
+  pelvis: PEL,
+  chest: SH,
+  neck: HEADB,
+  head: HEAD,
+  shoulderL: SHL,
+  elbowL: ELL,
+  handL: HAL,
+  shoulderR: SHR,
+  elbowR: ELR,
+  handR: HAR,
+  hipL: HIPL,
+  kneeL: KNL,
+  footL: FTL,
+  hipR: HIPR,
+  kneeR: KNR,
+  footR: FTR,
+} as const;
+
 // Color zones → per-variant 3-step lit/mid/shadow ramps.
 const ZSKIN = 0,
   ZHAIR = 1,
@@ -1250,6 +1274,13 @@ export class AttractDancer {
   setSteps(steps: readonly Step[]): void {
     this.steps = [...steps].sort((a, b) => a.beat - b.beat);
     this.rewind();
+  }
+
+  /** The solved 3D skeleton after the most recent build() — [x,y,z] per joint
+   *  (design space: x right, y DOWN, z toward viewer). Indexed by
+   *  DANCER_SKELETON. For retargeting our animation onto a real model. */
+  getSkeleton3D(): Float64Array {
+    return this.skel3;
   }
 
   private rewind(): void {

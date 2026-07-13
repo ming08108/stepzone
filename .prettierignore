@@ -10,3 +10,7 @@ api/*.js
 
 # Local scratch (agent/verify tooling), not committed code.
 .tmpbench/
+
+# Local dev/verify harness (temp, not shipped)
+robot-test.html
+.*.mjs

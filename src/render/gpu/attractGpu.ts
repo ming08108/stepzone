@@ -13,7 +13,28 @@
  * the palettes and layer design mirror it 1:1.
  */
 
-import { AttractDancer } from '../attractDancer';
+import { AttractDancer, DANCER_SKELETON } from '../attractDancer';
+import { SkinnedModel } from './skinnedModel';
+
+// Composite pass: draw the skinned model's offscreen render (a real 3D
+// character our animation drives) over the background as a full-canvas quad.
+const MODEL_WGSL = /* wgsl */ `
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> VO {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var o: VO;
+  o.pos = vec4f(p[i], 0.0, 1.0);
+  o.uv = vec2f((p[i].x + 1.0) * 0.5, (1.0 - p[i].y) * 0.5);
+  return o;
+}
+@fragment
+fn fs(v: VO) -> @location(0) vec4f {
+  return textureSample(tex, samp, v.uv);
+}
+`;
 
 /** One mood/variant's colors, as 0..1 float RGB ready for the uniform buffer. */
 interface GpuPalette {
@@ -357,6 +378,13 @@ export class AttractGpu {
   // Dancer mesh: CPU geometry (AttractDancer) drawn via two blend passes.
   private readonly solidPipe: GPURenderPipeline;
   private readonly addPipe: GPURenderPipeline;
+
+  // Real 3D model (loaded async). While it loads, the procedural mesh shows;
+  // once ready, our animation retargets onto it and we composite its render.
+  private readonly modelPipe: GPURenderPipeline;
+  private readonly modelSampler: GPUSampler;
+  private model: SkinnedModel | null = null;
+  private usingModel = false; // set per frame by renderModel()
   private readonly dancerUniform: GPUBuffer;
   private readonly dancerBind: GPUBindGroup;
   private readonly dancerData = new Float32Array(4); // viewW, viewH, dim, _
@@ -430,6 +458,37 @@ export class AttractGpu {
       layout: dancerBGL,
       entries: [{ binding: 0, resource: { buffer: this.dancerUniform } }],
     });
+
+    // Model composite pipeline (samples the model's offscreen render, alpha
+    // over the scene) + a linear sampler.
+    const mm = device.createShaderModule({ code: MODEL_WGSL });
+    this.modelPipe = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: mm, entryPoint: 'vs' },
+      fragment: {
+        module: mm,
+        entryPoint: 'fs',
+        targets: [
+          {
+            format,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          },
+        ],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.modelSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+    // Load the real 3D character; the procedural dancer covers until it's ready.
+    void SkinnedModel.load(device, format, '/models/RobotExpressive.glb')
+      .then((m) => {
+        this.model = m;
+      })
+      .catch(() => {
+        // No model (fetch/decode failed) — stay on the procedural dancer.
+      });
   }
 
   setConfig(cfg: AttractConfig): void {
@@ -452,6 +511,30 @@ export class AttractGpu {
   }
 
   /** Encode the fullscreen background (call first in the pass; it overwrites). */
+  /** Encode the model's offscreen render BEFORE the main pass: solve our
+   *  animation's skeleton, retarget it onto the real model, render it (with its
+   *  own depth). draw() then composites the result. No-op until the model
+   *  loads (the procedural dancer covers meanwhile). */
+  renderModel(
+    enc: GPUCommandEncoder,
+    viewW: number,
+    viewH: number,
+    now: number,
+    beat: number,
+    dim = 0,
+  ): void {
+    this.usingModel = false;
+    const model = this.model;
+    if (!model || !this.dancer || viewW <= 0 || viewH <= 0) return;
+    const b = Number.isFinite(beat) ? beat : now * 1.4;
+    this.dancer.build(now, b); // solves the 3D skeleton (skel3)
+    model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
+    const k = Math.max(0, 1 - Math.max(0, Math.min(1, dim))); // match the bg dim
+    model.setTint(k, k, k);
+    model.render(enc, viewW, viewH);
+    this.usingModel = true;
+  }
+
   draw(
     pass: GPURenderPassEncoder,
     viewW: number,
@@ -497,8 +580,21 @@ export class AttractGpu {
     pass.setBindGroup(0, this.bind);
     pass.draw(3);
 
-    // Dancer mesh over the background: solid facets, then additive edges/glow.
-    if (this.dancer) {
+    // The dancer over the background. If the real 3D model is loaded, our
+    // animation was retargeted onto it in renderModel() (offscreen); composite
+    // it. Otherwise draw the procedural mesh (solid facets + additive edges).
+    if (this.usingModel && this.model) {
+      const bind = this.device.createBindGroup({
+        layout: this.modelPipe.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: this.modelSampler },
+          { binding: 1, resource: this.model.colorView },
+        ],
+      });
+      pass.setPipeline(this.modelPipe);
+      pass.setBindGroup(0, bind);
+      pass.draw(3);
+    } else if (this.dancer) {
       const dd = this.dancerData;
       dd[0] = viewW;
       dd[1] = viewH;

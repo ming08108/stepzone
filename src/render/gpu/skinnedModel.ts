@@ -1,7 +1,8 @@
 /**
- * WebGPU skinned-mesh renderer for a glTF character (Phase 1: load + skin +
- * render in a static pose). Foundation for a real 3D character in the attract
- * background; Phase 2 will feed retargeted per-joint rotations into `setPose`.
+ * WebGPU skinned-mesh renderer for a glTF character. Loads + skins + renders the
+ * model (Phase 1), and poses it from our animation's solved skeleton via an
+ * aim-constraint retarget (`retargetFromSkeleton`, Phase 2). Foundation for a
+ * real 3D character in the attract background.
  *
  * The model rigs two ways at once (see gltf.ts): rigid body meshes parented to
  * bones, plus two truly skinned hands. Both go through one skinning pipeline —
@@ -33,6 +34,60 @@ export interface Camera {
   up?: [number, number, number];
   near?: number;
   far?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Retargeting axis convention.
+//
+// Our animation solves world-space joints in screen space: x = right, y = DOWN,
+// z = toward the viewer, units = design px. glTF is y-UP, so we flip Y by
+// default. These are exposed as tunables: flip a sign or reorder AXIS_ORDER to
+// correct handedness/orientation during visual tuning without touching logic.
+// A direction (child - bone) becomes model space as:
+//   c = [dx*X_SIGN, dy*Y_SIGN, dz*Z_SIGN];  dirModel = [c[AXIS_ORDER[i]]]
+// ---------------------------------------------------------------------------
+const X_SIGN = 1;
+const Y_SIGN = -1; // our y points down; glTF y points up
+const Z_SIGN = 1;
+const AXIS_ORDER: readonly [number, number, number] = [0, 1, 2];
+
+/**
+ * Model bone -> our skeleton chain segment. `restChild` is a descendant node
+ * of `bone` whose bind position defines the bone's rest aim direction; `from`
+ * and `to` are our named joints whose vector is the target aim direction. Two
+ * model bones can share one segment (clavicle + upper arm, hips + lower spine).
+ */
+interface BoneChain {
+  bone: string;
+  restChild: string;
+  from: string;
+  to: string;
+}
+const BONE_CHAINS: readonly BoneChain[] = [
+  { bone: 'Hips', restChild: 'Abdomen', from: 'pelvis', to: 'chest' },
+  { bone: 'Abdomen', restChild: 'Torso', from: 'pelvis', to: 'chest' },
+  { bone: 'Torso', restChild: 'Neck', from: 'chest', to: 'neck' },
+  { bone: 'Neck', restChild: 'Head', from: 'neck', to: 'head' },
+  { bone: 'Head', restChild: 'Head_end', from: 'neck', to: 'head' },
+  { bone: 'Shoulder.L', restChild: 'UpperArm.L', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'UpperArm.L', restChild: 'LowerArm.L', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'LowerArm.L', restChild: 'Palm2.L', from: 'elbowL', to: 'handL' },
+  { bone: 'Shoulder.R', restChild: 'UpperArm.R', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'UpperArm.R', restChild: 'LowerArm.R', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'LowerArm.R', restChild: 'Palm2.R', from: 'elbowR', to: 'handR' },
+  { bone: 'UpperLeg.L', restChild: 'LowerLeg.L', from: 'hipL', to: 'kneeL' },
+  { bone: 'LowerLeg.L', restChild: 'LowerLeg.L_end', from: 'kneeL', to: 'footL' },
+  { bone: 'UpperLeg.R', restChild: 'LowerLeg.R', from: 'hipR', to: 'kneeR' },
+  { bone: 'LowerLeg.R', restChild: 'LowerLeg.R_end', from: 'kneeR', to: 'footR' },
+];
+
+/** A resolved retarget bone: node + palette slot + precomputed rest aim dir. */
+interface RetargetBone {
+  node: number;
+  palette: number;
+  restDir: Float32Array<ArrayBuffer>; // unit, native model space (from bind globals)
+  from: string;
+  to: string;
 }
 
 interface GpuPrimitive {
@@ -144,6 +199,21 @@ export class SkinnedModel {
 
   private tint: [number, number, number, number] = [1, 1, 1, 1];
 
+  // --- Retargeting bind data + scratch (built in the constructor). ----------
+  private retargetBones: RetargetBone[] = [];
+  private retargetByNode: (RetargetBone | undefined)[] = [];
+  private bindGlobalQuat!: Float32Array<ArrayBuffer>; // per node, [x,y,z,w]
+  private bindLocalQuat!: Float32Array<ArrayBuffer>; // per node
+  private bindLocalTrans!: Float32Array<ArrayBuffer>; // per node, [x,y,z]
+  private bindLocalScale!: Float32Array<ArrayBuffer>; // per node, [x,y,z]
+  private curGlobalQuat!: Float32Array<ArrayBuffer>; // per node scratch
+  private retargetLocals!: Float32Array<ArrayBuffer>; // palette-order out (16 each)
+  private bindPaletteLocals!: Float32Array<ArrayBuffer>; // palette-order bind locals
+  private readonly qA = new Float32Array(4);
+  private readonly qB = new Float32Array(4);
+  private readonly vDir = new Float32Array(3);
+  private readonly vComp = new Float32Array(3);
+
   private constructor(
     private readonly device: GPUDevice,
     private readonly format: GPUTextureFormat,
@@ -173,6 +243,76 @@ export class SkinnedModel {
     this.paletteData = new Float32Array(Math.max(1, paletteLen) * 16);
     this.drawData = new Float32Array(Math.max(1, prims.length) * DRAW_FLOATS);
     this.drawDataU32 = new Uint32Array(this.drawData.buffer);
+    this.buildRetargetData();
+  }
+
+  /**
+   * Precompute the bind-pose data the aim retarget needs: per-node bind global
+   * and bind local rotations (quaternions), bind local translation/scale, and
+   * the resolved bone chains with their rest aim directions. Bones are resolved
+   * through skin[0]'s joints so mesh nodes that share a bone's name never match.
+   */
+  private buildRetargetData(): void {
+    const model = this.model;
+    const nNodes = model.nodes.length;
+    this.bindGlobalQuat = new Float32Array(nNodes * 4);
+    this.bindLocalQuat = new Float32Array(nNodes * 4);
+    this.bindLocalTrans = new Float32Array(nNodes * 3);
+    this.bindLocalScale = new Float32Array(nNodes * 3);
+    this.curGlobalQuat = new Float32Array(nNodes * 4);
+
+    // Bind global matrices → per-node bind global rotation.
+    const bindGlobals = new Float32Array(nNodes * 16);
+    computeGlobals(model, null, bindGlobals);
+    for (let i = 0; i < nNodes; i++) {
+      quatFromMat(this.bindGlobalQuat, i * 4, bindGlobals, i * 16);
+      const lm = model.nodes[i].localMatrix;
+      quatFromMat(this.bindLocalQuat, i * 4, lm, 0);
+      this.bindLocalTrans[i * 3] = lm[12];
+      this.bindLocalTrans[i * 3 + 1] = lm[13];
+      this.bindLocalTrans[i * 3 + 2] = lm[14];
+      this.bindLocalScale[i * 3] = Math.hypot(lm[0], lm[1], lm[2]) || 1;
+      this.bindLocalScale[i * 3 + 1] = Math.hypot(lm[4], lm[5], lm[6]) || 1;
+      this.bindLocalScale[i * 3 + 2] = Math.hypot(lm[8], lm[9], lm[10]) || 1;
+    }
+
+    // Palette bind locals (fallback for unmapped joints) + node→palette map.
+    const joints = model.skins[0]?.joints ?? [];
+    this.bindPaletteLocals = new Float32Array(joints.length * 16);
+    const paletteOfNode = new Map<number, number>();
+    for (let j = 0; j < joints.length; j++) {
+      this.bindPaletteLocals.set(model.nodes[joints[j]].localMatrix, j * 16);
+      if (!paletteOfNode.has(joints[j])) paletteOfNode.set(joints[j], j);
+    }
+    this.retargetLocals = new Float32Array(Math.max(1, joints.length) * 16);
+
+    // Resolve each chain: bone must be a palette joint; restChild a descendant.
+    const nameToPalette = new Map<string, number>();
+    const jointNames = model.skins[0]?.jointNames ?? [];
+    for (let j = 0; j < jointNames.length; j++) {
+      if (!nameToPalette.has(jointNames[j])) nameToPalette.set(jointNames[j], j);
+    }
+    this.retargetBones = [];
+    this.retargetByNode = new Array(nNodes).fill(undefined);
+    for (const chain of BONE_CHAINS) {
+      const palette = nameToPalette.get(chain.bone);
+      if (palette === undefined) continue;
+      const node = joints[palette];
+      const child = findDescendantByName(model, node, chain.restChild);
+      if (child < 0) continue;
+      const dir = new Float32Array(3);
+      dir[0] = bindGlobals[child * 16 + 12] - bindGlobals[node * 16 + 12];
+      dir[1] = bindGlobals[child * 16 + 13] - bindGlobals[node * 16 + 13];
+      dir[2] = bindGlobals[child * 16 + 14] - bindGlobals[node * 16 + 14];
+      const len = Math.hypot(dir[0], dir[1], dir[2]);
+      if (len < 1e-6) continue; // degenerate rest bone — leave at bind
+      dir[0] /= len;
+      dir[1] /= len;
+      dir[2] /= len;
+      const bone: RetargetBone = { node, palette, restDir: dir, from: chain.from, to: chain.to };
+      this.retargetBones.push(bone);
+      this.retargetByNode[node] = bone;
+    }
   }
 
   static async load(
@@ -332,6 +472,109 @@ export class SkinnedModel {
     }
   }
 
+  /**
+   * Pose the model's bones to match our animation's world-space skeleton with an
+   * aim-constraint (look-at) retarget, then setPose internally.
+   *
+   * `skel`: Float64Array of [x,y,z] per joint (our space: x=right, y=DOWN,
+   * z=toward viewer, design px). `idx`: named-joint → index map (pelvis, chest,
+   * neck, head, shoulder/elbow/hand L·R, hip/knee/foot L·R).
+   *
+   * For each mapped bone, parent-first: rotate its bind rest direction onto the
+   * target direction (child−bone, mapped to model space), convert that world
+   * rotation into a local rotation under the parent's already-retargeted global,
+   * and bake a local matrix that keeps the bone's bind translation/scale.
+   * Unmapped bones (fingers, poles, feet) keep their bind local. Allocation-free
+   * and NaN-safe: degenerate directions fall back to the bind pose.
+   */
+  retargetFromSkeleton(skel: Float64Array, idx: Record<string, number>): void {
+    // Start from bind: unmapped palette joints stay at their rest local.
+    this.retargetLocals.set(this.bindPaletteLocals);
+
+    const model = this.model;
+    const q = this.qA; // world rotation scratch
+    const ql = this.qB; // local rotation scratch
+    const dir = this.vDir;
+
+    for (const node of model.hierarchyOrder) {
+      const parent = model.nodes[node].parent;
+      const parentOff = parent >= 0 ? parent * 4 : -1;
+      const bone = this.retargetByNode[node];
+
+      let mapped = false;
+      if (bone) {
+        const fi = idx[bone.from];
+        const ti = idx[bone.to];
+        if (fi !== undefined && ti !== undefined) {
+          // Target direction in model space (apply axis signs, then reorder).
+          const comp = this.vComp;
+          comp[0] = (skel[ti * 3] - skel[fi * 3]) * X_SIGN;
+          comp[1] = (skel[ti * 3 + 1] - skel[fi * 3 + 1]) * Y_SIGN;
+          comp[2] = (skel[ti * 3 + 2] - skel[fi * 3 + 2]) * Z_SIGN;
+          dir[0] = comp[AXIS_ORDER[0]];
+          dir[1] = comp[AXIS_ORDER[1]];
+          dir[2] = comp[AXIS_ORDER[2]];
+          const len = Math.hypot(dir[0], dir[1], dir[2]);
+          if (len > 1e-6) {
+            dir[0] /= len;
+            dir[1] /= len;
+            dir[2] /= len;
+            // q = delta rotating restDir → target, applied on the bind global.
+            quatFromTo(q, 0, bone.restDir, dir);
+            quatMul(q, 0, q, 0, this.bindGlobalQuat, bone.node * 4); // newWorld
+            // localRot = inverse(parentCurrentGlobal) * newWorld
+            if (parentOff >= 0) {
+              quatInvMul(ql, 0, this.curGlobalQuat, parentOff, q, 0);
+            } else {
+              ql[0] = q[0];
+              ql[1] = q[1];
+              ql[2] = q[2];
+              ql[3] = q[3];
+            }
+            // curGlobal[node] = newWorld
+            this.curGlobalQuat[node * 4] = q[0];
+            this.curGlobalQuat[node * 4 + 1] = q[1];
+            this.curGlobalQuat[node * 4 + 2] = q[2];
+            this.curGlobalQuat[node * 4 + 3] = q[3];
+            // Bake local matrix: bind T/S, retargeted R.
+            composeTRSAt(
+              this.retargetLocals,
+              bone.palette * 16,
+              this.bindLocalTrans,
+              bone.node * 3,
+              ql,
+              0,
+              this.bindLocalScale,
+              bone.node * 3,
+            );
+            mapped = true;
+          }
+        }
+      }
+
+      if (!mapped) {
+        // Keep bind local; propagate current global = parentGlobal * bindLocal.
+        if (parentOff >= 0) {
+          quatMul(
+            this.curGlobalQuat,
+            node * 4,
+            this.curGlobalQuat,
+            parentOff,
+            this.bindLocalQuat,
+            node * 4,
+          );
+        } else {
+          this.curGlobalQuat[node * 4] = this.bindLocalQuat[node * 4];
+          this.curGlobalQuat[node * 4 + 1] = this.bindLocalQuat[node * 4 + 1];
+          this.curGlobalQuat[node * 4 + 2] = this.bindLocalQuat[node * 4 + 2];
+          this.curGlobalQuat[node * 4 + 3] = this.bindLocalQuat[node * 4 + 3];
+        }
+      }
+    }
+
+    this.setPose(this.retargetLocals);
+  }
+
   /** Override the color tint (multiplies base colors). Default white. */
   setTint(r: number, g: number, b: number, a = 1): void {
     this.tint = [r, g, b, a];
@@ -475,6 +718,214 @@ export class SkinnedModel {
     const dist = this.boundsRadius * 3.4;
     return [c[0], c[1] + this.boundsRadius * 0.18, c[2] + dist];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Retarget math: quaternions (allocation-free, offset-addressed) + helpers.
+// Quaternions are [x, y, z, w]; matrices are column-major.
+// ---------------------------------------------------------------------------
+
+/** Find the first descendant of `root` (searching its subtree) named `name`. */
+function findDescendantByName(model: GltfModel, root: number, name: string): number {
+  const stack = [...model.nodes[root].children];
+  while (stack.length) {
+    const n = stack.pop()!;
+    if (model.nodes[n].name === name) return n;
+    for (const c of model.nodes[n].children) stack.push(c);
+  }
+  return -1;
+}
+
+/** Extract a unit rotation quaternion from a column-major matrix's 3x3 (scale-removed). */
+function quatFromMat(out: Float32Array, oo: number, m: Float32Array, mo: number): void {
+  const sx = Math.hypot(m[mo], m[mo + 1], m[mo + 2]) || 1;
+  const sy = Math.hypot(m[mo + 4], m[mo + 5], m[mo + 6]) || 1;
+  const sz = Math.hypot(m[mo + 8], m[mo + 9], m[mo + 10]) || 1;
+  const m00 = m[mo] / sx,
+    m01 = m[mo + 1] / sx,
+    m02 = m[mo + 2] / sx;
+  const m10 = m[mo + 4] / sy,
+    m11 = m[mo + 5] / sy,
+    m12 = m[mo + 6] / sy;
+  const m20 = m[mo + 8] / sz,
+    m21 = m[mo + 9] / sz,
+    m22 = m[mo + 10] / sz;
+  // m[col*4+row]: m00=col0row0, m10=col1row0, ... trace uses diagonal m00,m11,m22.
+  const trace = m00 + m11 + m22;
+  let x, y, z, w;
+  if (trace > 0) {
+    let s = Math.sqrt(trace + 1) * 2; // s = 4w
+    w = 0.25 * s;
+    x = (m12 - m21) / s;
+    y = (m20 - m02) / s;
+    z = (m01 - m10) / s;
+  } else if (m00 > m11 && m00 > m22) {
+    let s = Math.sqrt(1 + m00 - m11 - m22) * 2; // s = 4x
+    w = (m12 - m21) / s;
+    x = 0.25 * s;
+    y = (m01 + m10) / s;
+    z = (m20 + m02) / s;
+  } else if (m11 > m22) {
+    let s = Math.sqrt(1 + m11 - m00 - m22) * 2; // s = 4y
+    w = (m20 - m02) / s;
+    x = (m01 + m10) / s;
+    y = 0.25 * s;
+    z = (m12 + m21) / s;
+  } else {
+    let s = Math.sqrt(1 + m22 - m00 - m11) * 2; // s = 4z
+    w = (m01 - m10) / s;
+    x = (m20 + m02) / s;
+    y = (m12 + m21) / s;
+    z = 0.25 * s;
+  }
+  const inv = 1 / (Math.hypot(x, y, z, w) || 1);
+  out[oo] = x * inv;
+  out[oo + 1] = y * inv;
+  out[oo + 2] = z * inv;
+  out[oo + 3] = w * inv;
+}
+
+/** out = a * b (Hamilton product). Aliasing out with a/b is safe (locals used). */
+function quatMul(
+  out: Float32Array,
+  oo: number,
+  a: Float32Array,
+  ao: number,
+  b: Float32Array,
+  bo: number,
+): void {
+  const ax = a[ao],
+    ay = a[ao + 1],
+    az = a[ao + 2],
+    aw = a[ao + 3];
+  const bx = b[bo],
+    by = b[bo + 1],
+    bz = b[bo + 2],
+    bw = b[bo + 3];
+  out[oo] = aw * bx + ax * bw + ay * bz - az * by;
+  out[oo + 1] = aw * by - ax * bz + ay * bw + az * bx;
+  out[oo + 2] = aw * bz + ax * by - ay * bx + az * bw;
+  out[oo + 3] = aw * bw - ax * bx - ay * by - az * bz;
+}
+
+/** out = inverse(a) * b, for unit a (inverse = conjugate). */
+function quatInvMul(
+  out: Float32Array,
+  oo: number,
+  a: Float32Array,
+  ao: number,
+  b: Float32Array,
+  bo: number,
+): void {
+  const ax = -a[ao],
+    ay = -a[ao + 1],
+    az = -a[ao + 2],
+    aw = a[ao + 3];
+  const bx = b[bo],
+    by = b[bo + 1],
+    bz = b[bo + 2],
+    bw = b[bo + 3];
+  out[oo] = aw * bx + ax * bw + ay * bz - az * by;
+  out[oo + 1] = aw * by - ax * bz + ay * bw + az * bx;
+  out[oo + 2] = aw * bz + ax * by - ay * bx + az * bw;
+  out[oo + 3] = aw * bw - ax * bx - ay * by - az * bz;
+}
+
+/**
+ * out = unit quaternion rotating unit vector `a` onto unit vector `b`
+ * (shortest arc). NaN-safe: handles parallel (identity) and antiparallel
+ * (180° about an arbitrary perpendicular axis).
+ */
+function quatFromTo(out: Float32Array, oo: number, a: Float32Array, b: Float32Array): void {
+  const ax = a[0],
+    ay = a[1],
+    az = a[2];
+  const bx = b[0],
+    by = b[1],
+    bz = b[2];
+  const d = ax * bx + ay * by + az * bz;
+  if (d >= 1 - 1e-6) {
+    out[oo] = 0;
+    out[oo + 1] = 0;
+    out[oo + 2] = 0;
+    out[oo + 3] = 1;
+    return;
+  }
+  if (d <= -1 + 1e-6) {
+    // Antiparallel: rotate 180° about any axis perpendicular to `a`.
+    let px = ay * 1 - az * 0,
+      py = az * 0 - ax * 1,
+      pz = ax * 0 - ay * 0; // a × X
+    if (px * px + py * py + pz * pz < 1e-8) {
+      px = ay * 0 - az * 1; // a × Y
+      py = az * 0 - ax * 0;
+      pz = ax * 1 - ay * 0;
+    }
+    const pl = Math.hypot(px, py, pz) || 1;
+    out[oo] = px / pl;
+    out[oo + 1] = py / pl;
+    out[oo + 2] = pz / pl;
+    out[oo + 3] = 0;
+    return;
+  }
+  // General case: axis = a × b, w = 1 + dot, then normalize.
+  const cx = ay * bz - az * by;
+  const cy = az * bx - ax * bz;
+  const cz = ax * by - ay * bx;
+  const w = 1 + d;
+  const inv = 1 / (Math.hypot(cx, cy, cz, w) || 1);
+  out[oo] = cx * inv;
+  out[oo + 1] = cy * inv;
+  out[oo + 2] = cz * inv;
+  out[oo + 3] = w * inv;
+}
+
+/** Compose a column-major TRS matrix into `out[oo..]` from offset-addressed T, quat R, S. */
+function composeTRSAt(
+  out: Float32Array,
+  oo: number,
+  t: Float32Array,
+  to: number,
+  q: Float32Array,
+  qo: number,
+  s: Float32Array,
+  so: number,
+): void {
+  const x = q[qo],
+    y = q[qo + 1],
+    z = q[qo + 2],
+    w = q[qo + 3];
+  const x2 = x + x,
+    y2 = y + y,
+    z2 = z + z;
+  const xx = x * x2,
+    xy = x * y2,
+    xz = x * z2;
+  const yy = y * y2,
+    yz = y * z2,
+    zz = z * z2;
+  const wx = w * x2,
+    wy = w * y2,
+    wz = w * z2;
+  const sx = s[so],
+    sy = s[so + 1],
+    sz = s[so + 2];
+  out[oo] = (1 - (yy + zz)) * sx;
+  out[oo + 1] = (xy + wz) * sx;
+  out[oo + 2] = (xz - wy) * sx;
+  out[oo + 3] = 0;
+  out[oo + 4] = (xy - wz) * sy;
+  out[oo + 5] = (1 - (xx + zz)) * sy;
+  out[oo + 6] = (yz + wx) * sy;
+  out[oo + 7] = 0;
+  out[oo + 8] = (xz + wy) * sz;
+  out[oo + 9] = (yz - wx) * sz;
+  out[oo + 10] = (1 - (xx + yy)) * sz;
+  out[oo + 11] = 0;
+  out[oo + 12] = t[to];
+  out[oo + 13] = t[to + 1];
+  out[oo + 14] = t[to + 2];
+  out[oo + 15] = 1;
 }
 
 // ---------------------------------------------------------------------------
