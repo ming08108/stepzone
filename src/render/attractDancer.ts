@@ -2615,7 +2615,24 @@ export class AttractDancer {
       // "straight" reaches render as a soft C-curve.
       const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.68), 1);
       elb += 0.26 * straight * straight;
-      const lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
+      let lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
+      // Bend DIRECTION on a raised arm: +elb continues the coronal arc, which
+      // on a reach (upper arm at/above horizontal) carries the forearm UPWARD
+      // past the humerus line. An elbow only flexes one way — that upward bow
+      // reads as hyperextension, a backward break at the joint. So redirect
+      // small near-straight bends (residual floor included) on raised arms
+      // into what a relaxed elbow actually does out there: a slight gravity
+      // droop below the upper-arm line plus a forward (toward-viewer) fold.
+      // Big authored curls (|elb| ≳ 1.2: fists, pumps) and inward flexes
+      // (elb < 0) pass untouched, and the redirect fades smoothly on both the
+      // bend and the elevation axes, so cross-fades never pop.
+      if (elb > 0) {
+        const elev = smooth01((abd - 0.85) * (1 / 0.95)); // 0 low arm → 1 raised
+        const soft = smooth01(1 - elb * (1 / 1.2)); // 1 near-straight → 0 big curl
+        const w = elev * soft;
+        lof += w * 0.7 * elb; // forward fold (f2 is clamped below)
+        elb -= w * 1.9 * elb; // >1× ⇒ net droop below the humerus line
+      }
       const soI = f === 0 ? SHL : SHR;
       const elI = f === 0 ? ELL : ELR;
       const haI = f === 0 ? HAL : HAR;
