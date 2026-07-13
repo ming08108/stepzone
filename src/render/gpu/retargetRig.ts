@@ -1,0 +1,111 @@
+/**
+ * Retarget rig configuration: the declarative mapping from a rigged model's
+ * bones onto our animation skeleton, plus the our-space→model-space axis
+ * convention. The retarget ALGORITHM lives in `skinnedModel.ts`
+ * (`retargetFromSkeleton`); this file is just the data it drives from, kept
+ * separate so the rig can be tuned without wading through the renderer.
+ */
+
+// Our animation solves world-space joints in screen space: x = right, y = DOWN,
+// z = toward the viewer, units = design px. glTF is y-UP, so we flip Y by
+// default. These are exposed as tunables: flip a sign or reorder AXIS_ORDER to
+// correct handedness/orientation during visual tuning without touching logic.
+// A direction (child - bone) becomes model space as:
+//   c = [dx*X_SIGN, dy*Y_SIGN, dz*Z_SIGN];  dirModel = [c[AXIS_ORDER[i]]]
+// ---------------------------------------------------------------------------
+export const X_SIGN = 1;
+export const Y_SIGN = -1; // our y points down; glTF y points up
+export const Z_SIGN = 1;
+export const AXIS_ORDER: readonly [number, number, number] = [0, 1, 2];
+/**
+ * Extra multiplier on the our→model position scale (which is otherwise derived
+ * from leg length). Nudge >1 to widen/enlarge the stance, <1 to shrink it,
+ * during visual tuning. Only affects foot/root PLACEMENT, not bone aiming.
+ */
+export const POS_SCALE = 1;
+
+/**
+ * Model bone -> our skeleton chain segment. `restChild` is a descendant node
+ * of `bone` whose bind position defines the bone's rest aim direction; `from`
+ * and `to` are our named joints whose vector is the target aim direction. Two
+ * model bones can share one segment (clavicle + upper arm, hips + lower spine).
+ * `damp` (0..1) scales the aim rotation toward the rest pose — used to steady
+ * short, noisy bones like the neck (a small position wiggle = a big angle).
+ */
+export interface BoneChain {
+  bone: string;
+  restChild: string;
+  from: string;
+  to: string;
+  damp?: number;
+  /** Hold the bone's bind WORLD orientation instead of aiming — the foot stays
+   *  level (sole down) rather than inheriting the shin's tilt and pointing its
+   *  toe at the floor. `from`/`to`/`restChild` are ignored when set. */
+  hold?: boolean;
+  /** Scale the sideways (our-space X) component of the aim target before
+   *  aiming. <1 pulls the segment toward the body centerline — used on the leg
+   *  chains so wide animation steps don't read as a splayed, bow-legged
+   *  stance on the model's proportions. */
+  narrowX?: number;
+}
+
+export const BONE_CHAINS: readonly BoneChain[] = [
+  // One aiming bone per segment (see VRM_CHAINS): never two in-series bones at
+  // the same target, which compounds rotations and stretches/crosses the limb.
+  // Hips and the clavicles stay at bind and inherit their parent's rotation.
+  { bone: 'Abdomen', restChild: 'Torso', from: 'pelvis', to: 'chest' },
+  { bone: 'Torso', restChild: 'Neck', from: 'chest', to: 'neck' },
+  // Neck follows the head but damped; the Head bone stays rigid to the neck so
+  // the head reads upright instead of cocking on the tiny neck→head segment.
+  { bone: 'Neck', restChild: 'Head', from: 'neck', to: 'head', damp: 0.5 },
+  { bone: 'UpperArm.L', restChild: 'LowerArm.L', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'LowerArm.L', restChild: 'Palm2.L', from: 'elbowL', to: 'handL' },
+  { bone: 'UpperArm.R', restChild: 'LowerArm.R', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'LowerArm.R', restChild: 'Palm2.R', from: 'elbowR', to: 'handR' },
+  { bone: 'UpperLeg.L', restChild: 'LowerLeg.L', from: 'hipL', to: 'kneeL' },
+  { bone: 'LowerLeg.L', restChild: 'LowerLeg.L_end', from: 'kneeL', to: 'footL' },
+  { bone: 'Foot.L', restChild: 'Foot.L', from: 'footL', to: 'footL', hold: true },
+  { bone: 'UpperLeg.R', restChild: 'LowerLeg.R', from: 'hipR', to: 'kneeR' },
+  { bone: 'LowerLeg.R', restChild: 'LowerLeg.R_end', from: 'kneeR', to: 'footR' },
+  { bone: 'Foot.R', restChild: 'Foot.R', from: 'footR', to: 'footR', hold: true },
+];
+
+/**
+ * Same chains keyed by VRM humanoid bone names. When a model exposes a VRM
+ * humanoid map, bones/restChildren resolve through it (robust across VRoid
+ * avatars) instead of the robot's node names. VRM feet are in the leg chain
+ * (not IK-pinned), so aiming lowerLeg→foot already steps them.
+ */
+export const VRM_CHAINS: readonly BoneChain[] = [
+  // One bone per body segment — never two in-series bones aimed at the SAME
+  // target. Aiming, say, both the clavicle and the upper arm at the elbow
+  // COMPOUNDS their rotations (the clavicle swings out, then the arm swings
+  // again from there), which displaces and visually stretches the limb at the
+  // joint. So the clavicles (shoulder) and upperChest stay at bind and simply
+  // inherit their parent's rotation; the real segment bone does the aiming.
+  { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
+  { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
+  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
+  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowL', to: 'handL' },
+  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowR', to: 'handR' },
+  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL', narrowX: 0.55 },
+  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL', narrowX: 0.55 },
+  { bone: 'leftFoot', restChild: 'leftFoot', from: 'footL', to: 'footL', hold: true },
+  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
+  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
+  { bone: 'rightFoot', restChild: 'rightFoot', from: 'footR', to: 'footR', hold: true },
+];
+
+/** A resolved retarget bone: node + palette slot + precomputed rest aim dir. */
+export interface RetargetBone {
+  node: number;
+  palette: number;
+  restDir: Float32Array<ArrayBuffer>; // unit, native model space (from bind globals)
+  from: string;
+  to: string;
+  damp: number; // 1 = full aim, <1 steadies toward rest
+  hold: boolean; // hold bind world orientation (level foot) instead of aiming
+  narrowX: number; // <1 pulls the aim target toward the centerline (legs)
+}
