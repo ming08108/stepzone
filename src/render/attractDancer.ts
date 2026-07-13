@@ -1136,6 +1136,13 @@ export class AttractDancer {
   // ---- dance-pad panel flashes (beat each panel was last stepped on) ----
   private readonly padFlash = new Float64Array(4).fill(-1e9);
 
+  // ---- stable painter's-order state (opaque stream has no depth buffer, so
+  //      part draw order = emission order). These booleans decide which
+  //      arm/leg is FAR (drawn behind); a raw z-compare flips at ties/float
+  //      noise and flickers, so they only flip past a hysteresis band. ----
+  private armFarLeft = true;
+  private legFarLeft = true;
+
   // ---- arm-channel follow-through smoothing (post-blend, critically damped
   //      so the hands EASE and settle instead of snapping between clip poses;
   //      8 channels LABD,LFWD,LELB,LLOF,RABD,RFWD,RELB,RLOF; NaN ⇒ snap) ----
@@ -1253,6 +1260,8 @@ export class AttractDancer {
     this.lastFlourish = -1e9;
     this.hitBeat = -1e9;
     this.padFlash.fill(-1e9);
+    this.armFarLeft = true;
+    this.legFarLeft = true;
     this.plActive.fill(0);
     // Lock the feet where they stand (plants stay finite and committed).
     for (let f = 0; f < 2; f++) {
@@ -2414,6 +2423,19 @@ export class AttractDancer {
     this.addTri(a0x + px, a0y + py, b0x - px, b0y - py, a0x - px, a0y - py, r, g, b);
   }
 
+  /** Hysteretic far/near decision for two limbs by their depth (z, larger =
+   *  nearer the viewer). Returns true when the LEFT limb is the far one. Only
+   *  flips once one side is clearly further than the other (by DEPTH_EPS);
+   *  within the band it keeps the previous choice, so near-coplanar limbs get
+   *  a fixed, non-flickering draw order. NaN-safe. */
+  private stableFar(prev: boolean, zLeft: number, zRight: number): boolean {
+    const DEPTH_EPS = 2.5; // z units (~px); wider than per-frame float jitter
+    if (!Number.isFinite(zLeft) || !Number.isFinite(zRight)) return prev;
+    if (zLeft < zRight - DEPTH_EPS) return true; // left clearly further ⇒ far
+    if (zLeft > zRight + DEPTH_EPS) return false; // left clearly nearer
+    return prev; // ambiguous ⇒ hold the last order (no flip)
+  }
+
   private emitBody(): void {
     const B = BODY_H;
 
@@ -2433,9 +2455,21 @@ export class AttractDancer {
     this.tfVy = ux;
     this.tfUl = ul;
 
-    // Depth ordering from the 3D solve: far limbs draw first, near last.
-    const leftArmFar = this.skel3[HAL * 3 + 2] <= this.skel3[HAR * 3 + 2];
-    const leftLegFar = this.skel3[FTL * 3 + 2] <= this.skel3[FTR * 3 + 2];
+    // Depth ordering from the 3D solve: far limbs draw first, near last. The
+    // FAR/near decision is HYSTERETIC (stableFar): it only flips once one side
+    // is clearly nearer than the other, so equal-depth limbs (a symmetric
+    // straddle, the idle groove) never swap order frame-to-frame and flicker.
+    this.armFarLeft = this.stableFar(
+      this.armFarLeft,
+      this.skel3[HAL * 3 + 2],
+      this.skel3[HAR * 3 + 2],
+    );
+    // Legs use the COMMITTED foot-target depth (footZ), not the IK-derived
+    // ankle z, which wobbles a hair with pelvis depth — so a locked straddle
+    // (both feet z=0) stays a dead-stable tie and never reorders.
+    this.legFarLeft = this.stableFar(this.legFarLeft, this.footZ[0], this.footZ[1]);
+    const leftArmFar = this.armFarLeft;
+    const leftLegFar = this.legFarLeft;
 
     // Twin-tails first: behind everything.
     this.emitTail(-1, TAILL);
