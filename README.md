@@ -51,9 +51,15 @@ WebGPU timestamp queries. The design, the pass order, and the numbers are in
 Song backgrounds (movies included) play behind the field, kept in sync with the
 music by their `#BGCHANGES` trigger and a playback-rate lock. A song that ships
 no background of its own gets a procedural **"common movie"** instead — a
-beat-reactive DDR-arcade attract loop (a silhouette dancer inside a neon hexagon
-tunnel over a scrolling checkerboard, in one of four moods), drawn on a live
-canvas the field samples as its background texture.
+beat-reactive DDR-arcade scene (a neon hexagon tunnel over a scrolling
+checkerboard, in one of four moods) rendered as a GPU fragment shader, with a
+**dancer that steps the chart in front of it**. The dancer is a real rigged 3D
+model (a from-scratch glTF skinned-mesh renderer), driven by our own animation
+system — an authored clip library blended by an animation state machine, with
+the feet placed by the [StepParity](#song-analysis) foot-placement solver so it
+foots the actual arrows (crossovers and all), a dynamic orbiting camera, and the
+model recolored to the scene's palette. Force it on for every song with
+`BACKGROUND: DANCE` in Player Options; drive the dancer by hand at `?dancer`.
 
 ## Song analysis
 
