@@ -444,12 +444,15 @@ export class AttractDancer {
       setRamp(zone, 1, mix(ink, c, md));
       setRamp(zone, 2, mix(ink, c, lt));
     };
-    ramp(ZSKIN, skin, 0.26, 0.52, 0.8);
-    ramp(ZHAIR, this.pal.accentA, 0.24, 0.5, 0.82);
-    ramp(ZDRESS, this.pal.accentA, 0.12, 0.22, 0.34);
-    ramp(ZSKIRT, this.pal.accentB, 0.22, 0.48, 0.75);
-    ramp(ZTRIM, this.pal.accentC, 0.2, 0.4, 0.6);
-    const faceLit = mix(ink, skin, 0.8);
+    // Ramps run hot on purpose: she's drawn behind the note-field dim
+    // (fragment multiplies by ~0.75), so rich saturated fills are what keep
+    // her reading as a COLORED character instead of a neon-rimmed silhouette.
+    ramp(ZSKIN, skin, 0.45, 0.72, 0.98);
+    ramp(ZHAIR, this.pal.accentA, 0.4, 0.72, 1);
+    ramp(ZDRESS, this.pal.accentA, 0.26, 0.46, 0.66);
+    ramp(ZSKIRT, this.pal.accentB, 0.38, 0.68, 0.98);
+    ramp(ZTRIM, this.pal.accentC, 0.34, 0.58, 0.85);
+    const faceLit = mix(ink, skin, 0.98);
     const eye = mix(faceLit, mix(ink, this.pal.accentA, 0.2), 0.9);
     const blush = mix(faceLit, mix(this.pal.accentA, [255, 118, 148], 0.5), 0.3);
     ramp(ZEYE, eye, 1, 1, 1);
@@ -713,16 +716,18 @@ export class AttractDancer {
     const sq = Math.sin(PI * phase) * (valid ? 1 : 0.4);
     this.sy = 1 + 0.03 * sq;
     this.sx = 1 - 0.02 * sq;
+    // Neon is an accent, not the read: the colored solid fills lead, the
+    // additive edges just rim the silhouette (they pulse a little on the beat).
     const pa = this.pal.accentA;
-    const eI = (0.55 + 0.45 * kick) / 255;
+    const eI = (0.28 + 0.2 * kick) / 255;
     this.edgeR = pa[0] * eI;
     this.edgeG = pa[1] * eI;
     this.edgeB = pa[2] * eI;
-    const sI = 0.16 / 255;
+    const sI = 0.09 / 255;
     this.softR = pa[0] * sI;
     this.softG = pa[1] * sI;
     this.softB = pa[2] * sI;
-    const gI = (0.07 + 0.11 * kick) / 255;
+    const gI = (0.04 + 0.06 * kick) / 255;
     this.glowR = pa[0] * gI;
     this.glowG = pa[1] * gI;
     this.glowB = pa[2] * gI;
@@ -1154,7 +1159,7 @@ export class AttractDancer {
     const p = this.poly;
     const n = this.np;
     if (n < 2) return;
-    const hw = soft ? 0.55 : 0.8;
+    const hw = soft ? 0.45 : 0.62;
     const r = soft ? this.softR : this.edgeR;
     const g = soft ? this.softG : this.edgeG;
     const b = soft ? this.softB : this.edgeB;
