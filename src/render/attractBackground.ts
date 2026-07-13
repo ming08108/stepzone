@@ -1,9 +1,11 @@
 /**
  * "COMMON MOVIE" — a procedurally-animated attract-mode background for songs
  * with no BGA of their own. It recreates the DDRMAX/Extreme-era "common movie"
- * vibe: a jet-black silhouette dancer throwing shapes inside a neon hexagon
- * tunnel, over a scrolling perspective checkerboard, everything pulsing to the
- * beat. Pure Canvas 2D so the GPU renderer can sample it as a live texture.
+ * vibe: a jet-black silhouette dancer (tapered torso, muscled limbs, sneakers,
+ * a swinging ponytail — all filled shapes, iPod-ad style) throwing shapes
+ * inside a neon hexagon tunnel, over a scrolling perspective checkerboard,
+ * everything pulsing to the beat. Pure Canvas 2D so the GPU renderer can
+ * sample it as a live texture.
  *
  * Rendering budget: this runs on the main thread next to the WebGPU loop, so
  * there is deliberately NO per-pixel work — the plasma "lava lamp" is faked
@@ -267,7 +269,10 @@ const POSES: readonly Pose[] = [
   },
 ];
 
-// Joint indices into the flat [x,y,...] skeleton buffer.
+// Joint indices into the flat [x,y,...] skeleton buffer. HAL/HAR are wrists
+// (the mitt hand is drawn just beyond them) and FTL/FTR are ankles (the
+// sneaker wedge plants below them). PONY is the ponytail tip — it's stateful
+// (spring-lagged in solve()) so it lives in the buffer and rides the trails.
 const PEL = 0,
   SH = 1,
   HEADB = 2,
@@ -283,19 +288,21 @@ const PEL = 0,
   KNL = 12,
   FTL = 13,
   KNR = 14,
-  FTR = 15;
-const JOINTS = 16;
+  FTR = 15,
+  PONY = 16;
+const JOINTS = 17;
 
 // Bone lengths / widths as fractions of BODY_H.
 const L_TORSO = 0.32,
   L_NECK = 0.06,
-  R_HEAD = 0.075,
+  R_HEAD = 0.07,
   W_SHOULDER = 0.13,
   W_HIP = 0.075;
 const L_UARM = 0.16,
-  L_FARM = 0.15,
+  L_FARM = 0.13, // to the wrist — the hand extends ~0.05 beyond, matching old reach
   L_THIGH = 0.23,
-  L_SHIN = 0.22;
+  L_SHIN = 0.22,
+  L_SHOE = 0.025; // ankle sits this far above the sole; the sneaker fills it
 
 function easeSnap(p: number): number {
   // Back-ease-out: overshoots ~8% past the target then settles — moves "snap".
@@ -352,6 +359,9 @@ export class AttractBackground {
   // Dancer trail history (flat skeleton buffers, newest last).
   private readonly history: Float32Array[] = [];
   private readonly skel = new Float32Array(JOINTS * 2);
+  // Ponytail tip, smoothed across frames so it lags/swings behind the head.
+  private ponyX = NaN;
+  private ponyY = NaN;
 
   constructor(opts: { beat: () => number; variant?: number }) {
     this.beat = opts.beat;
@@ -729,7 +739,7 @@ export class AttractBackground {
     const s = this.skel;
     const rootX = CX + pose.shiftX * BODY_H;
     const rootY =
-      FOOT_Y - L_THIGH * BODY_H - L_SHIN * BODY_H + pose.crouch * BODY_H - pose.rise * BODY_H;
+      FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * BODY_H + pose.crouch * BODY_H - pose.rise * BODY_H;
 
     const set = (idx: number, x: number, y: number): void => {
       s[idx * 2] = x;
@@ -766,52 +776,248 @@ export class AttractBackground {
     const [knrx, knry] = tip(s[HIPR * 2], s[HIPR * 2 + 1], pose.legRUp, L_THIGH);
     set(KNR, knrx, knry);
     set(FTR, ...tip(knrx, knry, pose.legRLo, L_SHIN));
+
+    // Ponytail tip: hangs down-back off the head and chases its rest point
+    // with a lag, so head bobs and lateral shifts read as a swishing tail.
+    // A constant sideways bias keeps it peeking out of the silhouette even
+    // when the head is level (a dead-centre tail would hide behind the body).
+    const hx = s[HEAD * 2];
+    const hy = s[HEAD * 2 + 1];
+    const restX = hx - 0.05 * BODY_H - Math.sin(pose.head) * R_HEAD * BODY_H * 4;
+    const restY = hy + R_HEAD * BODY_H * 2.6;
+    if (!Number.isFinite(this.ponyX) || !Number.isFinite(this.ponyY)) {
+      this.ponyX = restX;
+      this.ponyY = restY;
+    }
+    this.ponyX += (restX - this.ponyX) * 0.14;
+    this.ponyY += (restY - this.ponyY) * 0.24;
+    set(PONY, this.ponyX, this.ponyY);
   }
 
-  /** Stroke the rig from a flat buffer. `mode` picks the pass: rim glow + solid
-   *  black for the body, or a single additive colored stroke for a ghost trail. */
-  private strokeRig(
+  /** Paint the dancer from a flat joint buffer as a set of filled silhouette
+   *  shapes: a tapered torso, bulged limbs, mitt hands, sneaker wedges, and a
+   *  ponytail. `mode` picks the pass — 'glow' strokes an additive neon rim
+   *  around every piece (its interior half gets covered by the black pass),
+   *  'black' fills the solid body, 'trail' fills a faint additive ghost. All
+   *  geometry derives from the buffer alone so trails replay old frames. */
+  private drawBody(
     j: Float32Array,
     mode: 'glow' | 'black' | 'trail',
     color: RGB,
     alpha: number,
-    widthScale: number,
+    rim: number,
   ): void {
     const ctx = this.ctx;
-    const seg = (a: number, b: number, w: number): void => {
-      ctx.lineWidth = w * BODY_H * widthScale;
-      ctx.beginPath();
-      ctx.moveTo(j[a * 2], j[a * 2 + 1]);
-      ctx.lineTo(j[b * 2], j[b * 2 + 1]);
-      ctx.stroke();
-    };
+    const B = BODY_H;
+    const X = (i: number): number => j[i * 2];
+    const Y = (i: number): number => j[i * 2 + 1];
+
     ctx.save();
-    ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const stroking = mode === 'glow';
     if (mode === 'black') {
-      ctx.strokeStyle = '#000';
       ctx.fillStyle = '#000';
     } else {
       ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = rgba(color, alpha);
       ctx.fillStyle = rgba(color, alpha);
+      ctx.strokeStyle = rgba(color, alpha);
+      ctx.lineWidth = Math.max(1, rim);
     }
-    // torso, neck, arms, legs
-    seg(PEL, SH, 0.14);
-    seg(SH, HEADB, 0.06);
-    seg(SHL, ELL, 0.075);
-    seg(ELL, HAL, 0.06);
-    seg(SHR, ELR, 0.075);
-    seg(ELR, HAR, 0.06);
-    seg(HIPL, KNL, 0.09);
-    seg(KNL, FTL, 0.07);
-    seg(HIPR, KNR, 0.09);
-    seg(KNR, FTR, 0.07);
-    // head
+    const paint = (): void => {
+      if (stroking) ctx.stroke();
+      else ctx.fill();
+    };
+    const disc = (x: number, y: number, r: number): void => {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, PI * 2);
+      paint();
+    };
+
+    // Tapered limb: a quad with quadratic sides (mid bulge = muscle swell) and
+    // rounded tips. Widths are half-widths as fractions of BODY_H.
+    const limb = (a: number, b: number, wa: number, wb: number, bulge: number): void => {
+      const ax = X(a),
+        ay = Y(a),
+        bx = X(b),
+        by = Y(b);
+      let dx = bx - ax,
+        dy = by - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      const px = -dy,
+        py = dx;
+      const wA = wa * B,
+        wB = wb * B,
+        wM = ((wa + wb) / 2 + bulge) * B;
+      const mx = (ax + bx) / 2,
+        my = (ay + by) / 2;
+      ctx.beginPath();
+      ctx.moveTo(ax + px * wA, ay + py * wA);
+      ctx.quadraticCurveTo(mx + px * wM, my + py * wM, bx + px * wB, by + py * wB);
+      ctx.quadraticCurveTo(bx + dx * wB * 1.4, by + dy * wB * 1.4, bx - px * wB, by - py * wB);
+      ctx.quadraticCurveTo(mx - px * wM, my - py * wM, ax - px * wA, ay - py * wA);
+      ctx.quadraticCurveTo(ax - dx * wA * 1.4, ay - dy * wA * 1.4, ax + px * wA, ay + py * wA);
+      ctx.closePath();
+      paint();
+    };
+
+    // Mitt hand: an ellipse just beyond the wrist, aligned with the forearm.
+    const hand = (elb: number, wri: number): void => {
+      const wx = X(wri),
+        wy = Y(wri);
+      let dx = wx - X(elb),
+        dy = wy - Y(elb);
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      ctx.beginPath();
+      ctx.ellipse(
+        wx + dx * 0.03 * B,
+        wy + dy * 0.03 * B,
+        0.04 * B,
+        0.027 * B,
+        Math.atan2(dy, dx),
+        0,
+        PI * 2,
+      );
+      paint();
+    };
+
+    // Sneaker wedge off the ankle. When the shin hangs straight the toe points
+    // outward and the sole sits flat on the floor; as the leg kicks/points the
+    // toe blends toward the shin direction so extensions read as a toe-point.
+    const shoe = (kne: number, ank: number, side: number): void => {
+      const ax = X(ank),
+        ay = Y(ank);
+      const shinAng = Math.atan2(ax - X(kne), ay - Y(kne)); // 0 = down (Pose convention)
+      const blend = Math.min(1, Math.abs(shinAng));
+      const toeAng = side * 1.25 * (1 - blend) + shinAng * blend;
+      const dx = Math.sin(toeAng),
+        dy = Math.cos(toeAng);
+      let px = Math.cos(toeAng),
+        py = -Math.sin(toeAng);
+      if (py < 0) {
+        px = -px;
+        py = -py; // perp points toward the sole
+      }
+      const tl = 0.085 * B;
+      const tx = ax + dx * tl,
+        ty = ay + dy * tl;
+      ctx.beginPath();
+      // ankle collar → arched instep → thin toe cap → flat sole → heel bump
+      ctx.moveTo(ax - dx * 0.02 * B - px * 0.02 * B, ay - dy * 0.02 * B - py * 0.02 * B);
+      ctx.quadraticCurveTo(
+        ax + dx * tl * 0.45 - px * 0.034 * B,
+        ay + dy * tl * 0.45 - py * 0.034 * B,
+        tx - px * 0.008 * B,
+        ty - py * 0.008 * B,
+      );
+      ctx.quadraticCurveTo(
+        tx + dx * 0.022 * B,
+        ty + dy * 0.022 * B,
+        tx + px * 0.018 * B,
+        ty + py * 0.018 * B,
+      );
+      ctx.lineTo(ax - dx * 0.045 * B + px * 0.028 * B, ay - dy * 0.045 * B + py * 0.028 * B);
+      ctx.closePath();
+      paint();
+    };
+
+    // ---- torso: broad shoulders → pinched waist → flared hips → rounded seat.
+    const plx = X(PEL),
+      ply = Y(PEL),
+      scx = X(SH),
+      scy = Y(SH);
+    let ux = scx - plx,
+      uy = scy - ply;
+    const ul = Math.hypot(ux, uy) || 1;
+    ux /= ul;
+    uy /= ul; // unit pelvis→shoulder axis
+    const vx = -uy,
+      vy = ux; // unit "screen right" of the torso axis
+    const at = (t: number, w: number): [number, number] => [
+      plx + ux * ul * t + vx * w,
+      ply + uy * ul * t + vy * w,
+    ];
+    const shW = 0.126 * B, // half-width at the shoulder line
+      waistW = 0.06 * B,
+      hipW = 0.092 * B;
+    const [lsx, lsy] = at(1, -shW);
+    const [rsx, rsy] = at(1, shW);
     ctx.beginPath();
-    ctx.arc(j[HEAD * 2], j[HEAD * 2 + 1], R_HEAD * BODY_H * widthScale, 0, PI * 2);
-    if (mode === 'black') ctx.fill();
-    else ctx.stroke();
+    ctx.moveTo(lsx, lsy);
+    // trapezius line, bowed slightly above the shoulder centre
+    ctx.quadraticCurveTo(scx + ux * 0.035 * B, scy + uy * 0.035 * B, rsx, rsy);
+    let [cx1, cy1] = at(0.66, 0.085 * B);
+    let [wx1, wy1] = at(0.42, waistW);
+    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1); // ribcage tapering into the waist
+    [cx1, cy1] = at(0.16, 0.098 * B);
+    [wx1, wy1] = at(0, hipW);
+    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1); // waist flaring over the hip
+    // rounded seat under the pelvis
+    [cx1, cy1] = at(0, -hipW);
+    ctx.quadraticCurveTo(plx - ux * 0.07 * B, ply - uy * 0.07 * B, cx1, cy1);
+    [cx1, cy1] = at(0.16, -0.098 * B);
+    [wx1, wy1] = at(0.42, -waistW);
+    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1);
+    [cx1, cy1] = at(0.66, -0.085 * B);
+    ctx.quadraticCurveTo(cx1, cy1, lsx, lsy);
+    ctx.closePath();
+    paint();
+    // deltoid caps over the shoulder joints
+    disc(X(SHL), Y(SHL), 0.047 * B);
+    disc(X(SHR), Y(SHR), 0.047 * B);
+
+    // ---- neck + head + hair.
+    limb(SH, HEADB, 0.03, 0.026, 0);
+    const hx = X(HEAD),
+      hy = Y(HEAD);
+    const tilt = hx - X(HEADB); // signed head-tilt offset, drives the hair back
+    disc(hx, hy, R_HEAD * B);
+    // occipital hair volume: a slightly offset second disc breaks the circle
+    disc(hx - tilt * 0.4, hy - R_HEAD * B * 0.18, R_HEAD * B * 0.92);
+    // ponytail: scrunchie puff at the crown-back, tapered swish to the lagged tip
+    const pax = hx - tilt * 0.8,
+      pay = hy - R_HEAD * B * 0.55;
+    disc(pax, pay, 0.028 * B);
+    const ptx = X(PONY),
+      pty = Y(PONY);
+    let pdx = ptx - pax,
+      pdy = pty - pay;
+    const plen = Math.hypot(pdx, pdy) || 1;
+    pdx /= plen;
+    pdy /= plen;
+    const ppx = -pdy,
+      ppy = pdx;
+    const pcx = pax + (ptx - pax) * 0.2,
+      pcy = pay + (pty - pay) * 0.62;
+    const pwB = 0.032 * B,
+      pwM = 0.03 * B;
+    ctx.beginPath();
+    ctx.moveTo(pax + ppx * pwB, pay + ppy * pwB);
+    ctx.quadraticCurveTo(pcx + ppx * pwM, pcy + ppy * pwM, ptx, pty);
+    ctx.quadraticCurveTo(pcx - ppx * pwM, pcy - ppy * pwM, pax - ppx * pwB, pay - ppy * pwB);
+    ctx.closePath();
+    paint();
+
+    // ---- arms: upper (bicep swell) → forearm → mitt hand.
+    limb(SHL, ELL, 0.042, 0.03, 0.007);
+    limb(ELL, HAL, 0.028, 0.018, 0.006);
+    hand(ELL, HAL);
+    limb(SHR, ELR, 0.042, 0.03, 0.007);
+    limb(ELR, HAR, 0.028, 0.018, 0.006);
+    hand(ELR, HAR);
+
+    // ---- legs: thigh → calf (swell) → sneaker.
+    limb(HIPL, KNL, 0.06, 0.04, 0.008);
+    limb(KNL, FTL, 0.038, 0.018, 0.011);
+    shoe(KNL, FTL, -1);
+    limb(HIPR, KNR, 0.06, 0.04, 0.008);
+    limb(KNR, FTR, 0.038, 0.018, 0.011);
+    shoe(KNR, FTR, 1);
+
     ctx.restore();
   }
 
@@ -870,8 +1076,14 @@ export class AttractBackground {
     if (n > 6) this.drawTrail(this.history[n - 6], this.pal.accentB, 0.25, 3);
 
     // Rim glow, then the pure-black silhouette on top.
-    this.strokeRig(this.skel, 'glow', this.pal.accentA, 0.5 * (1 + 1.5 * kick), 1.55);
-    this.strokeRig(this.skel, 'black', this.pal.accentA, 1, 1);
+    this.drawBody(
+      this.skel,
+      'glow',
+      this.pal.accentA,
+      0.5 * (1 + 1.5 * kick),
+      0.024 * BODY_H * (1 + 0.8 * kick),
+    );
+    this.drawBody(this.skel, 'black', this.pal.accentA, 1, 0);
     ctx.restore();
 
     // Hand-burst sparkles on the sky-punch beats (1 & 3).
@@ -903,7 +1115,7 @@ export class AttractBackground {
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(dx, 0);
-    this.strokeRig(j, 'trail', color, alpha, 1);
+    this.drawBody(j, 'trail', color, alpha, 0);
     ctx.restore();
   }
 
