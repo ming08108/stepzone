@@ -438,6 +438,94 @@ export class SkinnedModel {
         this.placeEnabled = this.modelLegLen > 1e-6;
       }
     }
+
+    this.applyFingerCurl(paletteOfNode);
+  }
+
+  /**
+   * Bake a relaxed curl into the finger bones' bind locals (one-time, at load).
+   * The retarget doesn't map fingers, so they keep their bind pose — which on a
+   * VRoid avatar is ramrod-straight along the arm line, so a fully extended arm
+   * tapers to a needle "spike" instead of reading as a hand. Flexing each
+   * phalanx a little (tighter toward the tip) and opposing the thumbs turns the
+   * bind hand into a natural loose half-fist from every angle.
+   *
+   * VRM 0.x/1.0 normalized rest pose: finger locals have identity rotation and
+   * point along ±X (left = −X, right = +X) with palms facing −Y, so flexion is
+   * a rotation about local Z (+ for the left hand, − for the right), and thumb
+   * opposition is a rotation about local Y. Bones resolve through the VRM
+   * humanoid map with a VRoid `J_Bip_*` node-name fallback; models without
+   * finger bones (the robot) are a no-op. Writes both `bindPaletteLocals`
+   * (what unmapped joints hold through every retarget) and `workingLocals`
+   * (the pre-retarget pose).
+   */
+  private applyFingerCurl(paletteOfNode: Map<number, number>): void {
+    const model = this.model;
+    const rot = new Float32Array(16);
+    const src = new Float32Array(16);
+    const resolve = (vrmName: string, nodeName: string): number => {
+      const h = model.humanoid?.[vrmName];
+      if (h !== undefined && h >= 0 && h < model.nodes.length) return h;
+      for (let i = 0; i < model.nodes.length; i++) {
+        if (model.nodes[i].name === nodeName) return i;
+      }
+      return -1;
+    };
+    const applyLocalRot = (node: number): void => {
+      // local' = local * R — rotate the bone in its own local frame.
+      src.set(this.workingLocals.subarray(node * 16, node * 16 + 16));
+      mat4Multiply(this.workingLocals, node * 16, src, 0, rot, 0);
+      const p = paletteOfNode.get(node);
+      if (p !== undefined) {
+        src.set(this.bindPaletteLocals.subarray(p * 16, p * 16 + 16));
+        mat4Multiply(this.bindPaletteLocals, p * 16, src, 0, rot, 0);
+      }
+    };
+    const rotZ = (a: number): void => {
+      rot.fill(0);
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      rot[0] = c;
+      rot[1] = s;
+      rot[4] = -s;
+      rot[5] = c;
+      rot[10] = 1;
+      rot[15] = 1;
+    };
+    const rotY = (a: number): void => {
+      rot.fill(0);
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      rot[0] = c;
+      rot[2] = -s;
+      rot[8] = s;
+      rot[10] = c;
+      rot[5] = 1;
+      rot[15] = 1;
+    };
+
+    const FINGERS = ['Index', 'Middle', 'Ring', 'Little'] as const;
+    const SEGS = ['Proximal', 'Intermediate', 'Distal'] as const;
+    const CURL = [0.42, 0.6, 0.38]; // radians per phalanx, tighter toward the tip
+    const THUMB = [0.32, 0.2, 0.12]; // gentler — the thumb folds toward the palm edge
+    for (const side of ['left', 'right'] as const) {
+      const sgn = side === 'left' ? 1 : -1;
+      const jb = side === 'left' ? 'L' : 'R';
+      for (const finger of FINGERS) {
+        for (let k = 0; k < 3; k++) {
+          const node = resolve(`${side}${finger}${SEGS[k]}`, `J_Bip_${jb}_${finger}${k + 1}`);
+          if (node < 0) continue;
+          rotZ(sgn * CURL[k]);
+          applyLocalRot(node);
+        }
+      }
+      for (let k = 0; k < 3; k++) {
+        const node = resolve(`${side}Thumb${SEGS[k]}`, `J_Bip_${jb}_Thumb${k + 1}`);
+        if (node < 0) continue;
+        rotY(sgn * THUMB[k]);
+        applyLocalRot(node);
+      }
+    }
   }
 
   static async load(
