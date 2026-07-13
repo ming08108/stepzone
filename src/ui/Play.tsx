@@ -677,7 +677,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // this chart's StepParity foot placement. Used when a song has no BGA of
       // its own, or forced for every song when bgMode is 'dance'.
       const useDanceBg = (): void =>
-        session.setAttract(buildAttractConfig(req.song.title, req.song.timing, req.chart));
+        session.setAttract({
+          ...buildAttractConfig(req.song.title, req.song.timing, req.chart),
+          // The heavy textured avatar is single-player only — in a live room
+          // race two of them (one per machine, but the perf gate runs both on
+          // one box) starve the field, so versus falls back to the procedural
+          // dancer. Solo players get the full 3D character.
+          model: !req.versus,
+        });
       if (settings.bgMode === 'dance') {
         useDanceBg();
       } else if (req.backgroundFile && isVideoFile(req.backgroundFile.name)) {

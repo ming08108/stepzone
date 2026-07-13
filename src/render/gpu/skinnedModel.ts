@@ -25,6 +25,7 @@ import {
   mat4Identity,
   type GltfModel,
   type GltfPrimitive,
+  type GltfSampler,
 } from './gltf.ts';
 
 export interface Camera {
@@ -92,6 +93,30 @@ const BONE_CHAINS: readonly BoneChain[] = [
   { bone: 'LowerLeg.R', restChild: 'LowerLeg.R_end', from: 'kneeR', to: 'footR' },
 ];
 
+/**
+ * Same chains keyed by VRM humanoid bone names. When a model exposes a VRM
+ * humanoid map, bones/restChildren resolve through it (robust across VRoid
+ * avatars) instead of the robot's node names. VRM feet are in the leg chain
+ * (not IK-pinned), so aiming lowerLeg→foot already steps them.
+ */
+const VRM_CHAINS: readonly BoneChain[] = [
+  { bone: 'hips', restChild: 'spine', from: 'pelvis', to: 'chest' },
+  { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
+  { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
+  { bone: 'upperChest', restChild: 'neck', from: 'chest', to: 'neck' },
+  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
+  { bone: 'leftShoulder', restChild: 'leftUpperArm', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowL', to: 'handL' },
+  { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowR', to: 'handR' },
+  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL' },
+  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL' },
+  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR' },
+  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR' },
+];
+
 /** A resolved retarget bone: node + palette slot + precomputed rest aim dir. */
 interface RetargetBone {
   node: number;
@@ -107,6 +132,7 @@ interface GpuPrimitive {
   nrmBuf: GPUBuffer;
   jntBuf: GPUBuffer;
   wgtBuf: GPUBuffer;
+  uvBuf: GPUBuffer;
   idxBuf: GPUBuffer;
   indexCount: number;
   indexFormat: GPUIndexFormat;
@@ -115,6 +141,11 @@ interface GpuPrimitive {
   jointBase: number; // palette offset (in joints) for this primitive's skin
   baseColor: [number, number, number, number];
   materialIndex: number;
+  useTexture: boolean;
+  isBlend: boolean;
+  alphaCutoff: number;
+  pipeline: GPURenderPipeline; // variant for this prim's alpha mode + cull
+  texBind: GPUBindGroup; // group 2: base-color texture + sampler
 }
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
@@ -132,19 +163,23 @@ struct Frame {
 @group(0) @binding(1) var<storage, read> palette : array<mat4x4f>;
 
 struct Draw {
-  model     : mat4x4f,
-  baseColor : vec4f,
-  jointBase : u32,
-  useSkin   : u32,
-  _p0       : u32,
-  _p1       : u32,
+  model      : mat4x4f,
+  baseColor  : vec4f,   // flat color, or base-color factor for textured prims
+  jointBase  : u32,
+  useSkin    : u32,
+  flags      : u32,     // bit0 = use base-color texture, bit1 = alpha-blended
+  alphaCutoff: f32,     // MASK alpha test threshold (0 for OPAQUE/BLEND)
 };
 @group(1) @binding(0) var<uniform> draw : Draw;
+
+@group(2) @binding(0) var baseSampler : sampler;
+@group(2) @binding(1) var baseTex : texture_2d<f32>;
 
 struct VOut {
   @builtin(position) pos  : vec4f,
   @location(0)       nrm  : vec3f,
   @location(1)       wpos : vec3f,
+  @location(2)       uv   : vec2f,
 };
 
 @vertex
@@ -153,6 +188,7 @@ fn vs(
   @location(1) normal   : vec3f,
   @location(2) joints   : vec4u,
   @location(3) weights  : vec4f,
+  @location(4) uv       : vec2f,
 ) -> VOut {
   var world : vec4f;
   var wn : vec3f;
@@ -171,20 +207,54 @@ fn vs(
   o.pos = frame.viewProj * world;
   o.nrm = wn;
   o.wpos = world.xyz;
+  o.uv = uv;
   return o;
 }
 
 @fragment
-fn fs(@location(0) nrm : vec3f, @location(1) wpos : vec3f) -> @location(0) vec4f {
+fn fs(
+  @location(0) nrm : vec3f,
+  @location(1) wpos : vec3f,
+  @location(2) uv : vec2f,
+) -> @location(0) vec4f {
+  let useTex = (draw.flags & 1u) != 0u;
+  let isBlend = (draw.flags & 2u) != 0u;
+
+  // Albedo: sampled texture × factor (textured), or the flat material color.
+  // The base-color texture is created sRGB so the sample is already linear.
+  var albedo : vec3f;
+  var alpha : f32;
+  if (useTex) {
+    let texel = textureSample(baseTex, baseSampler, uv);
+    albedo = texel.rgb * draw.baseColor.rgb;
+    alpha = texel.a * draw.baseColor.a;
+  } else {
+    albedo = draw.baseColor.rgb;
+    alpha = draw.baseColor.a;
+  }
+  if (alpha < draw.alphaCutoff) { discard; } // MASK cutout
+
   let n = normalize(nrm);
   let l = normalize(frame.lightDir.xyz);
-  let diff = max(dot(n, l), 0.0);
-  let ambient = 0.35;
   let viewDir = normalize(frame.camPos.xyz - wpos);
-  let rim = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0) * 0.35;
-  let base = draw.baseColor.rgb * frame.tint.rgb;
-  let lit = base * (ambient + diff * 0.85) + rim;
-  return vec4f(lit, draw.baseColor.a * frame.tint.a);
+  // Toon shade: quantize the diffuse into a couple of soft bands so the model
+  // reads as a stylized cel character (PS2-DDR dancer), not a flat/murky mesh.
+  // The bands are lifted (0.72..1.05) so nothing sinks into a dead grey.
+  let ndl = dot(n, l) * 0.5 + 0.5; // half-lambert — softer wrap, no black side
+  let band = smoothstep(0.34, 0.5, ndl) * 0.18 + smoothstep(0.55, 0.72, ndl) * 0.15;
+  let shade = 0.72 + band; // 0.72 (shadow) → ~1.05 (lit)
+  // Neon rim — cyan→magenta by facing — so the silhouette pops off the tunnel
+  // and the skin never looks pale/ghostly. Additive, view-based Fresnel.
+  let fres = pow(1.0 - max(dot(n, viewDir), 0.0), 2.4);
+  let rimCol = mix(vec3f(0.15, 0.55, 1.0), vec3f(1.0, 0.25, 0.75), n.x * 0.5 + 0.5);
+  let rim = rimCol * fres * 0.6;
+  var lit = albedo * frame.tint.rgb * shade + rim;
+  // Re-encode to sRGB for textured prims (linear lighting → sRGB store);
+  // flat-color prims keep the renderer's original non-linear passthrough.
+  if (useTex) { lit = pow(max(lit, vec3f(0.0)), vec3f(1.0 / 2.2)); }
+
+  let outA = select(1.0, alpha, isBlend) * frame.tint.a;
+  return vec4f(lit, outA);
 }
 `;
 
@@ -265,11 +335,12 @@ export class SkinnedModel {
     private readonly frameBuf: GPUBuffer,
     private readonly paletteBuf: GPUBuffer,
     private readonly drawBuf: GPUBuffer,
-    private readonly pipeline: GPURenderPipeline,
     private readonly group0: GPUBindGroup,
     private readonly group1: GPUBindGroup,
     readonly sampler: GPUSampler,
     private readonly skinJointOffsets: number[],
+    private readonly opaqueOrder: number[],
+    private readonly blendOrder: number[],
     boneNames: string[],
     boundsCenter: [number, number, number],
     boundsRadius: number,
@@ -340,13 +411,27 @@ export class SkinnedModel {
     for (let j = 0; j < jointNames.length; j++) {
       if (!nameToPalette.has(jointNames[j])) nameToPalette.set(jointNames[j], j);
     }
+    // Resolve each chain to (bone node, rest-child node). VRM models resolve
+    // through the humanoid map; otherwise fall back to the robot's node names.
+    const humanoid = model.humanoid;
+    const resolveBone = (name: string): number =>
+      humanoid
+        ? (humanoid[name] ?? -1)
+        : nameToPalette.get(name) !== undefined
+          ? joints[nameToPalette.get(name)!]
+          : -1;
+    const resolveChild = (boneNode: number, name: string): number =>
+      humanoid ? (humanoid[name] ?? -1) : findDescendantByName(model, boneNode, name);
+    const chains = humanoid ? VRM_CHAINS : BONE_CHAINS;
+
     this.retargetBones = [];
     this.retargetByNode = new Array(nNodes).fill(undefined);
-    for (const chain of BONE_CHAINS) {
-      const palette = nameToPalette.get(chain.bone);
-      if (palette === undefined) continue;
-      const node = joints[palette];
-      const child = findDescendantByName(model, node, chain.restChild);
+    for (const chain of chains) {
+      const node = resolveBone(chain.bone);
+      if (node < 0) continue;
+      const palette = paletteOfNode.get(node);
+      if (palette === undefined) continue; // bone must be a skin joint
+      const child = resolveChild(node, chain.restChild);
       if (child < 0) continue;
       const dir = new Float32Array(3);
       dir[0] = bindGlobals[child * 16 + 12] - bindGlobals[node * 16 + 12];
@@ -436,25 +521,6 @@ export class SkinnedModel {
     }
     const paletteLen = Math.max(1, acc);
 
-    // GPU buffers per primitive.
-    const prims: GpuPrimitive[] = model.primitives.map((p) => {
-      const jointBase = p.skinIndex >= 0 ? skinJointOffsets[p.skinIndex] : 0;
-      return {
-        posBuf: makeVertexBuffer(device, p.position),
-        nrmBuf: makeVertexBuffer(device, p.normal),
-        jntBuf: makeVertexBufferU16(device, p.joints),
-        wgtBuf: makeVertexBuffer(device, p.weights),
-        idxBuf: makeIndexBuffer(device, p.indices),
-        indexCount: p.indices.length,
-        indexFormat: p.indices instanceof Uint32Array ? 'uint32' : 'uint16',
-        nodeIndex: p.nodeIndex,
-        skinIndex: p.skinIndex,
-        jointBase,
-        baseColor: p.baseColor,
-        materialIndex: p.materialIndex,
-      };
-    });
-
     const frameBuf = device.createBuffer({
       size: FRAME_FLOATS * 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -464,7 +530,7 @@ export class SkinnedModel {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
     const drawBuf = device.createBuffer({
-      size: Math.max(1, prims.length) * DRAW_STRIDE,
+      size: Math.max(1, model.primitives.length) * DRAW_STRIDE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -488,22 +554,123 @@ export class SkinnedModel {
         },
       ],
     });
-    const pipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [group0Layout, group1Layout] }),
-      vertex: {
-        module,
-        entryPoint: 'vs',
-        buffers: [
-          { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
-          { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
-          { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'uint16x4' }] },
-          { arrayStride: 16, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32x4' }] },
-        ],
-      },
-      fragment: { module, entryPoint: 'fs', targets: [{ format }] },
-      primitive: { topology: 'triangle-list', cullMode: 'back' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    const group2Layout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
     });
+    const pipeLayout = device.createPipelineLayout({
+      bindGroupLayouts: [group0Layout, group1Layout, group2Layout],
+    });
+    const vertexBuffers: GPUVertexBufferLayout[] = [
+      { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
+      { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
+      { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'uint16x4' }] },
+      { arrayStride: 16, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32x4' }] },
+      { arrayStride: 8, attributes: [{ shaderLocation: 4, offset: 0, format: 'float32x2' }] },
+    ];
+    // One pipeline per (blend, cull) combination, built lazily and cached.
+    const pipeCache = new Map<string, GPURenderPipeline>();
+    const getPipeline = (blend: boolean, cull: GPUCullMode): GPURenderPipeline => {
+      const key = `${blend ? 'b' : 'o'}-${cull}`;
+      let p = pipeCache.get(key);
+      if (!p) {
+        p = device.createRenderPipeline({
+          layout: pipeLayout,
+          vertex: { module, entryPoint: 'vs', buffers: vertexBuffers },
+          fragment: {
+            module,
+            entryPoint: 'fs',
+            targets: [
+              {
+                format,
+                blend: blend
+                  ? {
+                      // Blend color over what's there; keep destination alpha so
+                      // the composited silhouette stays opaque.
+                      color: {
+                        srcFactor: 'src-alpha',
+                        dstFactor: 'one-minus-src-alpha',
+                        operation: 'add',
+                      },
+                      alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+                    }
+                  : undefined,
+              },
+            ],
+          },
+          primitive: { topology: 'triangle-list', cullMode: cull },
+          // Blended prims test depth but don't write it (drawn after opaque).
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: !blend, depthCompare: 'less' },
+        });
+        pipeCache.set(key, p);
+      }
+      return p;
+    };
+
+    // Decode embedded images → sRGB GPU textures; build per-glTF samplers.
+    const { textures, defaultSampler, whiteTex } = await createTextures(device, model);
+    const gpuSamplers = model.samplers.map((s) => device.createSampler(samplerDesc(s)));
+
+    // Per-material base-color bind group (group 2). Untextured → 1×1 white.
+    const whiteView = whiteTex.createView();
+    const defaultBind = device.createBindGroup({
+      layout: group2Layout,
+      entries: [
+        { binding: 0, resource: defaultSampler },
+        { binding: 1, resource: whiteView },
+      ],
+    });
+    const materialBind = model.materials.map((mat) => {
+      const texIdx = mat.baseColorTexture;
+      if (texIdx < 0 || texIdx >= model.textures.length) return defaultBind;
+      const tex = model.textures[texIdx];
+      const img = textures[tex.source];
+      if (!img) return defaultBind;
+      const samp =
+        tex.sampler >= 0 && gpuSamplers[tex.sampler] ? gpuSamplers[tex.sampler] : defaultSampler;
+      return device.createBindGroup({
+        layout: group2Layout,
+        entries: [
+          { binding: 0, resource: samp },
+          { binding: 1, resource: img.createView() },
+        ],
+      });
+    });
+
+    // GPU buffers + draw state per primitive.
+    const prims: GpuPrimitive[] = model.primitives.map((p) => {
+      const jointBase = p.skinIndex >= 0 ? skinJointOffsets[p.skinIndex] : 0;
+      const mat = p.materialIndex >= 0 ? model.materials[p.materialIndex] : undefined;
+      const useTexture = !!mat && mat.baseColorTexture >= 0;
+      const isBlend = mat?.alphaMode === 'BLEND';
+      const cull: GPUCullMode = mat?.doubleSided ? 'none' : 'back';
+      return {
+        posBuf: makeVertexBuffer(device, p.position),
+        nrmBuf: makeVertexBuffer(device, p.normal),
+        jntBuf: makeVertexBufferU16(device, p.joints),
+        wgtBuf: makeVertexBuffer(device, p.weights),
+        uvBuf: makeVertexBuffer(device, p.uv),
+        idxBuf: makeIndexBuffer(device, p.indices),
+        indexCount: p.indices.length,
+        indexFormat: p.indices instanceof Uint32Array ? 'uint32' : 'uint16',
+        nodeIndex: p.nodeIndex,
+        skinIndex: p.skinIndex,
+        jointBase,
+        baseColor: p.baseColor,
+        materialIndex: p.materialIndex,
+        useTexture,
+        isBlend,
+        alphaCutoff: mat?.alphaMode === 'MASK' ? mat.alphaCutoff : 0,
+        pipeline: getPipeline(isBlend, cull),
+        texBind: mat && p.materialIndex >= 0 ? materialBind[p.materialIndex] : defaultBind,
+      };
+    });
+    // Draw opaque/masked prims first, then blended prims (back-to-front-ish).
+    const opaqueOrder: number[] = [];
+    const blendOrder: number[] = [];
+    prims.forEach((p, i) => (p.isBlend ? blendOrder : opaqueOrder).push(i));
 
     const group0 = device.createBindGroup({
       layout: group0Layout,
@@ -535,11 +702,12 @@ export class SkinnedModel {
       frameBuf,
       paletteBuf,
       drawBuf,
-      pipeline,
       group0,
       group1,
       sampler,
       skinJointOffsets,
+      opaqueOrder,
+      blendOrder,
       boneNames,
       center,
       radius,
@@ -900,8 +1068,8 @@ export class SkinnedModel {
       this.drawData[o + 19] = p.baseColor[3];
       this.drawDataU32[o + 20] = p.jointBase;
       this.drawDataU32[o + 21] = p.skinIndex >= 0 ? 1 : 0;
-      this.drawDataU32[o + 22] = 0;
-      this.drawDataU32[o + 23] = 0;
+      this.drawDataU32[o + 22] = (p.useTexture ? 1 : 0) | (p.isBlend ? 2 : 0);
+      this.drawData[o + 23] = p.alphaCutoff; // f32 alpha cutoff
     }
     if (this.prims.length > 0) this.device.queue.writeBuffer(this.drawBuf, 0, this.drawData);
 
@@ -922,19 +1090,39 @@ export class SkinnedModel {
         depthStoreOp: 'store',
       },
     });
-    pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.group0);
-    for (let i = 0; i < this.prims.length; i++) {
-      const p = this.prims[i];
-      pass.setBindGroup(1, this.group1, [i * DRAW_STRIDE]);
-      pass.setVertexBuffer(0, p.posBuf);
-      pass.setVertexBuffer(1, p.nrmBuf);
-      pass.setVertexBuffer(2, p.jntBuf);
-      pass.setVertexBuffer(3, p.wgtBuf);
-      pass.setIndexBuffer(p.idxBuf, p.indexFormat);
-      pass.drawIndexed(p.indexCount);
-    }
+    // Opaque + masked first (depth write), then blended (depth test only).
+    this.curPipeline = null;
+    for (let k = 0; k < this.opaqueOrder.length; k++) this.drawPrim(pass, this.opaqueOrder[k]);
+    for (let k = 0; k < this.blendOrder.length; k++) this.drawPrim(pass, this.blendOrder[k]);
     pass.end();
+  }
+
+  private curPipeline: GPURenderPipeline | null = null;
+
+  /** Issue one primitive draw, switching pipeline/bind groups only as needed. */
+  private drawPrim(pass: GPURenderPassEncoder, i: number): void {
+    const p = this.prims[i];
+    if (p.pipeline !== this.curPipeline) {
+      pass.setPipeline(p.pipeline);
+      this.curPipeline = p.pipeline;
+    }
+    pass.setBindGroup(1, this.group1, this.dynOffset(i));
+    pass.setBindGroup(2, p.texBind);
+    pass.setVertexBuffer(0, p.posBuf);
+    pass.setVertexBuffer(1, p.nrmBuf);
+    pass.setVertexBuffer(2, p.jntBuf);
+    pass.setVertexBuffer(3, p.wgtBuf);
+    pass.setVertexBuffer(4, p.uvBuf);
+    pass.setIndexBuffer(p.idxBuf, p.indexFormat);
+    pass.drawIndexed(p.indexCount);
+  }
+
+  /** Reused single-element dynamic-offset array (no per-draw allocation). */
+  private readonly dynScratch: [number] = [0];
+  private dynOffset(i: number): [number] {
+    this.dynScratch[0] = i * DRAW_STRIDE;
+    return this.dynScratch;
   }
 
   /** Default camera eye: in front of the character, slightly above (small tilt). */
@@ -1265,6 +1453,67 @@ function composeTRSAt(
   out[oo + 13] = t[to + 1];
   out[oo + 14] = t[to + 2];
   out[oo + 15] = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Texture helpers.
+// ---------------------------------------------------------------------------
+
+function samplerDesc(s: GltfSampler): GPUSamplerDescriptor {
+  return {
+    magFilter: s.magLinear ? 'linear' : 'nearest',
+    minFilter: s.minLinear ? 'linear' : 'nearest',
+    mipmapFilter: 'linear',
+    addressModeU: s.wrapU,
+    addressModeV: s.wrapV,
+  };
+}
+
+/**
+ * Decode each embedded glTF image into an sRGB GPU texture (so sampling returns
+ * linear color). Also builds a 1×1 white fallback texture + a default sampler.
+ * NaN/decode-safe: an image that fails to decode becomes `null` and its
+ * material falls back to the white texture (flat factor color).
+ */
+async function createTextures(
+  device: GPUDevice,
+  model: GltfModel,
+): Promise<{ textures: (GPUTexture | null)[]; defaultSampler: GPUSampler; whiteTex: GPUTexture }> {
+  const defaultSampler = device.createSampler({
+    magFilter: 'linear',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
+  });
+  const usage =
+    GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT;
+  const whiteTex = device.createTexture({ size: [1, 1], format: 'rgba8unorm-srgb', usage });
+  device.queue.writeTexture(
+    { texture: whiteTex },
+    new Uint8Array([255, 255, 255, 255]),
+    { bytesPerRow: 4 },
+    { width: 1, height: 1 },
+  );
+  const textures = await Promise.all(
+    model.images.map(async (img): Promise<GPUTexture | null> => {
+      if (!img.bytes.length) return null;
+      try {
+        const bmp = await createImageBitmap(
+          new Blob([img.bytes], { type: img.mimeType || 'image/png' }),
+        );
+        const w = Math.max(1, bmp.width);
+        const h = Math.max(1, bmp.height);
+        const tex = device.createTexture({ size: [w, h], format: 'rgba8unorm-srgb', usage });
+        device.queue.copyExternalImageToTexture({ source: bmp }, { texture: tex }, [w, h]);
+        bmp.close();
+        return tex;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return { textures, defaultSampler, whiteTex };
 }
 
 // ---------------------------------------------------------------------------

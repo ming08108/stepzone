@@ -31,4 +31,5 @@ todos*.txt
 # Local dev/verify scratch (not committed)
 .tmpbench/
 robot-test.html
+vrm-test.html
 .*.mjs

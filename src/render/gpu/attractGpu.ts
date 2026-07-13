@@ -367,6 +367,9 @@ export interface AttractConfig {
    *  lCol/rCol (0..3, or -1) are the StepParity foot placement — which panel
    *  each foot steps to — so the dancer foots the chart as a player would. */
   steps?: readonly { beat: number; cols: number; lCol?: number; rCol?: number }[];
+  /** Use the heavy textured 3D model (default true). Set false in 2-player so
+   *  two of them don't starve the field — the light procedural dancer shows. */
+  model?: boolean;
 }
 
 export class AttractGpu {
@@ -386,7 +389,7 @@ export class AttractGpu {
   private readonly modelSampler: GPUSampler;
   private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
-  private modelRecolored = false; // recolor the model to the palette once/variant
+  private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
   private readonly dancerUniform: GPUBuffer;
   private readonly dancerBind: GPUBindGroup;
   private readonly dancerData = new Float32Array(4); // viewW, viewH, dim, _
@@ -396,7 +399,7 @@ export class AttractGpu {
 
   constructor(
     private readonly device: GPUDevice,
-    format: GPUTextureFormat,
+    private readonly format: GPUTextureFormat,
   ) {
     const module = device.createShaderModule({ code: WGSL });
     this.pipeline = device.createRenderPipeline({
@@ -483,8 +486,14 @@ export class AttractGpu {
       primitive: { topology: 'triangle-list' },
     });
     this.modelSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    // Load the real 3D character; the procedural dancer covers until it's ready.
-    void SkinnedModel.load(device, format, '/models/RobotExpressive.glb')
+  }
+
+  /** Kick off the heavy 3D model load once (single-player only). The procedural
+   *  dancer covers until it's ready, and stays in 2-player (model === false). */
+  private loadModel(): void {
+    if (this.modelLoadStarted) return;
+    this.modelLoadStarted = true;
+    void SkinnedModel.load(this.device, this.format, '/models/AvatarSample_A.vrm')
       .then((m) => {
         this.model = m;
       })
@@ -500,7 +509,10 @@ export class AttractGpu {
     // One dancer per song (fresh spring/cursor state), stepping to this chart.
     this.dancer = new AttractDancer(v);
     this.dancer.setSteps(cfg.steps ?? []);
-    this.modelRecolored = false; // re-apply the palette to the model
+    // The heavy textured avatar is single-player only (two of them starve the
+    // field in 2-player) — kick off its load lazily here. When it's off, the
+    // light procedural dancer carries the whole show.
+    if (cfg.model !== false) this.loadModel();
   }
 
   /** Live-inject a dance step (keyboard test mode). */
@@ -531,18 +543,19 @@ export class AttractGpu {
     beat: number,
     dim = 0,
   ): void {
-    this.usingModel = false;
     const model = this.model;
-    if (!model || !this.dancer || viewW <= 0 || viewH <= 0) return;
+    if (!model || !this.dancer || viewW <= 0 || viewH <= 0) {
+      this.usingModel = false;
+      return;
+    }
+    // Only single-player renders the model (2-player uses the light procedural
+    // dancer — see setConfig), so there's GPU headroom to run it at full
+    // resolution and monitor refresh: no cap, no downscale.
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     this.dancer.build(now, b); // solves the 3D skeleton (skel3)
     model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
-    if (!this.modelRecolored) {
-      // Neon-ify the robot to this variant's palette: material 0=Grey/trim,
-      // 1=Main/body, 2=Black/dark (see SkinnedModel material order).
-      model.setMaterialColors([this.pal.accentB, this.pal.accentA, this.pal.gradBot]);
-      this.modelRecolored = true;
-    }
+    // The VRM avatar keeps its own textures (a flat recolor would wash them
+    // out); the neon scene + dim carry the mood. Only the dim tint is applied.
     const k = Math.max(0, 1 - Math.max(0, Math.min(1, dim))); // match the bg dim
     model.setTint(k, k, k);
     // Dynamic camera: a slow orbit + gentle breathe, with an on-beat push-in,

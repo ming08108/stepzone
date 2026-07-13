@@ -149,6 +149,7 @@ export interface GltfSkin {
 export interface GltfPrimitive {
   position: Float32Array<ArrayBuffer>; // f32x3
   normal: Float32Array<ArrayBuffer>; // f32x3
+  uv: Float32Array<ArrayBuffer>; // f32x2 (TEXCOORD_0, zero-filled if absent)
   indices: Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>;
   joints: Uint16Array<ArrayBuffer>; // u16x4 (zero-filled for rigid prims)
   weights: Float32Array<ArrayBuffer>; // f32x4 (zero-filled for rigid prims)
@@ -161,6 +162,34 @@ export interface GltfPrimitive {
   skinIndex: number;
 }
 
+/** A decode-ready embedded image (raw compressed bytes + MIME type). */
+export interface GltfImage {
+  bytes: Uint8Array<ArrayBuffer>;
+  mimeType: string;
+}
+
+export interface GltfSampler {
+  magLinear: boolean;
+  minLinear: boolean;
+  wrapU: GPUAddressMode;
+  wrapV: GPUAddressMode;
+}
+
+export interface GltfTexture {
+  source: number; // image index
+  sampler: number; // sampler index, or -1 for default
+}
+
+export interface GltfMaterial {
+  name: string;
+  baseColorFactor: [number, number, number, number];
+  /** Texture index for the base color, or -1 if the material is flat-colored. */
+  baseColorTexture: number;
+  alphaMode: 'OPAQUE' | 'MASK' | 'BLEND';
+  alphaCutoff: number;
+  doubleSided: boolean;
+}
+
 export interface GltfModel {
   nodes: GltfNode[];
   /** Scene root node indices. */
@@ -169,6 +198,12 @@ export interface GltfModel {
   primitives: GltfPrimitive[];
   /** Node indices in an order where every parent precedes its children. */
   hierarchyOrder: number[];
+  materials: GltfMaterial[];
+  textures: GltfTexture[];
+  images: GltfImage[];
+  samplers: GltfSampler[];
+  /** VRM humanoid bone name → node index, when a VRM humanoid map is present. */
+  humanoid: Record<string, number> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +233,19 @@ interface RawGltf {
     }[];
   }[];
   skins?: { joints: number[]; inverseBindMatrices?: number; skeleton?: number }[];
-  materials?: { name?: string; pbrMetallicRoughness?: { baseColorFactor?: number[] } }[];
+  materials?: {
+    name?: string;
+    alphaMode?: string;
+    alphaCutoff?: number;
+    doubleSided?: boolean;
+    pbrMetallicRoughness?: {
+      baseColorFactor?: number[];
+      baseColorTexture?: { index: number; texCoord?: number };
+    };
+  }[];
+  images?: { name?: string; bufferView?: number; mimeType?: string; uri?: string }[];
+  textures?: { source?: number; sampler?: number }[];
+  samplers?: { magFilter?: number; minFilter?: number; wrapS?: number; wrapT?: number }[];
   accessors?: {
     bufferView?: number;
     byteOffset?: number;
@@ -209,6 +256,10 @@ interface RawGltf {
   }[];
   bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[];
   buffers?: { byteLength: number; uri?: string }[];
+  extensions?: {
+    VRM?: { humanoid?: { humanBones?: { bone: string; node: number }[] } };
+    VRMC_vrm?: { humanoid?: { humanBones?: Record<string, { node: number }> } };
+  };
 }
 
 const GLB_MAGIC = 0x46546c67; // "glTF"
@@ -454,6 +505,11 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
         weights = new Float32Array(vertCount * 4);
       }
 
+      const uv =
+        prim.attributes['TEXCOORD_0'] !== undefined
+          ? readFloat32(json, bin, prim.attributes['TEXCOORD_0'])
+          : new Float32Array(vertCount * 2); // no UVs → flat-color fallback
+
       const mat = prim.material !== undefined ? json.materials?.[prim.material] : undefined;
       const bcf = mat?.pbrMetallicRoughness?.baseColorFactor;
       const baseColor: [number, number, number, number] =
@@ -462,6 +518,7 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
       primitives.push({
         position,
         normal,
+        uv,
         indices: readIndices(json, bin, prim.indices),
         joints,
         weights,
@@ -474,7 +531,103 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
     }
   }
 
-  return { nodes, roots, skins, primitives, hierarchyOrder };
+  // Materials (base color factor + base color texture + alpha mode).
+  const materials: GltfMaterial[] = (json.materials ?? []).map((m) => {
+    const pbr = m.pbrMetallicRoughness ?? {};
+    const bcf = pbr.baseColorFactor;
+    const mode = m.alphaMode === 'MASK' || m.alphaMode === 'BLEND' ? m.alphaMode : 'OPAQUE';
+    return {
+      name: m.name ?? '',
+      baseColorFactor: bcf && bcf.length === 4 ? [bcf[0], bcf[1], bcf[2], bcf[3]] : [1, 1, 1, 1],
+      baseColorTexture: pbr.baseColorTexture?.index ?? -1,
+      alphaMode: mode,
+      alphaCutoff: m.alphaCutoff ?? 0.5,
+      doubleSided: m.doubleSided ?? false,
+    };
+  });
+
+  // Textures + samplers + embedded images (raw bytes for later GPU decode).
+  const textures: GltfTexture[] = (json.textures ?? []).map((t) => ({
+    source: t.source ?? -1,
+    sampler: t.sampler ?? -1,
+  }));
+  const samplers: GltfSampler[] = (json.samplers ?? []).map((s) => ({
+    magLinear: s.magFilter === undefined || s.magFilter === 9729,
+    minLinear: s.minFilter === undefined || s.minFilter !== 9728,
+    wrapU: wrapMode(s.wrapS),
+    wrapV: wrapMode(s.wrapT),
+  }));
+  const images: GltfImage[] = (json.images ?? []).map((im) => {
+    if (im.bufferView === undefined)
+      return { bytes: new Uint8Array(0), mimeType: im.mimeType ?? '' };
+    const bv = json!.bufferViews?.[im.bufferView];
+    if (!bv) return { bytes: new Uint8Array(0), mimeType: im.mimeType ?? '' };
+    const start = bin!.byteOffset + (bv.byteOffset ?? 0);
+    return {
+      bytes: new Uint8Array(bin!.buffer as ArrayBuffer, start, bv.byteLength),
+      mimeType: im.mimeType ?? 'image/png',
+    };
+  });
+
+  // VRM humanoid bone map (0.x: extensions.VRM; 1.0: extensions.VRMC_vrm).
+  let humanoid: Record<string, number> | null = null;
+  const vrm0 = json.extensions?.VRM;
+  const vrm1 = json.extensions?.VRMC_vrm;
+  if (vrm0?.humanoid?.humanBones) {
+    humanoid = {};
+    for (const b of vrm0.humanoid.humanBones) {
+      if (b && typeof b.node === 'number' && humanoid[b.bone] === undefined)
+        humanoid[b.bone] = b.node;
+    }
+  } else if (vrm1?.humanoid?.humanBones) {
+    humanoid = {};
+    for (const [name, v] of Object.entries(vrm1.humanoid.humanBones)) {
+      if (v && typeof v.node === 'number') humanoid[name] = v.node;
+    }
+  }
+
+  // VRM 0.x avatars face −Z; pre-rotate the scene roots 180° about Y so the
+  // avatar faces the +Z camera. (glТF/VRM 1.0 already face +Z: no rotation.)
+  if (vrm0) {
+    const ry = new Float32Array(16);
+    mat4RotationY(ry, Math.PI);
+    const tmp = new Float32Array(16);
+    for (const r of roots) {
+      if (r < 0 || r >= nodes.length) continue;
+      mat4Multiply(tmp, 0, ry, 0, nodes[r].localMatrix, 0);
+      nodes[r].localMatrix.set(tmp);
+    }
+  }
+
+  return {
+    nodes,
+    roots,
+    skins,
+    primitives,
+    hierarchyOrder,
+    materials,
+    textures,
+    images,
+    samplers,
+    humanoid,
+  };
+}
+
+function wrapMode(w: number | undefined): GPUAddressMode {
+  if (w === 33071) return 'clamp-to-edge';
+  if (w === 33648) return 'mirror-repeat';
+  return 'repeat';
+}
+
+/** Column-major rotation about the Y axis into `out` at offset `o`. */
+function mat4RotationY(out: Float32Array, angle: number): void {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  mat4Identity(out, 0);
+  out[0] = c;
+  out[2] = -s;
+  out[8] = s;
+  out[10] = c;
 }
 
 /**
