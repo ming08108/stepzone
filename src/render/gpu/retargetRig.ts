@@ -83,19 +83,28 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   // again from there), which displaces and visually stretches the limb at the
   // joint. So the clavicles (shoulder) and upperChest stay at bind and simply
   // inherit their parent's rotation; the real segment bone does the aiming.
+  // SIDE NOTE — the L/R pairing is deliberately CROSSED. Our dancer faces the
+  // viewer, so her screen-left ("...L") joints are her anatomical RIGHT side.
+  // VRM 0.x avatars are pre-rotated 180° at parse (gltf.ts) to face the +Z
+  // camera, which puts the model's anatomical-LEFT bones on the viewer's right
+  // (+X). So model leftUpperArm must follow our screen-RIGHT ("...R") chain to
+  // reproduce the animation as seen on screen. Pairing left-with-L aims every
+  // limb at the opposite side's target: legs scissor into an X, arms aim
+  // across/into the torso, and the near-180° aim deltas make quatFromTo
+  // degenerate (random roll).
   { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
   { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
   { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
-  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderL', to: 'elbowL' },
-  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowL', to: 'handL' },
-  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderR', to: 'elbowR' },
-  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowR', to: 'handR' },
-  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL', narrowX: 0.55 },
-  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL', narrowX: 0.55 },
-  { bone: 'leftFoot', restChild: 'leftFoot', from: 'footL', to: 'footL', hold: true },
-  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
-  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
-  { bone: 'rightFoot', restChild: 'rightFoot', from: 'footR', to: 'footR', hold: true },
+  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowR', to: 'handR' },
+  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowL', to: 'handL' },
+  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
+  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
+  { bone: 'leftFoot', restChild: 'leftFoot', from: 'footR', to: 'footR', hold: true },
+  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipL', to: 'kneeL', narrowX: 0.55 },
+  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeL', to: 'footL', narrowX: 0.55 },
+  { bone: 'rightFoot', restChild: 'rightFoot', from: 'footL', to: 'footL', hold: true },
 ];
 
 /** A resolved retarget bone: node + palette slot + precomputed rest aim dir. */
