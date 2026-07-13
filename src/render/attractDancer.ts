@@ -475,7 +475,7 @@ const STEP_L = makeClip(1.5, 0.6, false, [
       [CH_RABD]: 0.42,
       [CH_RFWD]: 0.1,
       [CH_RELB]: 0.7,
-      [CH_LIFTL]: 0.012,
+      [CH_LIFTL]: 0.032,
     },
   ],
   [
@@ -495,7 +495,7 @@ const STEP_L = makeClip(1.5, 0.6, false, [
       [CH_RFWD]: 0.2,
       [CH_RELB]: 0.95,
       [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.062,
+      [CH_LIFTL]: 0.085,
     },
   ],
   [
@@ -603,7 +603,7 @@ const STEP_U = makeClip(1.5, 0.6, false, [
       [CH_RFWD]: -0.26,
       [CH_RELB]: 0.45,
       [CH_RLOF]: 0.05,
-      [CH_LIFTR]: 0.012,
+      [CH_LIFTR]: 0.032,
     },
   ],
   [
@@ -620,7 +620,7 @@ const STEP_U = makeClip(1.5, 0.6, false, [
       [CH_RELB]: 0.4,
       [CH_RLOF]: 0.05,
       [CH_SWGR]: 0.55,
-      [CH_LIFTR]: 0.07,
+      [CH_LIFTR]: 0.092,
     },
   ],
   [
@@ -711,7 +711,7 @@ const STEP_D = makeClip(1.5, 0.6, false, [
       [CH_RABD]: 0.62,
       [CH_RFWD]: 0.22,
       [CH_RELB]: 0.75,
-      [CH_LIFTL]: 0.015,
+      [CH_LIFTL]: 0.035,
     },
   ],
   [
@@ -728,7 +728,7 @@ const STEP_D = makeClip(1.5, 0.6, false, [
       [CH_RFWD]: 0.3,
       [CH_RELB]: 1.2,
       [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.05,
+      [CH_LIFTL]: 0.075,
     },
   ],
   [
@@ -1035,8 +1035,31 @@ const N_PLAYERS = 6;
 const FADE_IN = 0.18;
 const FADE_OUT = 0.25;
 
+// ---- dance pad ----------------------------------------------------------------
+// A 4-panel + laid FLAT on the floor plane (world y = FOOT_Y), each panel
+// centered on the SAME 3D spot the corresponding foot steps to, so a planted
+// foot reads as ON its panel. Panels are low-poly DDR arrows: a dim neon
+// outline at rest, flashing bright on the beat the panel is stepped.
+
+/** Panel centers on the floor, in (x, z): Left/Right straddle at z≈0, Up is
+ *  the far panel (−z), Down the near panel (+z). Matches panelTarget. */
+const PAD_CX: readonly number[] = [CX - 0.245 * BODY_H, CX, CX, CX + 0.245 * BODY_H];
+const PAD_CZ: readonly number[] = [0, 0.2 * BODY_H, -0.28 * BODY_H, 0];
+/** Unit pointing dir (pux,puz) per panel (L points −x, D +z, U −z, R +x). */
+const PAD_PUX: readonly number[] = [-1, 0, 0, 1];
+const PAD_PUZ: readonly number[] = [0, 1, -1, 0];
+/** Half-size of an arrow on the floor (fraction of BODY_H). */
+const PAD_HS = 0.092 * BODY_H;
+/** Arrow outline template in (u,v): u = pointing dir, v = perpendicular. Seven
+ *  points trace a classic chevron arrow (tip, barbs, shaft). */
+const ARROW_U: readonly number[] = [1, 0, 0, -1, -1, 0, 0];
+const ARROW_V: readonly number[] = [0, 1, 0.42, 0.42, -0.42, -0.42, -1];
+/** Draw order: far panel (Up) first → near (Down) last, so the near panels
+ *  layer over the far ones on the receding floor. */
+const PAD_ORDER: readonly number[] = [2, 0, 3, 1];
+
 /** Vertex capacities (5 floats per vertex). Generous: a full body is ~400
- *  solid verts and ~1100 additive verts. */
+ *  solid verts and ~1100 additive verts, the pad ~250 more. */
 const SOLID_CAP = 4096;
 const ADD_CAP = 8192;
 
@@ -1104,10 +1127,20 @@ export class AttractDancer {
   private readonly footSwg = new Float64Array(2); // per-frame owner samples
   private readonly footLift = new Float64Array(2);
   private readonly pt = new Float64Array(2); // panelTarget out (x, z)
+  private readonly padPts = new Float64Array(16); // projected arrow outline (x,y)*8
 
   // ---- accents fired by note hits (bursts + glow only, not body pose) ----
   private hitBeat = -1e9;
   private hitCols = 0;
+
+  // ---- dance-pad panel flashes (beat each panel was last stepped on) ----
+  private readonly padFlash = new Float64Array(4).fill(-1e9);
+
+  // ---- arm-channel follow-through smoothing (post-blend, critically damped
+  //      so the hands EASE and settle instead of snapping between clip poses;
+  //      8 channels LABD,LFWD,LELB,LLOF,RABD,RFWD,RELB,RLOF; NaN ⇒ snap) ----
+  private readonly armX = new Float32Array(8).fill(NaN);
+  private readonly armV = new Float32Array(8);
 
   // ---- hair / cloth secondary state (NaN = uninitialized, snaps to rest) ----
   private tailLX = NaN;
@@ -1219,6 +1252,7 @@ export class AttractDancer {
     this.synthSched = -1e9;
     this.lastFlourish = -1e9;
     this.hitBeat = -1e9;
+    this.padFlash.fill(-1e9);
     this.plActive.fill(0);
     // Lock the feet where they stand (plants stay finite and committed).
     for (let f = 0; f < 2; f++) {
@@ -1339,6 +1373,31 @@ export class AttractDancer {
       }
     }
 
+    // ---- 2b. arm follow-through: a critically-damped filter on the eight
+    //         arm channels. Cross-fades and clip changes can hand the arms a
+    //         fast-moving target; this makes the hands EASE toward it and
+    //         settle (secondary action) instead of snapping/stuttering — no
+    //         overshoot, framerate-independent, NaN-guarded. --------------
+    {
+      const omega = 26; // rad/s natural frequency (~150ms settle)
+      const e = Math.exp(-omega * dt);
+      for (let k = 0; k < 8; k++) {
+        const target = acc[CH_LABD + k];
+        let x = this.armX[k];
+        let vel = this.armV[k];
+        if (!Number.isFinite(x) || !Number.isFinite(vel)) {
+          x = target;
+          vel = 0;
+        }
+        const dsp = x - target;
+        const nx = target + (dsp + (vel + omega * dsp) * dt) * e;
+        const nv = (vel - (vel + omega * dsp) * omega * dt) * e;
+        this.armX[k] = Number.isFinite(nx) ? nx : target;
+        this.armV[k] = Number.isFinite(nv) ? nv : 0;
+        acc[CH_LABD + k] = this.armX[k];
+      }
+    }
+
     // ---- 3. foot kinematics: locked plants + owned swings -------------------
     for (let f = 0; f < 2; f++) {
       let x: number;
@@ -1397,6 +1456,7 @@ export class AttractDancer {
     // ---- 6. emit geometry ---------------------------------------------------
     this.solidPos = 0;
     this.addPos = 0;
+    this.emitPad(valid ? beat : NaN); // floor pad, behind/under the dancer
     this.emitBody();
     const bd = beat - this.hitBeat;
     const burstLife = valid && bd >= 0 && bd < 0.22 && raisesHand(this.hitCols) ? 1 - bd / 0.22 : 0;
@@ -1424,6 +1484,25 @@ export class AttractDancer {
     return this.synthSched > beat ? this.synthSched - beat : Math.floor(beat) + 1 - beat;
   }
 
+  /** Record a flash on every pad panel this row steps on (parity feet first,
+   *  else the lit column bits) at `beat` — the instant the foot plants. */
+  private flashPanels(st: Step, beat: number): void {
+    const lp = st.lCol ?? -1;
+    const rp = st.rCol ?? -1;
+    let any = false;
+    if (lp >= 0 && lp <= 3) {
+      this.padFlash[lp] = beat;
+      any = true;
+    }
+    if (rp >= 0 && rp <= 3) {
+      this.padFlash[rp] = beat;
+      any = true;
+    }
+    if (!any) {
+      for (let p = 0; p < 4; p++) if (st.cols & (1 << p)) this.padFlash[p] = beat;
+    }
+  }
+
   /** Advance the chart cursors: burst accents on rows that just hit, and
    *  clip scheduling so each move's IMPACT keyframe lands on its note beat. */
   private scheduleChart(beat: number): void {
@@ -1434,6 +1513,9 @@ export class AttractDancer {
       if (++guard <= 32) {
         this.hitBeat = steps[this.hitIdx].beat;
         this.hitCols = steps[this.hitIdx].cols;
+        // Light the pad panels this row lands on, exactly on the note beat
+        // (= the moment the foot plants), so the pad pulses with the chart.
+        this.flashPanels(steps[this.hitIdx], steps[this.hitIdx].beat);
       }
     }
     guard = 0;
@@ -1458,6 +1540,7 @@ export class AttractDancer {
       this.synthHit = ib;
       this.hitBeat = ib;
       this.hitCols = SYNTH[((ib % 8) + 8) % 8];
+      this.flashPanels({ beat: ib, cols: this.hitCols }, ib);
     }
     const nb = ib + 1;
     if (this.synthSched < nb) {
@@ -1839,14 +1922,20 @@ export class AttractDancer {
       const nx = dx / d;
       const ny = dy / d;
       const nz = dz / d;
-      // Soft knees: never lock the chain fully straight.
-      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.985);
+      // Soft knees: never lock the chain fully straight (keeps a natural bend
+      // and kills the rubber-band pop at full reach).
+      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.972);
       const ca = clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1);
       const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
-      // Pole = body-forward + a little outward, orthogonalized to the chain.
-      let px = fwdX + sgn * latX * 0.3;
+      // Knee pole: bows the knee OUTWARD over the foot — a real, visible bend
+      // in the screen plane (natural for a straddle) — with only a modest
+      // forward lift for 3D volume. A forward-DOMINANT pole put the whole bend
+      // into depth, which foreshortened the shin and read as a stiff, snapped,
+      // detached lower leg. Outward-dominant + small forward keeps the thigh
+      // and shin one continuous, believable limb and never inverts.
+      let px = sgn * latX * 0.92 + fwdX * 0.34;
       let py = 0;
-      let pz = fwdZ + sgn * latZ * 0.3;
+      let pz = sgn * latZ * 0.92 + fwdZ * 0.34;
       const dot = px * nx + py * ny + pz * nz;
       px -= nx * dot;
       py -= ny * dot;
@@ -1864,7 +1953,8 @@ export class AttractDancer {
       s3[knI * 3] = hx + nx * (l1 * ca) + px * (l1 * sa);
       s3[knI * 3 + 1] = hy + ny * (l1 * ca) + py * (l1 * sa);
       s3[knI * 3 + 2] = hz + nz * (l1 * ca) + pz * (l1 * sa);
-      // Ankle re-derived on the (possibly reach-clamped) chain.
+      // Ankle re-derived on the (possibly reach-clamped) chain — exactly l2
+      // from the knee, so hip→knee→ankle is one connected chain.
       s3[ftI * 3] = hx + nx * dc;
       s3[ftI * 3 + 1] = hy + ny * dc;
       s3[ftI * 3 + 2] = hz + nz * dc;
@@ -2214,6 +2304,116 @@ export class AttractDancer {
     return this.tfPy + this.tfUy * this.tfUl * t + this.tfVy * w;
   }
 
+  /** Project a point on the floor plane (world y = FOOT_Y, depth z) through
+   *  the same tilted weak-perspective camera as the skeleton. Writes (x,y)
+   *  into `out` at `oi`; the perspective divide is clamped so it stays finite. */
+  private projFloor(x: number, z: number, out: Float64Array, oi: number): void {
+    const zc = clamp(Number.isFinite(z) ? z : 0, -Z_MAX, Z_MAX);
+    const s = PERSP_F / (PERSP_F - zc);
+    const yy = FOOT_Y + zc * TILT;
+    out[oi] = CX + ((Number.isFinite(x) ? x : CX) - CX) * s;
+    out[oi + 1] = HORIZON + (yy - HORIZON) * s;
+  }
+
+  /** The dance pad: four flat arrows on the floor at the panel targets. Each
+   *  is a dim neon outline at rest; on the beat it is stepped it flashes bright
+   *  (additive glow fill + hot outline) and fades over ~a beat. Drawn first so
+   *  the dancer's body and feet layer over it — feet read as ON the panels. */
+  private emitPad(beat: number): void {
+    const pts = this.padPts;
+    const pa = this.pal.accentA;
+    const pb = this.pal.accentB;
+    const wht = this.pal.white;
+    for (let oi = 0; oi < 4; oi++) {
+      const panel = PAD_ORDER[oi];
+      const cx = PAD_CX[panel];
+      const cz = PAD_CZ[panel];
+      const pux = PAD_PUX[panel];
+      const puz = PAD_PUZ[panel];
+      // Perpendicular in the floor plane (rotate the pointing dir 90°).
+      const pvx = -puz;
+      const pvz = pux;
+      // Project the 7 arrow-outline points + centroid (index 7) to screen.
+      let mx = 0;
+      let my = 0;
+      for (let k = 0; k < 7; k++) {
+        const u = ARROW_U[k] * PAD_HS;
+        const vv = ARROW_V[k] * PAD_HS;
+        const fx = cx + pux * u + pvx * vv;
+        const fz = cz + puz * u + pvz * vv;
+        this.projFloor(fx, fz, pts, k * 2);
+        mx += pts[k * 2];
+        my += pts[k * 2 + 1];
+      }
+      pts[14] = mx / 7;
+      pts[15] = my / 7;
+
+      // Flash intensity: bright on the step beat, fading over ~a beat.
+      const db = Number.isFinite(beat) ? beat - this.padFlash[panel] : 1e9;
+      const flash = db >= 0 && db < 1.2 ? Math.exp(-3.2 * db) : 0;
+
+      // Lit fill (additive glow) — a fan from the centroid, only when flashing.
+      if (flash > 0.02) {
+        const fr = (lerp(pa[0], wht[0], 0.35) / 255) * flash * 0.85;
+        const fg = (lerp(pa[1], wht[1], 0.35) / 255) * flash * 0.85;
+        const fb = (lerp(pa[2], wht[2], 0.35) / 255) * flash * 0.85;
+        for (let k = 0; k < 7; k++) {
+          const n = (k + 1) % 7;
+          this.addTri(
+            pts[14],
+            pts[15],
+            pts[k * 2],
+            pts[k * 2 + 1],
+            pts[n * 2],
+            pts[n * 2 + 1],
+            fr,
+            fg,
+            fb,
+          );
+        }
+      }
+
+      // Outline: dim cyan floor line at rest, ramping to hot white on flash.
+      const baseI = 0.12 + 0.9 * flash;
+      const oc0 = pb;
+      const or = (lerp(oc0[0], wht[0], flash) / 255) * baseI;
+      const og = (lerp(oc0[1], wht[1], flash) / 255) * baseI;
+      const ob = (lerp(oc0[2], wht[2], flash) / 255) * baseI;
+      const hw = 0.7 + 1.6 * flash;
+      for (let k = 0; k < 7; k++) {
+        const n = (k + 1) % 7;
+        this.padEdge(pts[k * 2], pts[k * 2 + 1], pts[n * 2], pts[n * 2 + 1], hw, or, og, ob);
+      }
+    }
+  }
+
+  /** One thick additive line segment (a mitred quad) for the pad outline. */
+  private padEdge(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    hw: number,
+    r: number,
+    g: number,
+    b: number,
+  ): void {
+    let dx = bx - ax;
+    let dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (!(len > 1e-6)) return;
+    dx /= len;
+    dy /= len;
+    const px = -dy * hw;
+    const py = dx * hw;
+    const a0x = ax - dx * hw;
+    const a0y = ay - dy * hw;
+    const b0x = bx + dx * hw;
+    const b0y = by + dy * hw;
+    this.addTri(a0x + px, a0y + py, b0x + px, b0y + py, b0x - px, b0y - py, r, g, b);
+    this.addTri(a0x + px, a0y + py, b0x - px, b0y - py, a0x - px, a0y - py, r, g, b);
+  }
+
   private emitBody(): void {
     const B = BODY_H;
 
@@ -2390,8 +2590,11 @@ export class AttractDancer {
     const hip = side === 0 ? HIPL : HIPR;
     const kn = side === 0 ? KNL : KNR;
     const ft = side === 0 ? FTL : FTR;
-    this.emitLimb(hip, kn, 0.038, 0.026, ZSKIN, true);
-    this.emitLimb(kn, ft, 0.027, 0.013, ZTRIM, true);
+    // Thigh bottom and shin top share the SAME width (0.03) at the knee, so
+    // the skin thigh and the boot meet flush there — one continuous limb, no
+    // step/gap. The knee-high boot (ZTRIM) runs from the knee down.
+    this.emitLimb(hip, kn, 0.04, 0.03, ZSKIN, true);
+    this.emitLimb(kn, ft, 0.03, 0.014, ZTRIM, true);
     this.emitCuff(kn, ft);
     this.emitShoe(kn, ft, side === 0 ? -1 : 1);
   }
