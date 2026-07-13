@@ -36,6 +36,22 @@ fn fs(v: VO) -> @location(0) vec4f {
 }
 `;
 
+/** The dancer avatars — redistributable VRoid CC-usage sample models (see
+ *  public/models/README.md). One is chosen at random per session for variety. */
+const MODEL_POOL: Record<string, string> = {
+  A: '/models/AvatarSample_A.vrm',
+  B: '/models/AvatarSample_B.vrm',
+  C: '/models/AvatarSample_C.vrm',
+};
+
+/** Pick a dancer model URL: `?dancerModel=B` forces one (testing), else random. */
+function pickModelUrl(): string {
+  const keys = Object.keys(MODEL_POOL);
+  const forced = new URLSearchParams(location.search).get('dancerModel');
+  if (forced && MODEL_POOL[forced]) return MODEL_POOL[forced];
+  return MODEL_POOL[keys[Math.floor(Math.random() * keys.length)]];
+}
+
 /** One mood/variant's colors, as 0..1 float RGB ready for the uniform buffer. */
 interface GpuPalette {
   gradTop: [number, number, number];
@@ -489,11 +505,13 @@ export class AttractGpu {
   }
 
   /** Kick off the heavy 3D model load once (single-player only). The procedural
-   *  dancer covers until it's ready, and stays in 2-player (model === false). */
+   *  dancer covers until it's ready, and stays in 2-player (model === false).
+   *  One of the redistributable VRoid sample avatars is picked at random per
+   *  session for variety; `?dancerModel=B` (etc.) forces one for testing. */
   private loadModel(): void {
     if (this.modelLoadStarted) return;
     this.modelLoadStarted = true;
-    void SkinnedModel.load(this.device, this.format, '/models/AvatarSample_A.vrm')
+    void SkinnedModel.load(this.device, this.format, pickModelUrl())
       .then((m) => {
         this.model = m;
       })
