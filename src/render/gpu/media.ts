@@ -4,12 +4,18 @@
  * canvas). Images/bitmaps upload once to a sampled texture; videos go through
  * importExternalTexture every frame (zero-copy where the platform allows). A
  * live <canvas> source (the procedural attract background) goes through the
- * image pipeline but is re-uploaded every frame like a video. The dim overlay
- * on top is an ordinary quad from the main batch.
+ * image pipeline but is re-uploaded every frame like a video.
+ *
+ * The background dim is folded straight into this pass — the fragment outputs
+ * media·(1−dim) — instead of a separate full-canvas black quad blended on top.
+ * The blit already covers the whole canvas (cover-fit), so this is exactly the
+ * old `bg then premultiplied-black-over` result (media.rgb·(1−dim), alpha 1),
+ * with one fewer full-screen fill per frame — the frame's single largest quad.
  */
 
 const WGSL_COMMON = /* wgsl */ `
-struct Rect { ndc: vec4f }; // x0, y0, x1, y1 (NDC corners of the cover-fit quad)
+// ndc: x0,y0,x1,y1 (NDC corners of the cover-fit quad). params.x: dim 0..1.
+struct Rect { ndc: vec4f, params: vec4f };
 @group(0) @binding(0) var<uniform> rect: Rect;
 
 struct Out {
@@ -38,7 +44,8 @@ const WGSL_IMAGE =
 @group(0) @binding(2) var tex: texture_2d<f32>;
 @fragment
 fn fs(v: Out) -> @location(0) vec4f {
-  return textureSample(tex, samp, v.uv);
+  let c = textureSample(tex, samp, v.uv);
+  return vec4f(c.rgb * (1.0 - rect.params.x), c.a);
 }
 `;
 
@@ -49,7 +56,8 @@ const WGSL_VIDEO =
 @group(0) @binding(2) var tex: texture_external;
 @fragment
 fn fs(v: Out) -> @location(0) vec4f {
-  return textureSampleBaseClampToEdge(tex, samp, v.uv);
+  let c = textureSampleBaseClampToEdge(tex, samp, v.uv);
+  return vec4f(c.rgb * (1.0 - rect.params.x), c.a);
 }
 `;
 
@@ -64,7 +72,8 @@ export class MediaLayer {
   private live = false; // a canvas source: re-upload its current frame each draw
   private imageTex: GPUTexture | null = null;
   private imageBind: GPUBindGroup | null = null;
-  private readonly ndc = new Float32Array(4); // reused each draw (no per-frame alloc)
+  // Reused each draw (no per-frame alloc): [0..3] = ndc corners, [4] = dim.
+  private readonly params = new Float32Array(8);
   private videoLayout?: GPUBindGroupLayout; // cached (a video rebuilds only the bind group)
 
   constructor(
@@ -83,7 +92,7 @@ export class MediaLayer {
     this.pipeImage = make(WGSL_IMAGE);
     this.pipeVideo = make(WGSL_VIDEO);
     this.uniform = device.createBuffer({
-      size: 16,
+      size: 32, // vec4 ndc + vec4 params (dim)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
@@ -140,8 +149,9 @@ export class MediaLayer {
     return this.imageBind !== null;
   }
 
-  /** Encode the cover-fit blit (call first in the pass; it overwrites). */
-  draw(pass: GPURenderPassEncoder, viewW: number, viewH: number): void {
+  /** Encode the cover-fit blit (call first in the pass; it overwrites). `dim`
+   *  (0..1) darkens the output in-shader, replacing the old separate dim quad. */
+  draw(pass: GPURenderPassEncoder, viewW: number, viewH: number, dim = 0): void {
     const src = this.source;
     if (!src || !this.active) return;
     const bw = src instanceof HTMLVideoElement ? src.videoWidth : (this.imageTex?.width ?? 0);
@@ -153,12 +163,13 @@ export class MediaLayer {
     const dh = bh * scale;
     const x0 = (viewW - dw) / 2;
     const y0 = (viewH - dh) / 2;
-    const ndc = this.ndc;
-    ndc[0] = (x0 / viewW) * 2 - 1;
-    ndc[1] = 1 - ((y0 + dh) / viewH) * 2;
-    ndc[2] = ((x0 + dw) / viewW) * 2 - 1;
-    ndc[3] = 1 - (y0 / viewH) * 2;
-    this.device.queue.writeBuffer(this.uniform, 0, ndc);
+    const p = this.params;
+    p[0] = (x0 / viewW) * 2 - 1;
+    p[1] = 1 - ((y0 + dh) / viewH) * 2;
+    p[2] = ((x0 + dw) / viewW) * 2 - 1;
+    p[3] = 1 - (y0 / viewH) * 2;
+    p[4] = Math.max(0, Math.min(1, dim));
+    this.device.queue.writeBuffer(this.uniform, 0, p);
 
     if (src instanceof HTMLVideoElement) {
       let external: GPUExternalTexture;

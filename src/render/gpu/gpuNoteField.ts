@@ -678,11 +678,9 @@ export class GpuNoteField {
     this.underShapes.begin(width, height); // chrome/density under the notes
     const white = this.sprWhite();
 
-    // 1. Dim over the song media — the ONE shared background, spanning the
-    // full canvas even when two field views render on it (live versus).
-    if (white && this.media.active && this.cfg.bgDim > 0) {
-      b.push(width / 2, height / 2, width, height, white, 0, 0, 0, this.cfg.bgDim);
-    }
+    // 1. Background dim is folded into the media pass (media.draw below darkens
+    // the blit in-shader), so there is no separate full-canvas dim quad here —
+    // it spans the full canvas identically, even with two field views on it.
 
     // 2-9. Each field view draws view-locally; the batches' originX places it,
     // and its own metrics (applied inside drawView) size it. The main sits at
@@ -758,7 +756,7 @@ export class GpuNoteField {
       this.passDesc.timestampWrites = this.timer.timestampWrites();
       const enc = this.device.createCommandEncoder();
       const pass = enc.beginRenderPass(this.passDesc);
-      this.media.draw(pass, width, height);
+      this.media.draw(pass, width, height, this.cfg.bgDim);
       this.underShapes.flush(pass); // SL chrome + density, UNDER the notes
       this.batch.flush(pass); // field, notes, explosions (textured quads)
       this.shapes.flush(pass); // HUD backgrounds (geometry) over the field

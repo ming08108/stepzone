@@ -81,13 +81,31 @@ fn fs(v: Out) -> @location(0) vec4f {
     mix(v.uvRect.y, v.uvRect.w, vv),
   );
   var col = textureSample(atlas, samp, uv) * v.tint;
-  // Mask: always sampled (uniform control flow), applied only when flagged.
-  let muv = vec2f(
-    mix(v.maskUV.x, v.maskUV.z, v.luv.x),
-    mix(v.maskUV.y, v.maskUV.w, v.luv.y),
-  );
-  let m = textureSample(atlas, samp, muv);
-  return col * mix(1.0, m.a, v.extra.y);
+  // Mask multiplies by a SECOND atlas fetch, but only the dance-gauge segment
+  // quads flag it (extra.y) — every note, hold, receptor and background quad
+  // left this fetch running for nothing. Gate it so the vast majority of
+  // fragments sample the atlas once. textureSampleLevel (explicit LOD 0 — the
+  // atlas is single-level) is permitted in non-uniform control flow, unlike
+  // textureSample, so it's valid inside the branch and visually identical.
+  if (v.extra.y != 0.0) {
+    let muv = vec2f(
+      mix(v.maskUV.x, v.maskUV.z, v.luv.x),
+      mix(v.maskUV.y, v.maskUV.w, v.luv.y),
+    );
+    let m = textureSampleLevel(atlas, samp, muv, 0.0);
+    col = col * m.a;
+  }
+  return col;
+}
+
+// Flat-fill fragment for large field fills (lane scrim, danger wash) drawn with
+// the solid white texel: the atlas fetch would only read 1.0, so this entry
+// point skips the sample and returns the premultiplied tint. Uniform across the
+// quad (no atlas-gutter edge falloff), and it runs on its own pipeline so the
+// textured fs path above is untouched.
+@fragment
+fn fsSolid(v: Out) -> @location(0) vec4f {
+  return v.tint;
 }
 `;
 
@@ -128,17 +146,23 @@ export interface QuadOpts {
   mask?: AtlasRect;
   /** Additive blend (explosions). Instances group into blend segments in push order. */
   add?: boolean;
+  /** Flat-color fill drawn by the no-sample `fsSolid` pipeline. Valid ONLY when
+   *  the sprite is the solid `white` texel (the fetch would read 1.0). Reserve
+   *  it for large low-detail fills; each solid↔textured switch is a draw-call
+   *  boundary, so peppering small quads with it just adds draws. */
+  solid?: boolean;
 }
 
 export class QuadBatch {
   private readonly pipeOver: GPURenderPipeline;
   private readonly pipeAdd: GPURenderPipeline;
+  private readonly pipeSolid: GPURenderPipeline;
   private readonly uniform: GPUBuffer;
   private readonly bindGroup: GPUBindGroup;
   private data = new Float32Array(FLOATS_PER_INSTANCE * 512);
   private buffer: GPUBuffer;
   private count = 0;
-  private segments: Array<{ add: boolean; start: number; count: number }> = [];
+  private segments: Array<{ add: boolean; solid: boolean; start: number; count: number }> = [];
   private readonly viewScratch = new Float32Array(4); // reused each begin() (no per-frame alloc)
   /** Diagnostic: instance-buffer regrows (each destroys+recreates a GPU buffer). */
   grows = 0;
@@ -174,23 +198,26 @@ export class QuadBatch {
       ],
     });
     const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
-    const make = (blend: GPUBlendState) =>
+    const make = (blend: GPUBlendState, entryPoint = 'fs') =>
       device.createRenderPipeline({
         layout,
         vertex: { module, entryPoint: 'vs', buffers: vertexBuffers },
-        fragment: { module, entryPoint: 'fs', targets: [{ format, blend }] },
+        fragment: { module, entryPoint, targets: [{ format, blend }] },
         primitive: { topology: 'triangle-list' },
       });
     // Premultiplied source-over.
-    this.pipeOver = make({
+    const over: GPUBlendState = {
       color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
       alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-    });
+    };
+    this.pipeOver = make(over);
     // Additive (canvas 'lighter').
     this.pipeAdd = make({
       color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
       alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
     });
+    // Same source-over blend, no-sample fragment for flat fills.
+    this.pipeSolid = make(over, 'fsSolid');
 
     this.uniform = device.createBuffer({
       size: 16,
@@ -255,8 +282,10 @@ export class QuadBatch {
       });
     }
     const add = opts?.add ?? false;
+    const solid = opts?.solid ?? false;
     const seg = this.segments[this.segments.length - 1];
-    if (!seg || seg.add !== add) this.segments.push({ add, start: this.count, count: 1 });
+    if (!seg || seg.add !== add || seg.solid !== solid)
+      this.segments.push({ add, solid, start: this.count, count: 1 });
     else seg.count++;
 
     const o = this.count * FLOATS_PER_INSTANCE;
@@ -297,7 +326,7 @@ export class QuadBatch {
     pass.setVertexBuffer(0, this.buffer);
     let current: GPURenderPipeline | null = null;
     for (const seg of this.segments) {
-      const pipe = seg.add ? this.pipeAdd : this.pipeOver;
+      const pipe = seg.solid ? this.pipeSolid : seg.add ? this.pipeAdd : this.pipeOver;
       if (pipe !== current) {
         pass.setPipeline(pipe);
         current = pipe;

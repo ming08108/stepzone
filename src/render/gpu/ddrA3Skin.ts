@@ -66,7 +66,7 @@ function beatSine(beat: number): number {
 }
 
 /** Parse #rgb/#rrggbb/rgb()/rgba() into 0..1 floats. */
-function parseColor(s: string): [number, number, number, number] {
+function parseColorUncached(s: string): [number, number, number, number] {
   if (s.startsWith('#')) {
     const hex = s.slice(1);
     const n =
@@ -79,6 +79,17 @@ function parseColor(s: string): [number, number, number, number] {
   if (!m) return [1, 1, 1, 1];
   const p = m[1].split(',').map((v) => parseFloat(v));
   return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
+}
+
+// Memoized: every color parsed here is a static skin-palette string, so the hot
+// per-note / per-hold path (e.g. hold outlines, quant glows) is a Map lookup
+// instead of a re-parse + fresh 4-float array each call. The cached tuple is
+// only ever read (never mutated in place), so sharing one instance is safe.
+const colorCache = new Map<string, [number, number, number, number]>();
+function parseColor(s: string): [number, number, number, number] {
+  let c = colorCache.get(s);
+  if (c === undefined) colorCache.set(s, (c = parseColorUncached(s)));
+  return c;
 }
 
 /** Money-score digit tints (glyphs bake white; these are the exact A3 colors). */
@@ -275,11 +286,13 @@ export class DdrA3GpuSkin implements GpuSkin {
       b.push(x0, height / 2, 2 * soft, height, edge, 1, 1, 1, 0.55);
       b.push(x0 + w, height / 2, -2 * soft, height, edge, 1, 1, 1, 0.55);
     }
-    b.push(x0 + w / 2, height / 2, w - 2 * soft, height, white, 0, 0, 0, 0.55);
+    b.push(x0 + w / 2, height / 2, w - 2 * soft, height, white, 0, 0, 0, 0.55, { solid: true });
 
     if (!judge.failed && judge.life < 0.25) {
       // DANGER: red wash + glowing rope lines + rotated lettering.
-      b.push(x0 + w / 2, height / 2, w, height, white, 144 / 255, 0, 0, 0.16 + 0.14 * beatPulse);
+      b.push(x0 + w / 2, height / 2, w, height, white, 144 / 255, 0, 0, 0.16 + 0.14 * beatPulse, {
+        solid: true,
+      });
       const glow = 0.55 + 0.45 * beatPulse;
       const rope = this.sprGradStrip(
         ctx,

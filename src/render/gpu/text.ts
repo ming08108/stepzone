@@ -22,12 +22,26 @@ export const OUTLINE_INK = '#0b0c10';
 
 /** Shared scratch context for text measurement (null when unavailable). */
 let measurer: CanvasRenderingContext2D | null | undefined;
+// Memoize widths: HUD labels (grade, judgment, difficulty) are measured every
+// frame but their (font, text) pairs are a tiny stable set, so measuring once
+// and reusing turns a per-frame ctx.measureText into a Map lookup. Cleared once
+// when real web fonts arrive, so widths measured against fallback fonts before
+// load can't persist stale (the skins likewise rebake their sprites then).
+const widthCache = new Map<string, number>();
+if (typeof document !== 'undefined' && document.fonts?.ready) {
+  document.fonts.ready.then(() => widthCache.clear()).catch(() => undefined);
+}
 export function measureWidth(font: string, text: string): number | null {
+  const key = `${font} ${text}`;
+  const cached = widthCache.get(key);
+  if (cached !== undefined) return cached;
   if (measurer === undefined) {
     measurer =
       typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
   }
   if (!measurer) return null;
   measurer.font = font;
-  return measurer.measureText(text).width;
+  const w = measurer.measureText(text).width;
+  widthCache.set(key, w);
+  return w;
 }

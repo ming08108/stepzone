@@ -53,7 +53,7 @@ function beatSine(beat: number): number {
 }
 
 /** Parse #rgb/#rrggbb/rgb()/rgba() to straight-alpha floats (0..1). */
-function parseColor(s: string): [number, number, number, number] {
+function parseColorUncached(s: string): [number, number, number, number] {
   if (s.startsWith('#')) {
     const hex = s.slice(1);
     const n =
@@ -66,6 +66,16 @@ function parseColor(s: string): [number, number, number, number] {
   if (!m) return [1, 1, 1, 1];
   const p = m[1].split(',').map((v) => parseFloat(v));
   return [p[0] / 255, p[1] / 255, p[2] / 255, p.length > 3 ? p[3] : 1];
+}
+
+// Memoized: colors here are static palette strings, so the per-note / per-frame
+// fills become a Map lookup instead of a re-parse + fresh array. The cached
+// tuple is only ever read, never mutated, so sharing one instance is safe.
+const colorCache = new Map<string, [number, number, number, number]>();
+function parseColor(s: string): [number, number, number, number] {
+  let c = colorCache.get(s);
+  if (c === undefined) colorCache.set(s, (c = parseColorUncached(s)));
+  return c;
 }
 
 const WHITE_TINT: Tint = [1, 1, 1, 1];
