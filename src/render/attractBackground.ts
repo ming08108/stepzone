@@ -2,13 +2,16 @@
  * "COMMON MOVIE" — a procedurally-animated attract-mode background for songs
  * with no BGA of their own. It recreates the DDRMAX/Extreme-era "common movie"
  * vibe, low-poly edition: the dancer is a faceted low-poly anime girl — every
- * body part is built from flat straight-edged polygon facets filled with a few
- * stepped near-black shades (lit/shadow planes) under a glowing neon wireframe
- * of facet edges. Slim hourglass figure, long spring-lagged twin-tail shard
- * strips, an ahoge wisp, a triangle-fan pleated skirt — throwing shapes
- * inside a neon hexagon tunnel, over a scrolling perspective checkerboard,
- * everything pulsing to the beat. Pure Canvas 2D so the GPU renderer can
- * sample it as a live texture.
+ * body part is a few flat straight-edged facets in a small character palette
+ * (soft skin, bright hair, dark top, accent skirt, boot trim), each plane
+ * stepped lit-vs-shadow against a fixed upper-left key light so the form
+ * reads as shaded 3D. Lines are a secondary accent: one crisp neon silhouette
+ * outline per part plus a few soft intentional creases (waist seam, skirt
+ * pleats, hair parting) — the internal triangulation is never stroked. Slim
+ * hourglass figure, long spring-lagged twin-tails, an ahoge wisp, a
+ * triangle-fan pleated skirt — throwing shapes inside a neon hexagon tunnel,
+ * over a scrolling perspective checkerboard, everything pulsing to the beat.
+ * Pure Canvas 2D so the GPU renderer can sample it as a live texture.
  *
  * Rendering budget: this runs on the main thread next to the WebGPU loop, so
  * there is deliberately NO per-pixel work — the plasma "lava lamp" is faked
@@ -300,11 +303,24 @@ const PEL = 0,
   SKIRT = 19;
 const JOINTS = 20;
 
+// Color zones for the low-poly fills. Each zone resolves to a 3-step ramp
+// (0 shadow / 1 mid / 2 lit) built per-variant in the ctor, so the dancer
+// reads as a colored character (skin, hair, outfit) instead of a monochrome
+// wireframe while staying cohesive with the scene palette.
+const ZSKIN = 0,
+  ZHAIR = 1,
+  ZDRESS = 2,
+  ZSKIRT = 3,
+  ZTRIM = 4,
+  ZEYE = 5,
+  ZBLUSH = 6;
+
 // Bone lengths / widths as fractions of BODY_H — cute anime proportions:
-// shorter torso, narrow shoulders, wider hips, long slim legs, small head.
+// shorter torso, narrow shoulders, wider hips, long slim legs, short neck
+// and a slightly oversized head (a bigger head reads cuter).
 const L_TORSO = 0.3,
-  L_NECK = 0.055,
-  R_HEAD = 0.07,
+  L_NECK = 0.045,
+  R_HEAD = 0.08,
   W_SHOULDER = 0.1,
   W_HIP = 0.082;
 const L_UARM = 0.155,
@@ -353,6 +369,8 @@ export class AttractBackground {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly beat: () => number;
   private readonly pal: Palette;
+  // Per-variant dancer fill ramps: [zone][0 shadow | 1 mid | 2 lit] strings.
+  private readonly zoneFills: readonly (readonly string[])[];
 
   private readonly startMs = performance.now();
   private raf = 0;
@@ -389,6 +407,30 @@ export class AttractBackground {
     this.beat = opts.beat;
     this.pal =
       PALETTES[(((opts.variant ?? 0) % PALETTES.length) + PALETTES.length) % PALETTES.length];
+
+    // Dancer color zones, derived from this variant's palette: bright hair
+    // (accentA), accent skirt (accentB), trim boots/scrunchies (accentC), a
+    // dark top, and a soft skin tone. Each is a 3-step flat-shading ramp
+    // toward near-black ink — kept moderate so the character reads in color
+    // without competing with the neon arrows drawn in front of her.
+    const ink: RGB = [6, 7, 14];
+    const ramp = (c: RGB, sh: number, md: number, lt: number): readonly string[] => [
+      rgba(mix(ink, c, sh), 1),
+      rgba(mix(ink, c, md), 1),
+      rgba(mix(ink, c, lt), 1),
+    ];
+    const skin = mix([255, 213, 190], this.pal.white, 0.2);
+    const eye = rgba(mix(ink, this.pal.accentA, 0.2), 0.9);
+    const blush = rgba(mix(this.pal.accentA, [255, 118, 148], 0.5), 0.3);
+    this.zoneFills = [
+      ramp(skin, 0.26, 0.52, 0.8), // ZSKIN — face, arms, thighs
+      ramp(this.pal.accentA, 0.24, 0.5, 0.82), // ZHAIR — bangs, tails, back-mass
+      ramp(this.pal.accentA, 0.12, 0.22, 0.34), // ZDRESS — dark fitted top
+      ramp(this.pal.accentB, 0.22, 0.48, 0.75), // ZSKIRT — pleat fan
+      ramp(this.pal.accentC, 0.2, 0.4, 0.6), // ZTRIM — boots, cuffs, scrunchies
+      [eye, eye, eye], // ZEYE — flat, shade-independent
+      [blush, blush, blush], // ZBLUSH — translucent over the face
+    ];
 
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -827,10 +869,11 @@ export class AttractBackground {
     // Twin-tail tips: velocity springs chasing a rest point that hangs
     // down-and-out from each side of the head. Underdamped on purpose — fast
     // pose snaps overshoot the rest point and the tails whip. Stretch is
-    // clamped so a teleport/NaN recovery frame can't tear a tail off.
+    // clamped so a teleport/NaN recovery frame can't tear a tail off. The
+    // rest point hangs LOW: full long tails past the shoulder line.
     const K = 0.055;
     const DAMP = 0.8;
-    const MAXLEN = 0.42 * B;
+    const MAXLEN = 0.56 * B;
     const spring = (
       side: number,
       px: number,
@@ -838,10 +881,10 @@ export class AttractBackground {
       vx: number,
       vy: number,
     ): [number, number, number, number] => {
-      const bx = hx + side * r * 0.9;
-      const by = hy - r * 0.05;
-      const rx = bx + side * 0.075 * B - swing;
-      const ry = by + 0.3 * B;
+      const bx = hx + side * r * 0.85;
+      const by = hy - r * 0.1;
+      const rx = bx + side * 0.09 * B - swing;
+      const ry = by + 0.4 * B;
       if (!Number.isFinite(rx) || !Number.isFinite(ry)) return [px, py, 0, 0];
       if (
         !Number.isFinite(px) ||
@@ -907,15 +950,17 @@ export class AttractBackground {
     set(SKIRT, this.skirtX, this.skirtY);
   }
 
-  /** Paint the dancer from a flat joint buffer as a low-poly mesh: every part
-   *  is a handful of flat, straight-edged polygon facets (lineTo only — no
-   *  curves). `mode` picks the pass — 'glow' strokes a fat additive neon rim
-   *  around every facet (its interior half gets covered by the body pass),
-   *  'body' fills each facet with one of a few stepped near-black shades
-   *  (fake lit/shadow planes) then strokes all facet edges as a thin additive
-   *  neon wireframe, and 'trail' strokes only the edges as a faint ghost
-   *  wireframe. All geometry derives from the buffer alone so trails replay
-   *  old frames. */
+  /** Paint the dancer from a flat joint buffer as a shaded low-poly model.
+   *  Form comes from the FILLS: every part is a handful of flat straight-edged
+   *  facets colored from a small per-variant character palette (skin / hair /
+   *  dark top / skirt / trim), each plane stepped lit-vs-shadow against a
+   *  fixed upper-left key light so the model reads as 3D. Lines are a
+   *  secondary accent: one crisp neon SILHOUETTE per part plus a few soft
+   *  intentional creases (waist seam, skirt pleats, hair parting) — internal
+   *  facet edges are never stroked. `mode` picks the pass — 'glow' strokes a
+   *  fat additive rim along the silhouette, 'body' paints the colored fills
+   *  then the lines, 'trail' strokes only the silhouette as a faint ghost.
+   *  All geometry derives from the buffer alone so trails replay old frames. */
   private drawBody(
     j: Float32Array,
     mode: 'glow' | 'body' | 'trail',
@@ -928,18 +973,34 @@ export class AttractBackground {
     const X = (i: number): number => j[i * 2];
     const Y = (i: number): number => j[i * 2 + 1];
 
-    // Facet list: flat [x,y,...] polygons + a shade index (0 dark .. 3 lit),
-    // painted in insertion order (later facets cover earlier ones).
-    const facets: { p: number[]; s: number }[] = [];
-    const F = (s: number, ...p: number[]): void => {
-      facets.push({ p, s });
+    // Fixed key light (upper-left): facets whose outward normal points toward
+    // it take the lit step of their zone's ramp, the rest fall to shadow.
+    const LX = -0.62;
+    const LY = -0.78;
+
+    // Facets: flat [x,y,...] polygons resolved to a zone-ramp fill, painted
+    // in insertion order (later facets cover earlier ones). Fills only exist
+    // in the 'body' pass — glow/trail are pure line passes.
+    const fills = this.zoneFills;
+    const facets: { p: number[]; f: string }[] = [];
+    const F = (z: number, s: number, p: number[]): void => {
+      if (mode === 'body') facets.push({ p, f: fills[z][s] });
+    };
+    // Edges: the few deliberate lines. `soft` creases render only in 'body';
+    // bright edges are the per-part silhouettes that every pass strokes.
+    const edges: { p: number[]; closed: boolean; soft: boolean }[] = [];
+    const E = (soft: boolean, closed: boolean, p: number[]): void => {
+      edges.push({ p, closed, soft });
     };
 
     // Angular tapered limb segment as a two-facet prism: the ridge line runs
-    // off-axis so the two faces are unequal (slim lit face, wide shadow face)
-    // and a mid-edge knot vertex keeps the outline faceted instead of smooth.
-    // Both ends overshoot the joints a touch so bent elbows/knees don't gap.
-    const limb = (a: number, b: number, wa: number, wb: number, sl: number, sr: number): void => {
+    // off-axis so the two faces are unequal, and a mid-edge knot vertex keeps
+    // the outline faceted instead of smooth. Which face is lit is decided by
+    // the key light, not by the caller. The silhouette is ONE open polyline —
+    // open at joint `a` so no cap line crosses the parent joint (the `b`-end
+    // cap reads as the elbow/knee crease). Both ends overshoot the joints a
+    // touch so bent elbows/knees don't gap.
+    const limb = (a: number, b: number, wa: number, wb: number, z: number, line: boolean): void => {
       let ax = X(a),
         ay = Y(a),
         bx = X(b),
@@ -966,22 +1027,33 @@ export class AttractBackground {
         ary = ay + py * wA * ro;
       const brx = bx + px * wB * ro,
         bry = by + py * wB * ro;
+      const minusLit = px * LX + py * LY < 0; // the -p face points at the light
       // prettier-ignore
-      F(sl,
+      F(z, minusLit ? 2 : 1, [
         arx, ary, brx, bry,
         bx - px * wB, by - py * wB,
         mx - px * wM, my - py * wM,
-        ax - px * wA, ay - py * wA);
+        ax - px * wA, ay - py * wA]);
       // prettier-ignore
-      F(sr,
+      F(z, minusLit ? 1 : 2, [
         arx, ary, brx, bry,
         bx + px * wB, by + py * wB,
         mx + px * wM, my + py * wM,
-        ax + px * wA, ay + py * wA);
+        ax + px * wA, ay + py * wA]);
+      if (line) {
+        // prettier-ignore
+        E(false, false, [
+          ax - px * wA, ay - py * wA,
+          mx - px * wM, my - py * wM,
+          bx - px * wB, by - py * wB,
+          bx + px * wB, by + py * wB,
+          mx + px * wM, my + py * wM,
+          ax + px * wA, ay + py * wA]);
+      }
     };
 
-    // Hand: a small diamond just beyond the wrist, aligned with the forearm.
-    const hand = (elb: number, wri: number, s: number): void => {
+    // Hand: a small skin diamond just beyond the wrist, along the forearm.
+    const hand = (elb: number, wri: number): void => {
       const wx = X(wri),
         wy = Y(wri);
       let dx = wx - X(elb),
@@ -994,11 +1066,13 @@ export class AttractBackground {
       const cx = wx + dx * 0.022 * B,
         cy = wy + dy * 0.022 * B;
       // prettier-ignore
-      F(s,
+      const p = [
         wx - dx * 0.012 * B, wy - dy * 0.012 * B,
         cx + px * 0.026 * B, cy + py * 0.026 * B,
         wx + dx * 0.06 * B, wy + dy * 0.06 * B,
-        cx - px * 0.026 * B, cy - py * 0.026 * B);
+        cx - px * 0.026 * B, cy - py * 0.026 * B];
+      F(ZSKIN, 2, p);
+      E(false, true, p);
     };
 
     // Dainty flat off the ankle: one angular wedge. When the shin hangs
@@ -1023,12 +1097,14 @@ export class AttractBackground {
         ty = ay + dy * tl;
       // ankle line → instep knot → toe tip → toe under → heel
       // prettier-ignore
-      F(1,
+      const p = [
         ax - dx * 0.018 * B - px * 0.018 * B, ay - dy * 0.018 * B - py * 0.018 * B,
         ax + dx * 0.03 * B - px * 0.02 * B, ay + dy * 0.03 * B - py * 0.02 * B,
         tx - px * 0.004 * B, ty - py * 0.004 * B,
         tx + px * 0.013 * B, ty + py * 0.013 * B,
-        ax - dx * 0.035 * B + px * 0.02 * B, ay - dy * 0.035 * B + py * 0.02 * B);
+        ax - dx * 0.035 * B + px * 0.02 * B, ay - dy * 0.035 * B + py * 0.02 * B];
+      F(ZTRIM, 1, p);
+      E(false, true, p);
     };
 
     // Knee-boot cuff: an angular band just below the knee, a hair wider than
@@ -1048,11 +1124,11 @@ export class AttractBackground {
       const w = 0.042 * B,
         h = 0.013 * B;
       // prettier-ignore
-      F(2,
+      F(ZTRIM, 2, [
         cx - px * w - dx * h, cy - py * w - dy * h,
         cx + px * w - dx * h, cy + py * w - dy * h,
         cx + px * w + dx * h, cy + py * w + dy * h,
-        cx - px * w + dx * h, cy - py * w + dy * h);
+        cx - px * w + dx * h, cy - py * w + dy * h]);
     };
 
     // ---- torso frame (shared by torso plates and skirt fan) ---------------
@@ -1077,12 +1153,15 @@ export class AttractBackground {
       r = R_HEAD * B;
     const tilt = hx - X(HEADB); // signed head-tilt offset, drives the hair back
 
-    // ---- twin-tails (first: behind everything): tapered shard strips of
-    // three angular quads each, zigzagging from a side-of-head base out to
-    // the spring-lagged tip, plus a bright scrunchie diamond at the base.
+    // ---- twin-tails (first: behind everything): full tapered strips from a
+    // side-of-head base out to the spring-lagged tip — a slight mid-bulge
+    // then a long taper to the point. Each tail is ONE flat hair fill (lit on
+    // the key-light side) with a darker tip step and a single open silhouette
+    // line; the internal segment edges are never stroked. A bright scrunchie
+    // diamond sits at the base.
     const tail = (side: number, tipI: number): void => {
-      const bx = hx + side * r * 0.9,
-        by = hy - r * 0.05;
+      const bx = hx + side * r * 0.85,
+        by = hy - r * 0.1;
       const tx = X(tipI),
         ty = Y(tipI);
       let dx = tx - bx,
@@ -1092,57 +1171,50 @@ export class AttractBackground {
       dy /= len;
       const px = -dy,
         py = dx;
-      const zig = side * 0.028 * B; // spine zigzag → angular S-curve
-      const p1x = bx + dx * len * 0.38 + px * zig,
-        p1y = by + dy * len * 0.38 + py * zig;
-      const p2x = bx + dx * len * 0.72 - px * zig * 0.7,
-        p2y = by + dy * len * 0.72 - py * zig * 0.7;
-      const w0 = 0.034 * B,
-        w1 = 0.028 * B,
-        w2 = 0.016 * B;
+      const zig = side * 0.02 * B; // gentle spine zigzag → angular S-curve
+      const p1x = bx + dx * len * 0.4 + px * zig,
+        p1y = by + dy * len * 0.4 + py * zig;
+      const p2x = bx + dx * len * 0.74 - px * zig * 0.6,
+        p2y = by + dy * len * 0.74 - py * zig * 0.6;
+      const w0 = 0.042 * B,
+        w1 = 0.05 * B,
+        w2 = 0.026 * B;
       // prettier-ignore
-      F(2,
+      const strip = [
         bx - px * w0, by - py * w0,
         p1x - px * w1, p1y - py * w1,
-        p1x + px * w1, p1y + py * w1,
-        bx + px * w0, by + py * w0);
-      // prettier-ignore
-      F(1,
-        p1x - px * w1, p1y - py * w1,
         p2x - px * w2, p2y - py * w2,
+        tx, ty,
         p2x + px * w2, p2y + py * w2,
-        p1x + px * w1, p1y + py * w1);
-      F(2, p2x - px * w2, p2y - py * w2, tx, ty, p2x + px * w2, p2y + py * w2);
-      F(3, bx, by - 0.03 * B, bx + 0.024 * B, by, bx, by + 0.03 * B, bx - 0.024 * B, by);
+        p1x + px * w1, p1y + py * w1,
+        bx + px * w0, by + py * w0];
+      F(ZHAIR, side < 0 ? 2 : 1, strip);
+      // prettier-ignore
+      F(ZHAIR, side < 0 ? 1 : 0, [
+        p2x - px * w2, p2y - py * w2, tx, ty, p2x + px * w2, p2y + py * w2]);
+      E(false, false, strip);
+      // prettier-ignore
+      F(ZTRIM, 2, [
+        bx, by - 0.028 * B, bx + 0.022 * B, by, bx, by + 0.028 * B, bx - 0.022 * B, by]);
     };
     tail(-1, TAILL);
     tail(1, TAILR);
 
-    // ---- hair back-mass: an angular dark slab around the skull, drawn
-    // before the head facets so it silhouettes out around them as volume.
-    // prettier-ignore
-    F(0,
-      hx - r * 1.15, hy - r * 0.1,
-      hx - r * 0.8 - tilt * 0.5, hy - r * 1.05,
-      hx - tilt * 0.6, hy - r * 1.3,
-      hx + r * 0.8 - tilt * 0.5, hy - r * 1.0,
-      hx + r * 1.1, hy - r * 0.05,
-      hx + r * 0.85, hy + r * 0.75,
-      hx - r * 0.9, hy + r * 0.8);
-
-    // ---- legs: long slim thigh → shin prisms, cuff band, shoe wedge.
-    limb(HIPL, KNL, 0.054, 0.036, 2, 1);
-    limb(KNL, FTL, 0.034, 0.014, 2, 1);
+    // ---- legs: bare skin thighs, knee-high boot shins, cuff band, shoe.
+    limb(HIPL, KNL, 0.054, 0.037, ZSKIN, true);
+    limb(KNL, FTL, 0.035, 0.016, ZTRIM, true);
     cuff(KNL, FTL);
     shoe(KNL, FTL, -1);
-    limb(HIPR, KNR, 0.054, 0.036, 2, 0);
-    limb(KNR, FTR, 0.034, 0.014, 2, 0);
+    limb(HIPR, KNR, 0.054, 0.037, ZSKIN, true);
+    limb(KNR, FTR, 0.035, 0.016, ZTRIM, true);
     cuff(KNR, FTR);
     shoe(KNR, FTR, 1);
 
-    // ---- torso: chest split at the sternum into lit/shadow planes, a waist
-    // plate and a pelvis wedge — an angular hourglass (narrow shoulders,
-    // pinched waist, wider hips).
+    // ---- torso: a dark fitted top. Chest split at the sternum into lit and
+    // shadow planes (key light hits the left plane), a waist plate and a
+    // pelvis wedge — an angular hourglass (narrow shoulders, pinched waist,
+    // wider hips). The silhouette line is open at the bottom where the skirt
+    // takes over; the waist seam is a deliberate soft crease.
     const shW = 0.096 * B,
       waistW = 0.05 * B,
       hipW = 0.098 * B;
@@ -1152,26 +1224,30 @@ export class AttractBackground {
     const [wlx, wly] = at(0.42, -waistW);
     const [wrx, wry] = at(0.42, waistW);
     const [sbx, sby] = at(0.42, 0); // sternum bottom
-    F(2, cpx, cpy, lsx, lsy, wlx, wly, sbx, sby); // chest, lit plane
-    F(1, cpx, cpy, rsx, rsy, wrx, wry, sbx, sby); // chest, shadow plane
+    F(ZDRESS, 2, [cpx, cpy, lsx, lsy, wlx, wly, sbx, sby]); // chest, lit plane
+    F(ZDRESS, 0, [cpx, cpy, rsx, rsy, wrx, wry, sbx, sby]); // chest, shadow plane
     const [hlx, hly] = at(0.04, -hipW);
     const [hrx, hry] = at(0.04, hipW);
-    F(1, wlx, wly, wrx, wry, hrx, hry, hlx, hly); // waist plate
+    F(ZDRESS, 1, [wlx, wly, wrx, wry, hrx, hry, hlx, hly]); // waist plate
     const [pbx, pby] = at(-0.12, 0);
-    F(0, hlx, hly, hrx, hry, pbx, pby); // pelvis wedge
+    F(ZDRESS, 0, [hlx, hly, hrx, hry, pbx, pby]); // pelvis wedge
+    const [tLx, tLy] = at(0.18, -0.08 * B);
+    const [tRx, tRy] = at(0.18, 0.08 * B);
+    E(false, false, [tLx, tLy, wlx, wly, lsx, lsy, cpx, cpy, rsx, rsy, wrx, wry, tRx, tRy]);
+    E(true, false, [wlx, wly, wrx, wry]); // waist seam crease
     // shoulder caps: small diamonds over the arm sockets
     const cap = (i: number, s: number): void => {
       const x = X(i),
         y = Y(i);
       // prettier-ignore
-      F(s,
+      F(ZDRESS, s, [
         x + ux * 0.032 * B, y + uy * 0.032 * B,
         x + vx * 0.05 * B, y + vy * 0.05 * B,
         x - ux * 0.032 * B, y - uy * 0.032 * B,
-        x - vx * 0.05 * B, y - vy * 0.05 * B);
+        x - vx * 0.05 * B, y - vy * 0.05 * B]);
     };
     cap(SHL, 2);
-    cap(SHR, 1);
+    cap(SHR, 0);
 
     // ---- pleated skirt: a SHORT triangle fan off the hip line — each pleat
     // is one hard-edged triangle, alternating lit/shadow shades, ending in a
@@ -1201,95 +1277,158 @@ export class AttractBackground {
         pts.push(x, y);
       }
       for (let k = 0; k < 6; k++) {
-        F(k % 2 === 0 ? 2 : 0, fx, fy, pts[k * 2], pts[k * 2 + 1], pts[k * 2 + 2], pts[k * 2 + 3]);
+        F(ZSKIRT, k % 2 === 0 ? 2 : 0, [
+          fx,
+          fy,
+          pts[k * 2],
+          pts[k * 2 + 1],
+          pts[k * 2 + 2],
+          pts[k * 2 + 3],
+        ]);
+      }
+      // hem silhouette across the pleat points (open — the top edge is the
+      // waist), plus soft pleat creases running partway up the fan.
+      E(false, false, pts);
+      for (let k = 1; k < 6; k++) {
+        E(true, false, [
+          fx + (pts[k * 2] - fx) * 0.42,
+          fy + (pts[k * 2 + 1] - fy) * 0.42,
+          pts[k * 2],
+          pts[k * 2 + 1],
+        ]);
       }
     }
 
-    // ---- arms: slim prisms + hand diamonds.
-    limb(SHL, ELL, 0.03, 0.021, 2, 1);
-    limb(ELL, HAL, 0.02, 0.013, 2, 1);
-    hand(ELL, HAL, 2);
-    limb(SHR, ELR, 0.03, 0.021, 2, 0);
-    limb(ELR, HAR, 0.02, 0.013, 2, 0);
-    hand(ELR, HAR, 1);
+    // ---- arms: slim bare-skin prisms + hand diamonds.
+    limb(SHL, ELL, 0.03, 0.021, ZSKIN, true);
+    limb(ELL, HAL, 0.02, 0.014, ZSKIN, true);
+    hand(ELL, HAL);
+    limb(SHR, ELR, 0.03, 0.021, ZSKIN, true);
+    limb(ELR, HAR, 0.02, 0.014, ZSKIN, true);
+    hand(ELR, HAR);
 
-    // ---- neck + faceted head.
-    limb(SH, HEADB, 0.024, 0.02, 1, 1);
-    const chX = hx + tilt * 0.15,
-      chY = hy + r * 0.98; // chin
-    const crX = hx - tilt * 0.25,
-      crY = hy - r * 1.02; // crown top
-    // skull: a lit front plane and a shadow back plane split chin→crown
+    // ---- neck + head. The head is the waifu focal point, kept CLEAN: one
+    // crisp silhouette around hair + face, a smooth lit skin plane with a
+    // single narrow off-light shadow sliver (no lines ever cross the face),
+    // a tidy swept-bangs plate whose zigzag hem is a pure fill boundary, a
+    // soft parting crease, and a tiny eye + blush suggestion.
+    limb(SH, HEADB, 0.022, 0.018, ZSKIN, false); // neck: fill only, no line
+    const chX = hx + tilt * 0.3,
+      chY = hy + r * 1.04; // chin
+    const crX = hx - tilt * 0.5,
+      crY = hy - r * 1.28; // crown peak (hair volume above the skull)
     // prettier-ignore
-    F(3,
-      chX, chY,
-      hx + r * 0.78, hy + r * 0.45,
-      hx + r * 0.92, hy - r * 0.3,
-      hx + r * 0.5 - tilt * 0.2, hy - r * 0.95,
-      crX, crY);
-    // prettier-ignore
-    F(1,
-      chX, chY,
+    const sil = [
+      hx - r * 1.12, hy - r * 0.15,
+      hx - r * 0.85 - tilt * 0.5, hy - r * 0.95,
       crX, crY,
-      hx - r * 0.55 - tilt * 0.2, hy - r * 0.92,
-      hx - r * 0.9, hy - r * 0.28,
-      hx - r * 0.74, hy + r * 0.5);
-    // bangs: a zigzag fringe plate across the brow
+      hx + r * 0.85 - tilt * 0.5, hy - r * 0.92,
+      hx + r * 1.12, hy - r * 0.1,
+      hx + r * 0.95, hy + r * 0.5,
+      hx + r * 0.52, hy + r * 0.9,
+      chX, chY,
+      hx - r * 0.52, hy + r * 0.92,
+      hx - r * 0.95, hy + r * 0.55];
+    F(ZHAIR, 0, sil); // hair back-mass base — the face and bangs carve into it
+    E(false, true, sil);
+    // face: one smooth lit plane; the dark base peeks out as a hair rim
     // prettier-ignore
-    F(2,
-      hx - r * 0.88, hy - r * 0.15,
-      hx - r * 0.45, hy + r * 0.1,
-      hx - r * 0.1 + tilt * 0.2, hy - r * 0.2,
-      hx + r * 0.35, hy + r * 0.15,
-      hx + r * 0.85, hy - r * 0.2,
-      hx + r * 0.55 - tilt * 0.3, hy - r * 0.9,
+    F(ZSKIN, 2, [
+      hx - r * 0.9, hy - r * 0.4,
+      hx + r * 0.9, hy - r * 0.4,
+      hx + r * 0.92, hy + r * 0.42,
+      hx + r * 0.5, hy + r * 0.85,
+      hx + tilt * 0.3, hy + r,
+      hx - r * 0.5, hy + r * 0.87,
+      hx - r * 0.92, hy + r * 0.47]);
+    // narrow face shadow sliver on the off-light side, clear of the features
+    // prettier-ignore
+    F(ZSKIN, 1, [
+      hx + r * 0.52, hy - r * 0.4,
+      hx + r * 0.9, hy - r * 0.4,
+      hx + r * 0.92, hy + r * 0.42,
+      hx + r * 0.5, hy + r * 0.85]);
+    // bangs: a tidy swept plate from temple to temple with a 3-notch hem
+    // prettier-ignore
+    F(ZHAIR, 2, [
+      hx - r * 0.95, hy - r * 0.25,
+      hx - r * 0.52, hy + r * 0.18,
+      hx - r * 0.08 + tilt * 0.2, hy - r * 0.12,
+      hx + r * 0.42, hy + r * 0.2,
+      hx + r * 0.92, hy - r * 0.28,
+      hx + r * 0.8 - tilt * 0.4, hy - r * 0.9,
       crX, crY,
-      hx - r * 0.6 - tilt * 0.3, hy - r * 0.88);
-    // side locks framing the face: two long thin triangles
-    F(1, hx - r * 0.95, hy - r * 0.2, hx - r * 0.5, hy + r * 0.15, hx - r * 1.05, hy + r * 1.5);
-    F(1, hx + r * 0.95, hy - r * 0.2, hx + r * 1.05, hy + r * 1.45, hx + r * 0.5, hy + r * 0.2);
+      hx - r * 0.82 - tilt * 0.4, hy - r * 0.88]);
+    // bangs shadow wedge on the off-light side for hair volume
+    // prettier-ignore
+    F(ZHAIR, 1, [
+      hx + r * 0.42, hy + r * 0.2,
+      hx + r * 0.92, hy - r * 0.28,
+      hx + r * 0.8 - tilt * 0.4, hy - r * 0.9]);
+    // soft hair-parting crease from the hem notch up toward the crown
+    // prettier-ignore
+    E(true, false, [
+      hx - r * 0.08 + tilt * 0.2, hy - r * 0.12,
+      hx - r * 0.16 - tilt * 0.4, hy - r * 1.18]);
+    // tiny features: two eye diamonds + a soft blush diamond under each
+    const eyeY = hy + r * 0.32;
+    const eye = (s: number): void => {
+      const ex = hx + s * r * 0.4 + tilt * 0.25;
+      // prettier-ignore
+      F(ZEYE, 0, [
+        ex, eyeY - r * 0.22, ex + r * 0.11, eyeY, ex, eyeY + r * 0.22, ex - r * 0.11, eyeY]);
+      const bx = hx + s * r * 0.6 + tilt * 0.2,
+        by = hy + r * 0.62;
+      // prettier-ignore
+      F(ZBLUSH, 0, [
+        bx, by - r * 0.07, bx + r * 0.16, by, bx, by + r * 0.07, bx - r * 0.16, by]);
+    };
+    eye(-1);
+    eye(1);
     // ahoge: one thin triangle wisp from the crown to its wobbling tip
-    F(2, crX - 0.009 * B, crY + 0.004 * B, X(AHOGE), Y(AHOGE), crX + 0.009 * B, crY);
+    const ah = [crX - 0.009 * B, crY + 0.004 * B, X(AHOGE), Y(AHOGE), crX + 0.009 * B, crY];
+    F(ZHAIR, 2, ah);
+    E(false, false, ah);
 
-    // ---- paint the facet list ---------------------------------------------
+    // ---- paint --------------------------------------------------------------
     ctx.save();
-    // Skips (never draws) any facet with a non-finite vertex — NaN guard for
+    // Skips (never draws) any path with a non-finite vertex — NaN guard for
     // the idle/lead-in cases and half-initialized spring state.
-    const trace = (p: number[]): boolean => {
+    const trace = (p: number[], closed: boolean): boolean => {
       for (let i = 0; i < p.length; i++) if (!Number.isFinite(p[i])) return false;
       ctx.beginPath();
       ctx.moveTo(p[0], p[1]);
       for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
-      ctx.closePath();
+      if (closed) ctx.closePath();
       return true;
     };
     if (mode === 'body') {
-      // Stepped facet fills, near-black up to a dark accent tint, so the flat
-      // planes read as a shaded low-poly mesh (still very dark overall).
-      const ink: RGB = [5, 6, 12];
-      const shades = [0.05, 0.12, 0.2, 0.3].map((t) => rgba(mix(ink, color, t), 1));
+      // The colored flat facets ARE the form: lit vs shadow planes per zone.
       for (const f of facets) {
-        if (!trace(f.p)) continue;
-        ctx.fillStyle = shades[f.s];
+        if (!trace(f.p, true)) continue;
+        ctx.fillStyle = f.f;
         ctx.fill();
       }
-      // The key low-poly cue: every facet edge stroked as a thin additive
-      // neon wireframe over the dark fills.
       ctx.globalCompositeOperation = 'lighter';
-      ctx.lineJoin = 'miter';
-      ctx.miterLimit = 3;
-      ctx.strokeStyle = rgba(color, Math.min(1, alpha));
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      // Soft intentional creases first (very low alpha)...
       ctx.lineWidth = 1;
-      for (const f of facets) if (trace(f.p)) ctx.stroke();
+      ctx.strokeStyle = rgba(color, Math.min(1, alpha) * 0.22);
+      for (const e of edges) if (e.soft && trace(e.p, e.closed)) ctx.stroke();
+      // ...then the crisp bright silhouette, pulsing with the beat.
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = rgba(color, Math.min(1, alpha));
+      for (const e of edges) if (!e.soft && trace(e.p, e.closed)) ctx.stroke();
     } else {
-      // 'glow': fat additive rim around every facet (interiors get covered by
-      // the body pass). 'trail': the same wireframe, thin and faint.
+      // 'glow': fat additive rim along the silhouette (its interior half gets
+      // covered by the body pass). 'trail': the silhouette, thin and faint.
       ctx.globalCompositeOperation = 'lighter';
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.strokeStyle = rgba(color, alpha);
       ctx.lineWidth = mode === 'glow' ? Math.max(1, rim) : 1;
-      for (const f of facets) if (trace(f.p)) ctx.stroke();
+      for (const e of edges) if (!e.soft && trace(e.p, e.closed)) ctx.stroke();
     }
     ctx.restore();
   }
@@ -1344,13 +1483,13 @@ export class AttractBackground {
     ctx.translate(-CX, -FOOT_Y);
 
     // Ghost-trail afterimages behind the body (older = fainter, offset) —
-    // faceted wireframe replays of old skeleton frames.
+    // faint silhouette replays of old skeleton frames.
     const n = this.history.length;
     if (n > 11) this.drawTrail(this.history[n - 11], this.pal.accentA, 0.18, -3);
     if (n > 6) this.drawTrail(this.history[n - 6], this.pal.accentB, 0.3, 3);
 
-    // Rim glow, then the shaded low-poly body (dark facet fills + neon
-    // wireframe edges that pulse on the beat) on top.
+    // Rim glow, then the shaded low-poly body (colored facet fills + a crisp
+    // neon silhouette that pulses on the beat) on top.
     this.drawBody(
       this.skel,
       'glow',
