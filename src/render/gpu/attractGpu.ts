@@ -341,8 +341,10 @@ fn fs(v: VO) -> @location(0) vec4f {
 /** Config for the current song's attract loop. */
 export interface AttractConfig {
   variant: number;
-  /** Chart step timeline (beats + L/D/U/R column masks) the dancer steps to. */
-  steps?: readonly { beat: number; cols: number }[];
+  /** Chart step timeline (beats + L/D/U/R column masks) the dancer steps to.
+   *  lCol/rCol (0..3, or -1) are the StepParity foot placement — which panel
+   *  each foot steps to — so the dancer foots the chart as a player would. */
+  steps?: readonly { beat: number; cols: number; lCol?: number; rCol?: number }[];
 }
 
 export class AttractGpu {

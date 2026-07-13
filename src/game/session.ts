@@ -170,7 +170,7 @@ export class GameSession {
       songMaxBpm: songMaxBpm(this.timing.bpms),
       reverse: config.reverse,
       noteSkin: config.noteSkin,
-      bgDim: config.bgMode === 'full' ? 0.25 : 0.6,
+      bgDim: config.bgMode === 'full' || config.bgMode === 'dance' ? 0.25 : 0.6,
       columnAngles: columnAnglesFor(chart.stepsType, nd.numTracks),
       meta: {
         title: song.displayFullTitle || 'Untitled',

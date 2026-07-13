@@ -10,6 +10,7 @@ import { connectedPadInfo } from '../input/gamepad';
 import { looksLikeDancePad } from '../input/padDetect';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
+import { computeFootPlacements } from '../analysis/stepParity';
 import { noteRowToBeat, TapNoteScore, TapNoteType } from '../notes/noteTypes';
 import type { Steps } from '../song/steps';
 import { songKey } from '../app/favorites';
@@ -102,6 +103,18 @@ const columnToDir = (col: number, n: number): number => {
   if (f < 0.28) return 0; // Left
   if (f > 0.72) return 3; // Right
   return col % 2 === 0 ? 2 : 1; // middle panels → alternate Up/Down
+};
+
+/** The attract-dancer's step timeline for a chart. Prefer the StepParity
+ *  foot-placement solve (so the dancer foots the chart exactly as a player
+ *  would, crossovers and all); fall back to the naive column mask for steps
+ *  types the solver doesn't cover. */
+const dancerSteps = (
+  song: PlayRequest['song'],
+  chart: Steps,
+): { beat: number; cols: number; lCol?: number; rCol?: number }[] => {
+  const footed = computeFootPlacements(chart.getNoteData(), song.timing, chart.stepsType);
+  return footed ?? chartSteps(chart);
 };
 
 /** The chart's steppable notes as an attract-dancer timeline: one entry per note
@@ -716,7 +729,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
     // Background (unless the player turned it off).
     if (settings.bgMode !== 'off') {
-      if (req.backgroundFile && isVideoFile(req.backgroundFile.name)) {
+      // The procedural GPU dance background — beat-locked, dancer stepping to
+      // this chart's StepParity foot placement. Used when a song has no BGA of
+      // its own, or forced for every song when bgMode is 'dance'.
+      const useDanceBg = (): void =>
+        session.setAttract({
+          variant: attractVariant(req.song.title),
+          steps: dancerSteps(req.song, req.chart),
+        });
+      if (settings.bgMode === 'dance') {
+        useDanceBg();
+      } else if (req.backgroundFile && isVideoFile(req.backgroundFile.name)) {
         const url = URL.createObjectURL(req.backgroundFile);
         bgUrlRef.current = url;
         const v = document.createElement('video');
@@ -745,13 +768,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             // Undecodable image — keep the plain dark background.
           });
       } else {
-        // No background of its own — the GPU attract background (drawn in the
-        // field's render pass at full refresh), with the dancer stepping to this
-        // chart's actual notes. Variant is chosen per title for mood variety.
-        session.setAttract({
-          variant: attractVariant(req.song.title),
-          steps: chartSteps(req.chart),
-        });
+        // No background of its own — fall back to the dance background.
+        useDanceBg();
       }
     }
 

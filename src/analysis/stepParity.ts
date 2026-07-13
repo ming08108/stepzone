@@ -1181,3 +1181,44 @@ export function computeTechCounts(
     return { crossovers: 0, footswitches: 0, sideswitches: 0, jacks: 0, brackets: 0 };
   return classify(gen.rows, layout);
 }
+
+/** One note row's PLAYABLE foot placement, from the same StepParity solve that
+ *  powers the tech counts: the beat, the L/D/U/R note mask, and which panel
+ *  each foot steps to on this row (0..3 = L/D/U/R, or -1 if that foot doesn't
+ *  step). A crossover shows up naturally as a foot on the far-side panel. */
+export interface FootStep {
+  beat: number;
+  cols: number;
+  lCol: number;
+  rCol: number;
+}
+
+/** Solve foot placement for a dance-single chart and return it per note row, so
+ *  the attract dancer can foot the chart exactly as a player would. Returns null
+ *  for non-single steps types (feet don't map to one dancer). */
+export function computeFootPlacements(
+  nd: NoteData,
+  timing: TimingData,
+  stepsType: string,
+): FootStep[] | null {
+  if (stepsType !== 'dance-single' && stepsType !== 'techno-single4') return null;
+  const layout = layoutFor(stepsType);
+  if (!layout) return null;
+  const gen = new Generator(layout, timing);
+  if (!gen.analyze(nd)) return null;
+  const out: FootStep[] = [];
+  for (const row of gen.rows) {
+    let cols = 0;
+    let lCol = -1;
+    let rCol = -1;
+    for (let c = 0; c < row.columnCount; c++) {
+      if (row.notes[c].type === TNT_EMPTY) continue;
+      cols |= 1 << c; // dance-single: panel c IS the L/D/U/R direction
+      const fp = row.columns[c];
+      if (fp === LH || fp === LT) lCol = c;
+      else if (fp === RH || fp === RT) rCol = c;
+    }
+    out.push({ beat: row.beat, cols, lCol, rCol });
+  }
+  return out;
+}

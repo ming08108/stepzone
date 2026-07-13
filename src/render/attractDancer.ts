@@ -9,12 +9,17 @@
  *
  * The animation is layered instead of pose-lerped:
  *
- *  FEET (the point): each note row swings a foot onto the arrow's panel —
- *  Left plants the LEFT foot out left, Right the right foot right, Up throws
- *  a foot to the forward panel (with a hop), Down tucks a foot back into a
- *  dip; jumps split both feet across the lit panels. L/R own their natural
- *  foot, U/D alternate off whichever foot stepped last, so streams read as
- *  real DDR footwork. Swings start `dur` beats early (anticipation), travel
+ *  FEET (the point): each note row swings a foot onto the arrow's panel.
+ *  When a row carries the StepParity solver's placement (Step.lCol/rCol) the
+ *  dancer foots the chart exactly as a player would: each foot plants on its
+ *  solved panel — crossovers included, so a left foot on the Right panel
+ *  really swings across the body and the legs cross (the IK knees and the
+ *  weight-shift pelvis read the twist). Without solver data the heuristic
+ *  fallback runs: Left plants the LEFT foot out left, Right the right foot
+ *  right, Up throws a foot to the forward panel (with a hop), Down tucks a
+ *  foot back into a dip; jumps split both feet across the lit panels, L/R own
+ *  their natural foot and U/D alternate off whichever foot stepped last.
+ *  Swings start `dur` beats early (anticipation), travel
  *  on a back-ease that overshoots ~8% (snap) and LAND exactly on the beat,
  *  with a sine lift arc sized by step distance. The pelvis is a spring chasing
  *  a weight point biased onto the support foot, and the legs are solved by
@@ -148,10 +153,15 @@ interface Pose {
 }
 
 /** One note row: beat + a 4-bit L/D/U/R column mask (bit0=L,1=D,2=U,3=R; a
- *  jump lights >1 bit). */
+ *  jump lights >1 bit). lCol/rCol (0..3, or -1) are the optional StepParity foot
+ *  placement — the panel each foot steps to this row — so the dancer can foot
+ *  the chart exactly as a player would (crossovers included). Absent ⇒ the
+ *  dancer falls back to its own column→foot heuristic. */
 export interface Step {
   beat: number;
   cols: number;
+  lCol?: number;
+  rCol?: number;
 }
 
 /** The classic 8-beat loop (upper body only here — feet are IK'd). */
@@ -342,6 +352,7 @@ export class AttractDancer {
   private readonly poly = new Float64Array(64); // current polygon, x,y pairs
   private np = 0; // point count in `poly`
   private readonly hem = new Float64Array(14); // skirt hem points
+  private readonly hemTop = new Float64Array(14); // skirt waistband points
   private readonly pt = new Float64Array(2); // panelTarget out
   private readonly jit = new Float32Array(24); // fixed burst jitter
   private readonly skel = new Float32Array(JOINTS * 2);
@@ -561,7 +572,7 @@ export class AttractDancer {
         const gap = i > 0 ? st.beat - steps[i - 1].beat : 0.5;
         const dur = clamp(gap * 0.7, 0.12, 0.38);
         if (st.beat - beat > dur) break; // not yet in the anticipation window
-        this.startSwing(st.cols, st.beat, dur);
+        this.startSwing(st.cols, st.beat, dur, st.lCol, st.rCol);
         this.swungIdx = i;
       }
     } else if (valid) {
@@ -768,10 +779,38 @@ export class AttractDancer {
   }
 
   /** Launch the foot swing(s) for a note row so they land ON `hitBeat`.
+   *  If the StepParity placement is present (lCol/rCol passed, even as -1),
+   *  it is authoritative: each foot swings to EXACTLY its solved panel —
+   *  including crossovers, where a foot targets the opposite side's panel and
+   *  the legs cross. Only when the fields are absent does the heuristic run:
    *  L/R own their natural foot; U/D alternate off the last stepping foot;
    *  jumps split both feet across the lit panels (leftmost→left foot). */
-  private startSwing(cols: number, hitBeat: number, dur: number): void {
+  private startSwing(
+    cols: number,
+    hitBeat: number,
+    dur: number,
+    lCol?: number,
+    rCol?: number,
+  ): void {
     const b0 = hitBeat - dur;
+    if (lCol !== undefined || rCol !== undefined) {
+      // Solver-decided footing. -1 (or junk) means that foot sits this row.
+      const lp = lCol !== undefined && Number.isFinite(lCol) ? Math.trunc(lCol) : -1;
+      const rp = rCol !== undefined && Number.isFinite(rCol) ? Math.trunc(rCol) : -1;
+      const lSteps = lp >= 0 && lp <= 3;
+      const rSteps = rp >= 0 && rp <= 3;
+      if (lSteps || rSteps) {
+        // No side-clamp on purpose: lp/rp may be the "wrong" side's panel
+        // (crossover) and panelTarget sends the foot there verbatim — the
+        // 2-bone IK bends the knees through the crossed pose and the pelvis
+        // spring shifts weight over whichever foot is planted.
+        if (lSteps) this.assignSwing(0, lp, b0, hitBeat);
+        if (rSteps) this.assignSwing(1, rp, b0, hitBeat);
+        this.lastFoot = rSteps ? 1 : 0;
+        return;
+      }
+      // Both feet parked (shouldn't happen on a note row) → heuristic below.
+    }
     if (bitCount(cols) >= 2) {
       let lp = -1;
       let rp = -1;
@@ -1373,50 +1412,54 @@ export class AttractDancer {
     this.emitCap(SHL, 2);
     this.emitCap(SHR, 0);
 
-    // Pleated skirt: a short triangle fan with a zigzag handkerchief hem that
-    // chases the lagged SKIRT point (sways opposite lateral moves, flares a
-    // touch on drops and bounces).
+    // Pleated skirt: a short A-line cone that DRAPES from a snug waistband
+    // down to a softly scalloped hem well above the knee. Built as a quad
+    // strip (waist→hem) instead of a point fan so it hangs like cloth, with a
+    // gentle key-light shade sweep across the panels rather than alternating
+    // pleat blades. The hem chases the lagged SKIRT point — it sways opposite
+    // lateral moves and lifts/flares a touch while she's moving.
     {
       const skm = 0.05 * B;
       const hemOff = clamp(this.jx(SKIRT) - plx, -skm, skm);
       const vLag = this.jy(SKIRT) - (ply + 0.1 * B);
-      const lift = Math.min(0.045 * B, Math.abs(hemOff) * 0.8 + Math.abs(vLag) * 0.7);
-      const hemW = 0.16 * B + lift;
-      const drop = 0.12 * B - lift * 0.6;
-      const fx = this.atX(0.2, 0); // fan origin, just above the pelvis
-      const fy = this.atY(0.2, 0);
+      const sway = Math.min(0.03 * B, Math.abs(hemOff) * 0.55 + Math.abs(vLag) * 0.5);
+      const waistWs = hipW + 0.012 * B; // waistband half-width, hugs the hips
+      const hemW = 0.125 * B + sway * 0.6; // gentle flare — a cone, not a disc
+      const drop = 0.175 * B - sway * 0.4; // hem depth: mid-thigh, above the knee
       const hem = this.hem;
+      const top = this.hemTop;
       for (let k = 0; k <= 6; k++) {
-        let x: number;
-        let y: number;
-        if (k === 0 || k === 6) {
-          const side = k === 0 ? -1 : 1;
-          const w = side * (hipW + 0.02 * B) + hemOff * 0.3;
-          x = this.atX(0.06, w);
-          y = this.atY(0.06, w);
-        } else {
-          const d2 = drop + (k % 2 === 1 ? 0.022 * B : 0);
-          const w = hemW * ((k - 3) / 2) + hemOff;
-          x = this.atX(-d2 / ul, w);
-          y = this.atY(-d2 / ul, w);
-        }
-        hem[k * 2] = x;
-        hem[k * 2 + 1] = y;
+        const f = (k - 3) / 3; // -1..1 across the skirt
+        const tw = waistWs * f + hemOff * 0.2;
+        top[k * 2] = this.atX(0.08, tw);
+        top[k * 2 + 1] = this.atY(0.08, tw);
+        // Soft scallop: odd points dip a hair, the sides ride up a touch —
+        // a rounded hem, not a sawtooth.
+        const d2 = drop + (k % 2 === 1 ? 0.008 * B : 0) - Math.abs(f) * 0.008 * B;
+        const w = hemW * f + hemOff;
+        hem[k * 2] = this.atX(-d2 / ul, w);
+        hem[k * 2 + 1] = this.atY(-d2 / ul, w);
       }
       for (let k = 0; k < 6; k++) {
         this.beginPoly();
-        this.v(fx, fy);
-        this.v(hem[k * 2], hem[k * 2 + 1]);
+        this.v(top[k * 2], top[k * 2 + 1]);
+        this.v(top[k * 2 + 2], top[k * 2 + 3]);
         this.v(hem[k * 2 + 2], hem[k * 2 + 3]);
-        this.facet(ZSKIRT, k % 2 === 0 ? 2 : 0);
+        this.v(hem[k * 2], hem[k * 2 + 1]);
+        // One skirt with soft shading: lit toward the upper-left key light,
+        // a single shadow step on the far side — not light/dark blades.
+        this.facet(ZSKIRT, k < 2 ? 2 : k < 5 ? 1 : 0);
       }
-      // Hem silhouette + soft pleat creases partway up the fan.
+      // Hem silhouette + just two faint pleat creases on the lower half.
       this.beginPoly();
       for (let k = 0; k <= 6; k++) this.v(hem[k * 2], hem[k * 2 + 1]);
       this.edge(false, false);
-      for (let k = 1; k < 6; k++) {
+      for (let k = 2; k <= 4; k += 2) {
         this.beginPoly();
-        this.v(fx + (hem[k * 2] - fx) * 0.42, fy + (hem[k * 2 + 1] - fy) * 0.42);
+        this.v(
+          top[k * 2] + (hem[k * 2] - top[k * 2]) * 0.5,
+          top[k * 2 + 1] + (hem[k * 2 + 1] - top[k * 2 + 1]) * 0.5,
+        );
         this.v(hem[k * 2], hem[k * 2 + 1]);
         this.edge(true, false);
       }

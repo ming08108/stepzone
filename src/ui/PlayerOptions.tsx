@@ -326,7 +326,7 @@ export function PlayerOptions({
     {
       label: 'BACKGROUND',
       value: settings.bgMode.toUpperCase(),
-      help: 'The song’s background art/video behind the arrows. OFF hides it, DIM darkens it so notes stay readable, FULL shows it brighter.',
+      help: 'Behind the arrows. OFF hides it, DIM darkens the song’s art/video so notes stay readable, FULL shows it brighter, DANCE always plays the neon dancer that steps your chart.',
       adjust: (dir) => update({ bgMode: cycle(BG_MODES, settings.bgMode, dir) }),
     },
   ];
@@ -755,8 +755,12 @@ export function PlayerOptions({
                   subtitle: req.song.artist,
                   difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
                 }}
-                background={settings.bgMode === 'off' ? null : (req.backgroundFile ?? null)}
-                bgDim={settings.bgMode === 'full' ? 0.25 : 0.6}
+                background={
+                  settings.bgMode === 'off' || settings.bgMode === 'dance'
+                    ? null
+                    : (req.backgroundFile ?? null)
+                }
+                bgDim={settings.bgMode === 'full' || settings.bgMode === 'dance' ? 0.25 : 0.6}
                 mediaRate={effRate}
               />
             </div>

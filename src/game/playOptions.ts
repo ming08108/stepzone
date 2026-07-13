@@ -36,7 +36,10 @@ export const PRACTICE_LEAD_SECONDS = 1.5;
 export const PRACTICE_TAIL_SECONDS = 0.5;
 
 /** Song background visibility during play. */
-export const BG_MODES = ['off', 'dim', 'full'] as const;
+// off/dim/full pick the song's own background + its dim; 'dance' forces the
+// procedural GPU dance background (the tunnel + chart-stepping dancer) on for
+// every song, even ones that ship their own BGA.
+export const BG_MODES = ['off', 'dim', 'full', 'dance'] as const;
 export type BgMode = (typeof BG_MODES)[number];
 
 /** Note field renderer style: 'arcade' (DDR A3) or 'itg' (Simply Love). */
