@@ -17,10 +17,16 @@ Two-player races fall back to the light procedural dancer instead of loading a
 model (see `AttractConfig.model`), so these ~13–15 MB assets are only fetched in
 solo play.
 
-## Note on other characters (e.g. Hatsune Miku)
+## The "Miku" avatar
 
-We deliberately do NOT ship a Hatsune Miku (or similar licensed-character) model.
-Miku is Crypton Future Media's character under the **Piapro Character License** —
-non-commercial only, attribution required, and redistribution is restricted — so
-a Miku VRM cannot be committed to this repo. To use one locally, drop a VRM you're
-licensed to use into this folder and add it to `MODEL_POOL`; just don't commit it.
+The `Miku` pool entry is NOT an actual Hatsune Miku model — that character is
+Crypton Future Media's under the **Piapro Character License** (non-commercial,
+attribution, restricted redistribution), so a real Miku VRM can't be shipped
+here. Instead it's `AvatarSample_B` (a redistributable VRoid sample, sailor-style
+top) with its hair recolored **teal at render time** — the `hair` field in
+`MODEL_POOL` drives a luminance-preserving HAIR-material recolor in the shader
+(`skinnedModel.ts`). The teal hair + sailor uniform reads Miku-ish without using
+any licensed asset. Force it with `?dancerModel=Miku`.
+
+To use a real Miku VRM you're licensed for, drop it in this folder and point a
+`MODEL_POOL` entry at it locally — just don't commit it.

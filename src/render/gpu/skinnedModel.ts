@@ -79,6 +79,7 @@ interface GpuPrimitive {
   alphaCutoff: number;
   pipeline: GPURenderPipeline; // variant for this prim's alpha mode + cull
   texBind: GPUBindGroup; // group 2: base-color texture + sampler
+  recolor: boolean; // replace texture hue with baseColor, keep luminance (hair tint)
 }
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
@@ -152,14 +153,22 @@ fn fs(
 ) -> @location(0) vec4f {
   let useTex = (draw.flags & 1u) != 0u;
   let isBlend = (draw.flags & 2u) != 0u;
+  let recolor = (draw.flags & 4u) != 0u;
 
   // Albedo: sampled texture × factor (textured), or the flat material color.
   // The base-color texture is created sRGB so the sample is already linear.
+  // recolor replaces the texture's hue with baseColor while keeping its
+  // luminance (strand shading) — used to tint hair (e.g. a teal Miku look).
   var albedo : vec3f;
   var alpha : f32;
   if (useTex) {
     let texel = textureSample(baseTex, baseSampler, uv);
-    albedo = texel.rgb * draw.baseColor.rgb;
+    if (recolor) {
+      let lum = dot(texel.rgb, vec3f(0.3, 0.59, 0.11));
+      albedo = clamp(lum * 1.5, 0.12, 1.25) * draw.baseColor.rgb;
+    } else {
+      albedo = texel.rgb * draw.baseColor.rgb;
+    }
     alpha = texel.a * draw.baseColor.a;
   } else {
     albedo = draw.baseColor.rgb;
@@ -532,6 +541,7 @@ export class SkinnedModel {
     device: GPUDevice,
     format: GPUTextureFormat,
     url: string,
+    recolorHair?: readonly [number, number, number],
   ): Promise<SkinnedModel> {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`SkinnedModel: fetch ${url} failed (${res.status})`);
@@ -690,8 +700,20 @@ export class SkinnedModel {
         alphaCutoff: mat?.alphaMode === 'MASK' ? mat.alphaCutoff : 0,
         pipeline: getPipeline(isBlend, cull),
         texBind: mat && p.materialIndex >= 0 ? materialBind[p.materialIndex] : defaultBind,
+        recolor: false,
       };
     });
+    // Optional hair recolor (e.g. a teal "Miku" look): tint every HAIR-named
+    // material to `recolorHair`, keeping the texture's luminance for shading.
+    if (recolorHair) {
+      prims.forEach((gp, i) => {
+        const name = model.materials[model.primitives[i].materialIndex]?.name ?? '';
+        if (/hair/i.test(name)) {
+          gp.recolor = true;
+          gp.baseColor = [recolorHair[0], recolorHair[1], recolorHair[2], gp.baseColor[3]];
+        }
+      });
+    }
     // Draw opaque/masked prims first, then blended prims (back-to-front-ish).
     const opaqueOrder: number[] = [];
     const blendOrder: number[] = [];
@@ -1126,7 +1148,7 @@ export class SkinnedModel {
       this.drawData[o + 19] = p.baseColor[3];
       this.drawDataU32[o + 20] = p.jointBase;
       this.drawDataU32[o + 21] = p.skinIndex >= 0 ? 1 : 0;
-      this.drawDataU32[o + 22] = (p.useTexture ? 1 : 0) | (p.isBlend ? 2 : 0);
+      this.drawDataU32[o + 22] = (p.useTexture ? 1 : 0) | (p.isBlend ? 2 : 0) | (p.recolor ? 4 : 0);
       this.drawData[o + 23] = p.alphaCutoff; // f32 alpha cutoff
     }
     if (this.prims.length > 0) this.device.queue.writeBuffer(this.drawBuf, 0, this.drawData);

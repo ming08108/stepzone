@@ -36,16 +36,26 @@ fn fs(v: VO) -> @location(0) vec4f {
 }
 `;
 
+/** A dancer avatar: a model URL and an optional hair recolor (see skinnedModel
+ *  — replaces HAIR-material hue, keeps luminance). */
+interface DancerModel {
+  url: string;
+  hair?: readonly [number, number, number];
+}
+
 /** The dancer avatars — redistributable VRoid CC-usage sample models (see
- *  public/models/README.md). One is chosen at random per session for variety. */
-const MODEL_POOL: Record<string, string> = {
-  A: '/models/AvatarSample_A.vrm',
-  B: '/models/AvatarSample_B.vrm',
-  C: '/models/AvatarSample_C.vrm',
+ *  public/models/README.md). One is chosen at random per session for variety.
+ *  "Miku" is avatar B recolored teal — real Hatsune Miku is license-locked, but
+ *  a teal-haired sailor-top sample reads close enough to ship. */
+const MODEL_POOL: Record<string, DancerModel> = {
+  A: { url: '/models/AvatarSample_A.vrm' },
+  B: { url: '/models/AvatarSample_B.vrm' },
+  C: { url: '/models/AvatarSample_C.vrm' },
+  Miku: { url: '/models/AvatarSample_B.vrm', hair: [0.05, 0.78, 0.72] },
 };
 
-/** Pick a dancer model URL: `?dancerModel=B` forces one (testing), else random. */
-function pickModelUrl(): string {
+/** Pick a dancer: `?dancerModel=Miku` forces one (testing), else random. */
+function pickModel(): DancerModel {
   const keys = Object.keys(MODEL_POOL);
   const forced = new URLSearchParams(location.search).get('dancerModel');
   if (forced && MODEL_POOL[forced]) return MODEL_POOL[forced];
@@ -511,7 +521,8 @@ export class AttractGpu {
   private loadModel(): void {
     if (this.modelLoadStarted) return;
     this.modelLoadStarted = true;
-    void SkinnedModel.load(this.device, this.format, pickModelUrl())
+    const pick = pickModel();
+    void SkinnedModel.load(this.device, this.format, pick.url, pick.hair)
       .then((m) => {
         this.model = m;
       })
