@@ -119,6 +119,7 @@ struct U {
   gradTop: vec4f, gradMid: vec4f, gradBot: vec4f,
   accentA: vec4f, accentB: vec4f, accentC: vec4f, accentD: vec4f, white: vec4f,
   flags: vec4f,    // floorWire, sunHero, petals, variant
+  cam: vec4f,      // panX, panY, zoomMul, _ (dynamic camera sway)
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -174,8 +175,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
   // On-beat "camera kick": everything except the base gradient and the post
   // zooms slightly about the vanishing point (zoom >= 1: no divide hazard).
-  let zoom = 1.0 + 0.015 * kick;
-  let uvk = VANISH + (uv - VANISH) / zoom;
+  let zoom = (1.0 + 0.015 * kick) * max(u.cam.z, 0.1);
+  let uvk = VANISH + u.cam.xy + (uv - VANISH - u.cam.xy) / zoom;
   // Aspect-corrected zoomed coords centered on the vanish point, in heights.
   let pk = vec2f((uvk.x - VANISH.x) * asp, uvk.y - VANISH.y);
 
@@ -372,7 +373,7 @@ export class AttractGpu {
   private readonly pipeline: GPURenderPipeline;
   private readonly uniform: GPUBuffer;
   private readonly bind: GPUBindGroup;
-  private readonly data = new Float32Array(44); // 11 vec4
+  private readonly data = new Float32Array(48); // 12 vec4
   private pal: GpuPalette = PALETTES[0];
 
   // Dancer mesh: CPU geometry (AttractDancer) drawn via two blend passes.
@@ -539,7 +540,22 @@ export class AttractGpu {
     }
     const k = Math.max(0, 1 - Math.max(0, Math.min(1, dim))); // match the bg dim
     model.setTint(k, k, k);
-    model.render(enc, viewW, viewH);
+    // Dynamic camera: a slow orbit + gentle breathe, with an on-beat push-in,
+    // around the framed model. (The background shader sways to match.)
+    const c = model.center;
+    const r = model.radius;
+    const fovY = 0.62;
+    const phase = b - Math.floor(b);
+    const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
+    const orbit = 0.3 * Math.sin(now * 0.23);
+    const dolly = 1 + 0.07 * Math.sin(now * 0.16) - 0.05 * kick;
+    const dist = (r / Math.sin(fovY / 2)) * 1.05 * dolly;
+    const panY = 0.1 * r * Math.sin(now * 0.19);
+    model.render(enc, viewW, viewH, {
+      fovY,
+      eye: [c[0] + Math.sin(orbit) * dist, c[1] + 0.35 * r, c[2] + Math.cos(orbit) * dist],
+      target: [c[0], c[1] + panY, c[2]],
+    });
     this.usingModel = true;
   }
 
@@ -583,6 +599,13 @@ export class AttractGpu {
     d[41] = p.sunHero;
     d[42] = p.petals;
     d[43] = 0;
+    // Dynamic camera sway on the background — drifts + breathes with the model's
+    // orbit so the whole scene reads as one moving camera.
+    const kick = valid ? Math.exp(-6 * phase) : 0;
+    d[44] = 0.02 * Math.sin(now * 0.23); // panX (tracks the model orbit)
+    d[45] = 0.008 * Math.sin(now * 0.19); // panY
+    d[46] = 1 + 0.05 * Math.sin(now * 0.16) + 0.04 * kick; // zoom breathe + beat push
+    d[47] = 0;
     this.device.queue.writeBuffer(this.uniform, 0, d);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bind);

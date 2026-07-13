@@ -210,6 +210,14 @@ export class SkinnedModel {
   private readonly boundsCenter: [number, number, number];
   private readonly boundsRadius: number;
 
+  /** Model bounds (for a caller computing an orbiting/dolly camera). */
+  get center(): readonly [number, number, number] {
+    return this.boundsCenter;
+  }
+  get radius(): number {
+    return this.boundsRadius;
+  }
+
   private tint: [number, number, number, number] = [1, 1, 1, 1];
 
   // --- Retargeting bind data + scratch (built in the constructor). ----------
