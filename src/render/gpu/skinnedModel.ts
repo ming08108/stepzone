@@ -22,6 +22,7 @@ import {
   parseGlb,
   computeGlobals,
   mat4Multiply,
+  mat4Identity,
   type GltfModel,
   type GltfPrimitive,
 } from './gltf.ts';
@@ -50,25 +51,35 @@ const X_SIGN = 1;
 const Y_SIGN = -1; // our y points down; glTF y points up
 const Z_SIGN = 1;
 const AXIS_ORDER: readonly [number, number, number] = [0, 1, 2];
+/**
+ * Extra multiplier on the our→model position scale (which is otherwise derived
+ * from leg length). Nudge >1 to widen/enlarge the stance, <1 to shrink it,
+ * during visual tuning. Only affects foot/root PLACEMENT, not bone aiming.
+ */
+const POS_SCALE = 1;
 
 /**
  * Model bone -> our skeleton chain segment. `restChild` is a descendant node
  * of `bone` whose bind position defines the bone's rest aim direction; `from`
  * and `to` are our named joints whose vector is the target aim direction. Two
  * model bones can share one segment (clavicle + upper arm, hips + lower spine).
+ * `damp` (0..1) scales the aim rotation toward the rest pose — used to steady
+ * short, noisy bones like the neck (a small position wiggle = a big angle).
  */
 interface BoneChain {
   bone: string;
   restChild: string;
   from: string;
   to: string;
+  damp?: number;
 }
 const BONE_CHAINS: readonly BoneChain[] = [
   { bone: 'Hips', restChild: 'Abdomen', from: 'pelvis', to: 'chest' },
   { bone: 'Abdomen', restChild: 'Torso', from: 'pelvis', to: 'chest' },
   { bone: 'Torso', restChild: 'Neck', from: 'chest', to: 'neck' },
-  { bone: 'Neck', restChild: 'Head', from: 'neck', to: 'head' },
-  { bone: 'Head', restChild: 'Head_end', from: 'neck', to: 'head' },
+  // Neck follows the head but damped; the Head bone stays rigid to the neck so
+  // the head reads upright instead of cocking on the tiny neck→head segment.
+  { bone: 'Neck', restChild: 'Head', from: 'neck', to: 'head', damp: 0.5 },
   { bone: 'Shoulder.L', restChild: 'UpperArm.L', from: 'shoulderL', to: 'elbowL' },
   { bone: 'UpperArm.L', restChild: 'LowerArm.L', from: 'shoulderL', to: 'elbowL' },
   { bone: 'LowerArm.L', restChild: 'Palm2.L', from: 'elbowL', to: 'handL' },
@@ -88,6 +99,7 @@ interface RetargetBone {
   restDir: Float32Array<ArrayBuffer>; // unit, native model space (from bind globals)
   from: string;
   to: string;
+  damp: number; // 1 = full aim, <1 steadies toward rest
 }
 
 interface GpuPrimitive {
@@ -102,6 +114,7 @@ interface GpuPrimitive {
   skinIndex: number;
   jointBase: number; // palette offset (in joints) for this primitive's skin
   baseColor: [number, number, number, number];
+  materialIndex: number;
 }
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
@@ -213,6 +226,28 @@ export class SkinnedModel {
   private readonly qB = new Float32Array(4);
   private readonly vDir = new Float32Array(3);
   private readonly vComp = new Float32Array(3);
+  private readonly vWorld = new Float32Array(3);
+  private readonly vLocal = new Float32Array(3);
+
+  // --- Foot/root placement (feet step to our foot joints). ------------------
+  private placeEnabled = false;
+  private placeBody = -1; // palette slot of the pelvis/root proxy bone (Body)
+  private placeBodyNode = -1;
+  private placeFootL = -1; // palette slot of Foot.L bone
+  private placeFootLNode = -1;
+  private placeFootR = -1;
+  private placeFootRNode = -1;
+  private readonly invParentGlobal = new Float32Array(16); // inverse of feet/body parent bind global
+  private readonly pelvisAnchor = new Float32Array(3); // model pos our pelvis maps to
+  private modelLegLen = 1;
+  private posScale = NaN; // our→model scale, locked on first retarget
+  private readonly pelvis0 = new Float32Array(3); // our pelvis on first retarget
+  private haveAnchor = false;
+
+  // --- Per-material color override (recolor to the scene palette). ----------
+  private matColor!: Float32Array<ArrayBuffer>; // nMaterials * 3 rgb
+  private matColorHas!: Uint8Array; // per-material override flag
+  private nMaterials = 0;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -243,6 +278,11 @@ export class SkinnedModel {
     this.paletteData = new Float32Array(Math.max(1, paletteLen) * 16);
     this.drawData = new Float32Array(Math.max(1, prims.length) * DRAW_FLOATS);
     this.drawDataU32 = new Uint32Array(this.drawData.buffer);
+    let maxMat = -1;
+    for (const p of prims) if (p.materialIndex > maxMat) maxMat = p.materialIndex;
+    this.nMaterials = maxMat + 1;
+    this.matColor = new Float32Array(Math.max(1, this.nMaterials) * 3);
+    this.matColorHas = new Uint8Array(Math.max(1, this.nMaterials));
     this.buildRetargetData();
   }
 
@@ -309,9 +349,64 @@ export class SkinnedModel {
       dir[0] /= len;
       dir[1] /= len;
       dir[2] /= len;
-      const bone: RetargetBone = { node, palette, restDir: dir, from: chain.from, to: chain.to };
+      const bone: RetargetBone = {
+        node,
+        palette,
+        restDir: dir,
+        from: chain.from,
+        to: chain.to,
+        damp: chain.damp ?? 1,
+      };
       this.retargetBones.push(bone);
       this.retargetByNode[node] = bone;
+    }
+
+    // --- Foot/root placement setup. -----------------------------------------
+    // Body (pelvis proxy) and both Foot bones share the same parent (the
+    // armature root "Bone"); place them in that parent's frame. Feet meshes are
+    // children of the Foot bones, so moving a Foot bone steps its foot.
+    const bodyP = nameToPalette.get('Body');
+    const footLP = nameToPalette.get('Foot.L');
+    const footRP = nameToPalette.get('Foot.R');
+    const ulP = nameToPalette.get('UpperLeg.L');
+    const llP = nameToPalette.get('LowerLeg.L');
+    if (
+      bodyP !== undefined &&
+      footLP !== undefined &&
+      footRP !== undefined &&
+      ulP !== undefined &&
+      llP !== undefined
+    ) {
+      this.placeBody = bodyP;
+      this.placeBodyNode = joints[bodyP];
+      this.placeFootL = footLP;
+      this.placeFootLNode = joints[footLP];
+      this.placeFootR = footRP;
+      this.placeFootRNode = joints[footRP];
+      const parentNode = model.nodes[this.placeBodyNode].parent;
+      if (parentNode >= 0) {
+        // Full inverse of the parent (armature-root) bind global — it carries a
+        // large export scale + a 90° rotation, so a world→local conversion needs
+        // the whole matrix, not just the rotation.
+        mat4Invert(this.invParentGlobal, 0, bindGlobals, parentNode * 16);
+        // Our pelvis maps to Body's bind world position.
+        this.pelvisAnchor[0] = bindGlobals[this.placeBodyNode * 16 + 12];
+        this.pelvisAnchor[1] = bindGlobals[this.placeBodyNode * 16 + 13];
+        this.pelvisAnchor[2] = bindGlobals[this.placeBodyNode * 16 + 14];
+        // Model leg path length (hip→knee→ankle) for the our→model scale.
+        const ulN = joints[ulP];
+        const llN = joints[llP];
+        const endN = findDescendantByName(model, llN, 'LowerLeg.L_end');
+        const seg = (a: number, b: number): number =>
+          Math.hypot(
+            bindGlobals[a * 16 + 12] - bindGlobals[b * 16 + 12],
+            bindGlobals[a * 16 + 13] - bindGlobals[b * 16 + 13],
+            bindGlobals[a * 16 + 14] - bindGlobals[b * 16 + 14],
+          );
+        this.modelLegLen =
+          seg(ulN, llN) + (endN >= 0 ? seg(llN, endN) : seg(llN, this.placeFootLNode));
+        this.placeEnabled = this.modelLegLen > 1e-6;
+      }
     }
   }
 
@@ -348,6 +443,7 @@ export class SkinnedModel {
         skinIndex: p.skinIndex,
         jointBase,
         baseColor: p.baseColor,
+        materialIndex: p.materialIndex,
       };
     });
 
@@ -519,8 +615,10 @@ export class SkinnedModel {
             dir[0] /= len;
             dir[1] /= len;
             dir[2] /= len;
-            // q = delta rotating restDir → target, applied on the bind global.
+            // q = delta rotating restDir → target; damp short/noisy bones by
+            // easing the delta toward identity, then apply on the bind global.
             quatFromTo(q, 0, bone.restDir, dir);
+            if (bone.damp < 1) quatSlerpIdentity(q, 0, q, 0, bone.damp);
             quatMul(q, 0, q, 0, this.bindGlobalQuat, bone.node * 4); // newWorld
             // localRot = inverse(parentCurrentGlobal) * newWorld
             if (parentOff >= 0) {
@@ -572,12 +670,126 @@ export class SkinnedModel {
       }
     }
 
+    this.placeFeetAndRoot(skel, idx);
     this.setPose(this.retargetLocals);
+  }
+
+  /**
+   * Step the feet and shift the body from our animation's foot/pelvis joints.
+   * Because this rig IK-pins the feet to the armature root, aiming the leg bones
+   * alone only splays the legs off planted feet — so instead we PLACE each Foot
+   * bone (and the body/root) at our joint positions, mapped our-space→model-space
+   * by a single scale locked on the first call (model leg length ÷ our leg
+   * length). The leg bones are still aimed (above), so the shin points at the
+   * stepped foot. Foot-lock is inherited: a foot our animation holds still maps
+   * to a still position, so it neither slides nor jitters. NaN-safe: skips
+   * entirely if placement data or joints are missing/degenerate.
+   */
+  private placeFeetAndRoot(skel: Float64Array, idx: Record<string, number>): void {
+    if (!this.placeEnabled) return;
+    const pi = idx.pelvis;
+    const fl = idx.footL;
+    const fr = idx.footR;
+    const hl = idx.hipL;
+    const kl = idx.kneeL;
+    if (
+      pi === undefined ||
+      fl === undefined ||
+      fr === undefined ||
+      hl === undefined ||
+      kl === undefined
+    )
+      return;
+
+    if (!this.haveAnchor) {
+      // Lock the our→model scale from the (constant) leg-segment path length.
+      const ourLeg = dist3(skel, hl, kl) + dist3(skel, kl, fl);
+      this.posScale = ourLeg > 1e-4 ? (this.modelLegLen / ourLeg) * POS_SCALE : POS_SCALE;
+      this.pelvis0[0] = skel[pi * 3];
+      this.pelvis0[1] = skel[pi * 3 + 1];
+      this.pelvis0[2] = skel[pi * 3 + 2];
+      this.haveAnchor = true;
+    }
+    const s = this.posScale;
+    if (!(s > 0)) return;
+
+    this.placeNodeAt(this.placeBody, this.placeBodyNode, skel, pi, s);
+    this.placeNodeAt(this.placeFootL, this.placeFootLNode, skel, fl, s);
+    this.placeNodeAt(this.placeFootR, this.placeFootRNode, skel, fr, s);
+  }
+
+  /**
+   * Position one placed bone: our joint `ji` maps to a model-world point in the
+   * pelvis-anchored frame, converted into the bone's parent (armature-root)
+   * local space; rotation/scale stay at bind. Writes the palette-order local.
+   */
+  private placeNodeAt(
+    palette: number,
+    node: number,
+    skel: Float64Array,
+    ji: number,
+    s: number,
+  ): void {
+    // World target: anchor + scale * axisMap(joint − pelvis0).
+    const cx = (skel[ji * 3] - this.pelvis0[0]) * X_SIGN;
+    const cy = (skel[ji * 3 + 1] - this.pelvis0[1]) * Y_SIGN;
+    const cz = (skel[ji * 3 + 2] - this.pelvis0[2]) * Z_SIGN;
+    this.vComp[0] = cx;
+    this.vComp[1] = cy;
+    this.vComp[2] = cz;
+    const w = this.vWorld;
+    w[0] = this.pelvisAnchor[0] + s * this.vComp[AXIS_ORDER[0]];
+    w[1] = this.pelvisAnchor[1] + s * this.vComp[AXIS_ORDER[1]];
+    w[2] = this.pelvisAnchor[2] + s * this.vComp[AXIS_ORDER[2]];
+    // Local translation under the parent = inv(parentGlobal) * worldPoint
+    // (full inverse handles the armature-root scale + rotation).
+    transformPoint(this.vLocal, this.invParentGlobal, 0, w[0], w[1], w[2]);
+    composeTRSAt(
+      this.retargetLocals,
+      palette * 16,
+      this.vLocal,
+      0,
+      this.bindLocalQuat,
+      node * 4,
+      this.bindLocalScale,
+      node * 3,
+    );
   }
 
   /** Override the color tint (multiplies base colors). Default white. */
   setTint(r: number, g: number, b: number, a = 1): void {
     this.tint = [r, g, b, a];
+  }
+
+  /** Number of glTF materials (for `setMaterialColors`). */
+  get materialCount(): number {
+    return this.nMaterials;
+  }
+
+  /**
+   * Override per-material base colors (keyed by glTF material index) to recolor
+   * the model to a scene palette. `colors[i]` = `[r,g,b]` in 0..1 replaces
+   * material i's base color; pass `null`/`undefined` for a slot to leave it at
+   * the model's original color. Alpha and `setTint` still apply on top. Takes
+   * effect on the next `render()`.
+   *
+   * Material order for RobotExpressive: 0 = Grey (trim), 1 = Main (body),
+   * 2 = Black (dark).
+   */
+  setMaterialColors(
+    colors: readonly (readonly [number, number, number] | null | undefined)[],
+  ): void {
+    for (let i = 0; i < this.nMaterials; i++) {
+      const c = colors[i];
+      if (c) {
+        this.matColor[i * 3] = c[0];
+        this.matColor[i * 3 + 1] = c[1];
+        this.matColor[i * 3 + 2] = c[2];
+        this.matColorHas[i] = 1;
+      } else if (c === null) {
+        this.matColorHas[i] = 0;
+      }
+    }
   }
 
   get colorView(): GPUTextureView {
@@ -667,9 +879,16 @@ export class SkinnedModel {
       const o = i * DRAW_FLOATS;
       // model matrix = node global (used only when useSkin == 0)
       this.drawData.set(this.globals.subarray(p.nodeIndex * 16, p.nodeIndex * 16 + 16), o);
-      this.drawData[o + 16] = p.baseColor[0];
-      this.drawData[o + 17] = p.baseColor[1];
-      this.drawData[o + 18] = p.baseColor[2];
+      const mi = p.materialIndex;
+      if (mi >= 0 && this.matColorHas[mi]) {
+        this.drawData[o + 16] = this.matColor[mi * 3];
+        this.drawData[o + 17] = this.matColor[mi * 3 + 1];
+        this.drawData[o + 18] = this.matColor[mi * 3 + 2];
+      } else {
+        this.drawData[o + 16] = p.baseColor[0];
+        this.drawData[o + 17] = p.baseColor[1];
+        this.drawData[o + 18] = p.baseColor[2];
+      }
       this.drawData[o + 19] = p.baseColor[3];
       this.drawDataU32[o + 20] = p.jointBase;
       this.drawDataU32[o + 21] = p.skinIndex >= 0 ? 1 : 0;
@@ -878,6 +1097,118 @@ function quatFromTo(out: Float32Array, oo: number, a: Float32Array, b: Float32Ar
   out[oo + 1] = cy * inv;
   out[oo + 2] = cz * inv;
   out[oo + 3] = w * inv;
+}
+
+/**
+ * out = slerp(identity, q, t) for unit q — eases a rotation toward no-op.
+ * NaN-safe: falls back to nlerp for near-parallel quaternions.
+ */
+function quatSlerpIdentity(
+  out: Float32Array,
+  oo: number,
+  q: Float32Array,
+  qo: number,
+  t: number,
+): void {
+  let x = q[qo],
+    y = q[qo + 1],
+    z = q[qo + 2],
+    w = q[qo + 3];
+  if (w < 0) {
+    // shortest arc: identity·q = w, negate for w<0
+    x = -x;
+    y = -y;
+    z = -z;
+    w = -w;
+  }
+  if (w > 0.9995) {
+    // Near identity: linear blend then normalize.
+    const bx = t * x,
+      by = t * y,
+      bz = t * z,
+      bw = 1 - t + t * w;
+    const inv = 1 / (Math.hypot(bx, by, bz, bw) || 1);
+    out[oo] = bx * inv;
+    out[oo + 1] = by * inv;
+    out[oo + 2] = bz * inv;
+    out[oo + 3] = bw * inv;
+    return;
+  }
+  const omega = Math.acos(w);
+  const sin = Math.sin(omega);
+  const s0 = Math.sin((1 - t) * omega) / sin;
+  const s1 = Math.sin(t * omega) / sin;
+  out[oo] = s1 * x;
+  out[oo + 1] = s1 * y;
+  out[oo + 2] = s1 * z;
+  out[oo + 3] = s0 + s1 * w;
+}
+
+/**
+ * out[oo..oo+16] = inverse of the column-major 4x4 at m[mo..]. Returns whether
+ * it was invertible; on a singular matrix writes identity (NaN-safe).
+ */
+function mat4Invert(out: Float32Array, oo: number, m: Float32Array, mo: number): boolean {
+  const a00 = m[mo],
+    a01 = m[mo + 1],
+    a02 = m[mo + 2],
+    a03 = m[mo + 3];
+  const a10 = m[mo + 4],
+    a11 = m[mo + 5],
+    a12 = m[mo + 6],
+    a13 = m[mo + 7];
+  const a20 = m[mo + 8],
+    a21 = m[mo + 9],
+    a22 = m[mo + 10],
+    a23 = m[mo + 11];
+  const a30 = m[mo + 12],
+    a31 = m[mo + 13],
+    a32 = m[mo + 14],
+    a33 = m[mo + 15];
+  const b00 = a00 * a11 - a01 * a10;
+  const b01 = a00 * a12 - a02 * a10;
+  const b02 = a00 * a13 - a03 * a10;
+  const b03 = a01 * a12 - a02 * a11;
+  const b04 = a01 * a13 - a03 * a11;
+  const b05 = a02 * a13 - a03 * a12;
+  const b06 = a20 * a31 - a21 * a30;
+  const b07 = a20 * a32 - a22 * a30;
+  const b08 = a20 * a33 - a23 * a30;
+  const b09 = a21 * a32 - a22 * a31;
+  const b10 = a21 * a33 - a23 * a31;
+  const b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (!det) {
+    mat4Identity(out, oo);
+    return false;
+  }
+  det = 1 / det;
+  out[oo] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+  out[oo + 1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+  out[oo + 2] = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+  out[oo + 3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+  out[oo + 4] = (a12 * b08 - a10 * b11 - a13 * b07) * det;
+  out[oo + 5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+  out[oo + 6] = (a32 * b02 - a30 * b05 - a33 * b01) * det;
+  out[oo + 7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+  out[oo + 8] = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+  out[oo + 9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+  out[oo + 10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+  out[oo + 11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+  out[oo + 12] = (a11 * b07 - a10 * b09 - a12 * b06) * det;
+  out[oo + 13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+  out[oo + 14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
+  out[oo + 15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+  return true;
+}
+
+/** Euclidean distance between joints a and b in a flat [x,y,z] skeleton array. */
+function dist3(skel: Float64Array, a: number, b: number): number {
+  return Math.hypot(
+    skel[a * 3] - skel[b * 3],
+    skel[a * 3 + 1] - skel[b * 3 + 1],
+    skel[a * 3 + 2] - skel[b * 3 + 2],
+  );
 }
 
 /** Compose a column-major TRS matrix into `out[oo..]` from offset-addressed T, quat R, S. */

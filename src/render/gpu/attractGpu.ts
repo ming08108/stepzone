@@ -385,6 +385,7 @@ export class AttractGpu {
   private readonly modelSampler: GPUSampler;
   private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
+  private modelRecolored = false; // recolor the model to the palette once/variant
   private readonly dancerUniform: GPUBuffer;
   private readonly dancerBind: GPUBindGroup;
   private readonly dancerData = new Float32Array(4); // viewW, viewH, dim, _
@@ -498,6 +499,7 @@ export class AttractGpu {
     // One dancer per song (fresh spring/cursor state), stepping to this chart.
     this.dancer = new AttractDancer(v);
     this.dancer.setSteps(cfg.steps ?? []);
+    this.modelRecolored = false; // re-apply the palette to the model
   }
 
   /** Grow (or lazily create) a vertex buffer to hold `arr`. */
@@ -529,6 +531,12 @@ export class AttractGpu {
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     this.dancer.build(now, b); // solves the 3D skeleton (skel3)
     model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
+    if (!this.modelRecolored) {
+      // Neon-ify the robot to this variant's palette: material 0=Grey/trim,
+      // 1=Main/body, 2=Black/dark (see SkinnedModel material order).
+      model.setMaterialColors([this.pal.accentB, this.pal.accentA, this.pal.gradBot]);
+      this.modelRecolored = true;
+    }
     const k = Math.max(0, 1 - Math.max(0, Math.min(1, dim))); // match the bg dim
     model.setTint(k, k, k);
     model.render(enc, viewW, viewH);

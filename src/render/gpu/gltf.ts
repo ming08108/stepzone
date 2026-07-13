@@ -153,6 +153,8 @@ export interface GltfPrimitive {
   joints: Uint16Array<ArrayBuffer>; // u16x4 (zero-filled for rigid prims)
   weights: Float32Array<ArrayBuffer>; // f32x4 (zero-filled for rigid prims)
   baseColor: [number, number, number, number];
+  /** glTF material index (for per-material recolor), or -1 if none. */
+  materialIndex: number;
   /** Node this primitive is drawn under (its global matrix = model matrix). */
   nodeIndex: number;
   /** Skin index, or -1 when the primitive is a rigid (non-skinned) mesh. */
@@ -464,6 +466,7 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
         joints,
         weights,
         baseColor,
+        materialIndex: prim.material ?? -1,
         nodeIndex: ni,
         // Only mark skinned when the primitive actually carries skin data.
         skinIndex: joints.some((v) => v !== 0) || weights.some((v) => v !== 0) ? skinIndex : -1,
