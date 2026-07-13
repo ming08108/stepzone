@@ -2,8 +2,10 @@
  * Background media pass for the WebGPU note field: draws the song's
  * image/video cover-fit behind the field, on the same surface (no second
  * canvas). Images/bitmaps upload once to a sampled texture; videos go through
- * importExternalTexture every frame (zero-copy where the platform allows).
- * The dim overlay on top is an ordinary quad from the main batch.
+ * importExternalTexture every frame (zero-copy where the platform allows). A
+ * live <canvas> source (the procedural attract background) goes through the
+ * image pipeline but is re-uploaded every frame like a video. The dim overlay
+ * on top is an ordinary quad from the main batch.
  */
 
 const WGSL_COMMON = /* wgsl */ `
@@ -51,7 +53,7 @@ fn fs(v: Out) -> @location(0) vec4f {
 }
 `;
 
-type Media = HTMLVideoElement | HTMLImageElement | ImageBitmap;
+type Media = HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement;
 
 export class MediaLayer {
   private readonly pipeImage: GPURenderPipeline;
@@ -59,6 +61,7 @@ export class MediaLayer {
   private readonly uniform: GPUBuffer;
   private readonly sampler: GPUSampler;
   private source: Media | null = null;
+  private live = false; // a canvas source: re-upload its current frame each draw
   private imageTex: GPUTexture | null = null;
   private imageBind: GPUBindGroup | null = null;
   private readonly ndc = new Float32Array(4); // reused each draw (no per-frame alloc)
@@ -89,13 +92,14 @@ export class MediaLayer {
   setSource(media: Media | null): void {
     if (media === this.source) return;
     this.source = media;
+    this.live = media instanceof HTMLCanvasElement;
     this.imageTex?.destroy();
     this.imageTex = null;
     this.imageBind = null;
     if (media && !(media instanceof HTMLVideoElement)) this.uploadImage(media);
   }
 
-  private uploadImage(img: HTMLImageElement | ImageBitmap): void {
+  private uploadImage(img: HTMLImageElement | ImageBitmap | HTMLCanvasElement): void {
     const w = img instanceof HTMLImageElement ? img.naturalWidth : img.width;
     const h = img instanceof HTMLImageElement ? img.naturalHeight : img.height;
     if (w <= 0 || h <= 0) return;
@@ -178,6 +182,19 @@ export class MediaLayer {
       pass.setBindGroup(0, bind);
       pass.draw(6);
     } else if (this.imageBind) {
+      if (this.live && this.imageTex && src instanceof HTMLCanvasElement) {
+        // Live canvas (procedural attract background): push its current frame
+        // into the sampled texture before drawing, same as a video would.
+        try {
+          this.device.queue.copyExternalImageToTexture(
+            { source: src },
+            { texture: this.imageTex },
+            { width: this.imageTex.width, height: this.imageTex.height },
+          );
+        } catch {
+          // Copy failed this frame — draw the last good frame instead.
+        }
+      }
       pass.setPipeline(this.pipeImage);
       pass.setBindGroup(0, this.imageBind);
       pass.draw(6);

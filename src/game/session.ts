@@ -56,7 +56,8 @@ export class GameSession {
   // there is no canvas fallback — the app requires WebGPU to play.
   private gpuField: GpuNoteField | null = null;
   private readonly rendererConfig: Partial<NoteFieldConfig>;
-  private bgMedia: HTMLVideoElement | HTMLImageElement | ImageBitmap | null = null;
+  private bgMedia: HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement | null =
+    null;
   private readonly beatLineTimes: Float64Array;
   private readonly timing: TimingData;
   private readonly held: boolean[];
@@ -243,7 +244,7 @@ export class GameSession {
    *  `startSecond` is the song time at which a movie's frame 0 plays (its
    *  #BGCHANGES trigger beat, converted to seconds) — 0 to start from the top. */
   setBackground(
-    media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null,
+    media: HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement | null,
     startSecond = 0,
   ): void {
     this.bgMedia = media;

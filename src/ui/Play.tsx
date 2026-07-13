@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
+import { AttractBackground } from '../render/attractBackground';
 import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
@@ -82,6 +83,15 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 const AC = '#ff5d47';
 /** How long `back` must be held mid-song to quit (stray taps don't drop out). */
 const QUIT_HOLD_MS = 900;
+
+/** Pick a stable attract-background variant (0..3) from a song title, so a song
+ *  with no background of its own always gets the same mood, but different songs
+ *  vary. */
+const attractVariant = (title: string): number => {
+  let h = 0;
+  for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) | 0;
+  return Math.abs(h) % 4;
+};
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -194,6 +204,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   doneSelRef.current = doneSel;
   const bgUrlRef = useRef<string | null>(null);
   const bgMediaRef = useRef<HTMLVideoElement | ImageBitmap | null>(null);
+  // The procedural attract loop, drawn behind the field when a song ships no
+  // background of its own.
+  const attractRef = useRef<AttractBackground | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
@@ -320,6 +333,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const rivalsRef = useRef<{ id: number; judge: Judge; feedback: Feedback; cursor: number }[]>([]);
 
   const cleanupBg = () => {
+    attractRef.current?.stop();
+    attractRef.current = null;
     const m = bgMediaRef.current;
     if (m instanceof HTMLVideoElement) {
       m.pause();
@@ -670,9 +685,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     };
     sessionRef.current = session;
 
-    // Background image / video (unless the player turned it off).
-    if (req.backgroundFile && settings.bgMode !== 'off') {
-      if (isVideoFile(req.backgroundFile.name)) {
+    // Background (unless the player turned it off).
+    if (settings.bgMode !== 'off') {
+      if (req.backgroundFile && isVideoFile(req.backgroundFile.name)) {
         const url = URL.createObjectURL(req.backgroundFile);
         bgUrlRef.current = url;
         const v = document.createElement('video');
@@ -683,7 +698,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         bgMediaRef.current = v;
         // A movie's frame 0 plays at its #BGCHANGES trigger beat, not song start.
         session.setBackground(v, req.song.timing.getElapsedTimeFromBeat(req.song.bgVideoStartBeat));
-      } else {
+      } else if (req.backgroundFile) {
         // Decode off-thread straight from the File. A detached <img> on a
         // blob URL can be deferred by the browser for seconds (a black field
         // while the song already plays); an ImageBitmap is ready the moment
@@ -700,6 +715,17 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           .catch(() => {
             // Undecodable image — keep the plain dark background.
           });
+      } else {
+        // No background of its own — play the procedural DDR-era attract loop,
+        // beat-locked to this song's clock. Variant is chosen per title so
+        // different songs get different moods.
+        const attract = new AttractBackground({
+          beat: () => req.song.timing.getBeatFromElapsedTime(session.songNow),
+          variant: attractVariant(req.song.title),
+        });
+        attract.start();
+        attractRef.current = attract;
+        session.setBackground(attract.canvas);
       }
     }
 

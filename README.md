@@ -49,7 +49,11 @@ WebGPU timestamp queries. The design, the pass order, and the numbers are in
 [`docs/RENDER-PERF.md`](docs/RENDER-PERF.md).
 
 Song backgrounds (movies included) play behind the field, kept in sync with the
-music by their `#BGCHANGES` trigger and a playback-rate lock.
+music by their `#BGCHANGES` trigger and a playback-rate lock. A song that ships
+no background of its own gets a procedural **"common movie"** instead — a
+beat-reactive DDR-arcade attract loop (a silhouette dancer inside a neon hexagon
+tunnel over a scrolling checkerboard, in one of four moods), drawn on a live
+canvas the field samples as its background texture.
 
 ## Song analysis
 

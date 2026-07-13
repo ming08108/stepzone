@@ -338,7 +338,9 @@ export class GpuNoteField {
     return this.timer.read();
   }
 
-  setBackground(media: HTMLVideoElement | HTMLImageElement | ImageBitmap | null): void {
+  setBackground(
+    media: HTMLVideoElement | HTMLImageElement | ImageBitmap | HTMLCanvasElement | null,
+  ): void {
     this.media.setSource(media);
   }
 
