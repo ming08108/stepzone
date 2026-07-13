@@ -77,6 +77,11 @@ interface BoneChain {
    *  level (sole down) rather than inheriting the shin's tilt and pointing its
    *  toe at the floor. `from`/`to`/`restChild` are ignored when set. */
   hold?: boolean;
+  /** Scale the sideways (our-space X) component of the aim target before
+   *  aiming. <1 pulls the segment toward the body centerline — used on the leg
+   *  chains so wide animation steps don't read as a splayed, bow-legged
+   *  stance on the model's proportions. */
+  narrowX?: number;
 }
 const BONE_CHAINS: readonly BoneChain[] = [
   // One aiming bone per segment (see VRM_CHAINS): never two in-series bones at
@@ -119,11 +124,11 @@ const VRM_CHAINS: readonly BoneChain[] = [
   { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowL', to: 'handL' },
   { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderR', to: 'elbowR' },
   { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowR', to: 'handR' },
-  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL' },
-  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL' },
+  { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipL', to: 'kneeL', narrowX: 0.55 },
+  { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeL', to: 'footL', narrowX: 0.55 },
   { bone: 'leftFoot', restChild: 'leftFoot', from: 'footL', to: 'footL', hold: true },
-  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR' },
-  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR' },
+  { bone: 'rightUpperLeg', restChild: 'rightLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
+  { bone: 'rightLowerLeg', restChild: 'rightFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
   { bone: 'rightFoot', restChild: 'rightFoot', from: 'footR', to: 'footR', hold: true },
 ];
 
@@ -136,6 +141,7 @@ interface RetargetBone {
   to: string;
   damp: number; // 1 = full aim, <1 steadies toward rest
   hold: boolean; // hold bind world orientation (level foot) instead of aiming
+  narrowX: number; // <1 pulls the aim target toward the centerline (legs)
 }
 
 interface GpuPrimitive {
@@ -463,6 +469,7 @@ export class SkinnedModel {
         to: chain.to,
         damp: chain.damp ?? 1,
         hold: chain.hold ?? false,
+        narrowX: chain.narrowX ?? 1,
       };
       this.retargetBones.push(bone);
       this.retargetByNode[node] = bone;
@@ -824,7 +831,10 @@ export class SkinnedModel {
         if (fi !== undefined && ti !== undefined) {
           // Target direction in model space (apply axis signs, then reorder).
           const comp = this.vComp;
-          comp[0] = (skel[ti * 3] - skel[fi * 3]) * X_SIGN;
+          // narrowX <1 damps the sideways reach of the aim (legs): wide or
+          // crossed animation steps pull toward the centerline for a natural
+          // stance on the model's proportions.
+          comp[0] = (skel[ti * 3] - skel[fi * 3]) * X_SIGN * bone.narrowX;
           comp[1] = (skel[ti * 3 + 1] - skel[fi * 3 + 1]) * Y_SIGN;
           comp[2] = (skel[ti * 3 + 2] - skel[fi * 3 + 2]) * Z_SIGN;
           dir[0] = comp[AXIS_ORDER[0]];

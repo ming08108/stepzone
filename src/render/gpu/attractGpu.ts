@@ -571,10 +571,14 @@ export class AttractGpu {
     const dolly = 1 + 0.07 * Math.sin(now * 0.16) - 0.05 * kick;
     const dist = (r / Math.sin(fovY / 2)) * 1.05 * dolly;
     const panY = 0.1 * r * Math.sin(now * 0.19);
+    // Frame lift: raising both eye and target drops the subject in frame so
+    // her feet land on the near (large) cells of the shader floor grid instead
+    // of hovering over its far rows.
+    const lift = 0.13 * r;
     model.render(enc, viewW, viewH, {
       fovY,
-      eye: [c[0] + Math.sin(orbit) * dist, c[1] + 0.35 * r, c[2] + Math.cos(orbit) * dist],
-      target: [c[0], c[1] + panY, c[2]],
+      eye: [c[0] + Math.sin(orbit) * dist, c[1] + 0.35 * r + lift, c[2] + Math.cos(orbit) * dist],
+      target: [c[0], c[1] + panY + lift, c[2]],
     });
     this.usingModel = true;
   }
