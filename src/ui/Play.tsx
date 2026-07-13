@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
+import { buildAttractConfig } from '../render/attractConfig';
 import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile, songBpmRange } from '../io/songFiles';
@@ -10,9 +11,7 @@ import { connectedPadInfo } from '../input/gamepad';
 import { looksLikeDancePad } from '../input/padDetect';
 import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
-import { computeFootPlacements } from '../analysis/stepParity';
-import { noteRowToBeat, TapNoteScore, TapNoteType } from '../notes/noteTypes';
-import type { Steps } from '../song/steps';
+import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
 import { submitScore } from '../net/leaderboard';
@@ -84,61 +83,6 @@ function OffsetGraph({ offsets }: { offsets: number[] }) {
 const AC = '#ff5d47';
 /** How long `back` must be held mid-song to quit (stray taps don't drop out). */
 const QUIT_HOLD_MS = 900;
-
-/** Pick a stable attract-background variant (0..3) from a song title, so a song
- *  with no background of its own always gets the same mood, but different songs
- *  vary. */
-const attractVariant = (title: string): number => {
-  let h = 0;
-  for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) | 0;
-  return Math.abs(h) % 4;
-};
-
-/** Map a chart column (of `n` tracks) to a dance direction 0=L,1=D,2=U,3=R.
- *  dance-single is exact; other layouts fold columns left→right for a sensible
- *  approximation so the attract dancer still steps to their notes. */
-const columnToDir = (col: number, n: number): number => {
-  if (n === 4) return col;
-  const f = n <= 1 ? 0.5 : col / (n - 1); // 0..1 across the pad
-  if (f < 0.28) return 0; // Left
-  if (f > 0.72) return 3; // Right
-  return col % 2 === 0 ? 2 : 1; // middle panels → alternate Up/Down
-};
-
-/** The attract-dancer's step timeline for a chart. Prefer the StepParity
- *  foot-placement solve (so the dancer foots the chart exactly as a player
- *  would, crossovers and all); fall back to the naive column mask for steps
- *  types the solver doesn't cover. */
-const dancerSteps = (
-  song: PlayRequest['song'],
-  chart: Steps,
-): { beat: number; cols: number; lCol?: number; rCol?: number }[] => {
-  const footed = computeFootPlacements(chart.getNoteData(), song.timing, chart.stepsType);
-  return footed ?? chartSteps(chart);
-};
-
-/** The chart's steppable notes as an attract-dancer timeline: one entry per note
- *  row with its beat and a 4-bit L/D/U/R column mask (a jump lights >1 bit).
- *  Mines, fakes, and hold tails don't make her step. */
-const chartSteps = (chart: Steps): { beat: number; cols: number }[] => {
-  const nd = chart.getNoteData();
-  const n = nd.numTracks;
-  const byRow = new Map<number, number>();
-  for (let c = 0; c < n; c++) {
-    for (const { row, note } of nd.getTrack(c)) {
-      if (
-        note.type === TapNoteType.Tap ||
-        note.type === TapNoteType.HoldHead ||
-        note.type === TapNoteType.Lift
-      ) {
-        byRow.set(row, (byRow.get(row) ?? 0) | (1 << columnToDir(c, n)));
-      }
-    }
-  }
-  return [...byRow.entries()]
-    .map(([row, cols]) => ({ beat: noteRowToBeat(row), cols }))
-    .sort((a, b) => a.beat - b.beat);
-};
 
 const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
@@ -733,10 +677,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       // this chart's StepParity foot placement. Used when a song has no BGA of
       // its own, or forced for every song when bgMode is 'dance'.
       const useDanceBg = (): void =>
-        session.setAttract({
-          variant: attractVariant(req.song.title),
-          steps: dancerSteps(req.song, req.chart),
-        });
+        session.setAttract(buildAttractConfig(req.song.title, req.song.timing, req.chart));
       if (settings.bgMode === 'dance') {
         useDanceBg();
       } else if (req.backgroundFile && isVideoFile(req.backgroundFile.name)) {

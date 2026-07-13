@@ -27,6 +27,7 @@ import {
 import { songBpmRange } from '../io/songFiles';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
 import { difficultyToString } from '../song/difficulty';
+import { buildAttractConfig } from '../render/attractConfig';
 import type { TimingData } from '../timing/timingData';
 import { keyboardRole } from '../input/inputBus';
 import { bestChartsPerSlot, difficultyColor } from './difficultyUi';
@@ -158,6 +159,16 @@ export function PlayerOptions({
   const preview = useMemo(
     () => ({ noteData: chart.getNoteData(), timing: chart.getTimingData(req.song.timing) }),
     [req.song, chart],
+  );
+
+  // The dance background's config (mood + chart-stepping timeline) — built only
+  // when BG is set to DANCE, so the preview shows it just like gameplay will.
+  const danceAttract = useMemo(
+    () =>
+      settings.bgMode === 'dance'
+        ? buildAttractConfig(req.song.title, req.song.timing, chart)
+        : null,
+    [settings.bgMode, req.song, chart],
   );
 
   // Per-measure note density for the practice-section song map (mines/fakes
@@ -762,6 +773,7 @@ export function PlayerOptions({
                 }
                 bgDim={settings.bgMode === 'full' || settings.bgMode === 'dance' ? 0.25 : 0.6}
                 mediaRate={effRate}
+                attract={danceAttract}
               />
             </div>
           </div>

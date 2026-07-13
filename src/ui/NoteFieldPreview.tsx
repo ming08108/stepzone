@@ -28,6 +28,7 @@ import {
 } from '../notes/noteTypes';
 import { isVideoFile } from '../io/songFiles';
 import { columnAnglesFor } from '../render/columns';
+import type { AttractConfig } from '../render/gpu/attractGpu';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import type { Feedback, NoteFieldConfig } from '../render/fieldConfig';
 import { songMaxBpm } from '../render/scroll';
@@ -50,6 +51,7 @@ export function NoteFieldPreview({
   background = null,
   bgDim = 0.6,
   mediaRate = 1,
+  attract = null,
 }: {
   noteData: NoteData;
   timing: TimingData;
@@ -77,6 +79,9 @@ export function NoteFieldPreview({
   bgDim?: number;
   /** Playback rate for a background video, matching the audio preview. */
   mediaRate?: number;
+  /** When set (bgMode 'dance'), draw the procedural dance background instead of
+   *  the song media — so the DANCE option previews live. */
+  attract?: AttractConfig | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   // Live-applied per frame (no rebuild): scroll.
@@ -311,6 +316,7 @@ export function NoteFieldPreview({
         return;
       }
       gpuField.setBackground(bgMedia);
+      if (attract) gpuField.setAttract(attract); // DANCE mode: procedural bg
       reload(); // rebuild + beat lines from the current chart
       ro = new ResizeObserver(() => resize());
       ro.observe(canvas);
@@ -342,6 +348,7 @@ export function NoteFieldPreview({
     bgDim,
     background,
     mediaRate,
+    attract,
     meta?.title,
     meta?.subtitle,
     meta?.difficulty,
