@@ -1,81 +1,13 @@
 /**
- * In-race room UI: the live rival readout stacked top-left during play
- * (RivalBars — one row per opponent, ahead/behind colored against you), and
- * the results-screen standings (RoomStandings — a ranked, animated reveal
+ * Results-screen room standings (RoomStandings — a ranked, animated reveal
  * from last place up to the winner, skippable with any confirm press).
- * Read-only DOM overlays on coarse ticks; judging and input never touch this.
+ * Read-only DOM overlay on a coarse tick; judging and input never touch this.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { GameSession } from '../game/session';
 import type { RoomPeer } from '../net/roomPeer';
-import { diffColor } from './DiffBadge';
 import type { RoomPlayInfo } from './playRequest';
 
-const TICK_MS = 150;
 const AC = '#ff5d47';
-
-interface RivalRow {
-  id: number;
-  label: string;
-  percent: number;
-  combo: number;
-  diff: number;
-  left: boolean;
-  finished: boolean;
-}
-
-/** The live opponents readout — one compact row per rival, top-left. */
-export function RivalBars({ session, versus }: { session: GameSession; versus: RoomPlayInfo }) {
-  const [rows, setRows] = useState<RivalRow[]>([]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const you = session.judge.percentDancePoints;
-      const players = new Map(versus.room.players.map((p) => [p.id, p]));
-      setRows(
-        versus.opponents.map((o) => {
-          const p = players.get(o.id);
-          const percent = p?.result?.percent ?? p?.snap?.percent ?? 0;
-          return {
-            id: o.id,
-            label: `${o.name} · LV${o.pick.meter}`,
-            percent,
-            combo: p?.snap?.combo ?? 0,
-            diff: you - percent,
-            left: p?.left ?? true,
-            finished: (p?.result ?? null) !== null,
-          };
-        }),
-      );
-    }, TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [session, versus]);
-
-  if (rows.length === 0) return null;
-  return (
-    <div className="absolute left-4 top-4 z-[3] flex flex-col gap-1.5">
-      {rows.map((r) => (
-        <div
-          key={r.id}
-          className="border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.14em] text-[#ececec]/85"
-          style={{ borderColor: r.left ? 'rgba(255,255,255,.2)' : diffColor(r.diff) + '66' }}
-        >
-          {r.left ? (
-            <span className="text-[#ececec]/45">{r.label} — DISCONNECTED</span>
-          ) : (
-            <>
-              {r.label} {(r.percent * 100).toFixed(2)}%{r.finished ? ' · DONE' : ` ×${r.combo}`}{' '}
-              <span className="font-bold" style={{ color: diffColor(r.diff) }}>
-                {r.diff >= 0 ? '+' : ''}
-                {(r.diff * 100).toFixed(2)}%
-              </span>
-            </>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 interface StandingRow {
   id: number;

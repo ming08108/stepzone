@@ -13,12 +13,10 @@ import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, recordPlay, type ChartScore } from '../app/scores';
-import { getIdentity } from '../net/identity';
-import { fetchGhost, fetchLeaderboard, submitScore } from '../net/leaderboard';
+import { submitScore } from '../net/leaderboard';
 import { type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
 import { chartDataOf } from '../song/chartData';
-import { GhostRace, type GhostInfo } from './GhostRace';
-import { RivalBars, RoomStandings } from './RoomRace';
+import { RoomStandings } from './RoomRace';
 import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
 import type { PlayRequest } from './playRequest';
 import { roomState, subscribeRoom } from './roomStore';
@@ -317,34 +315,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
 
   // The rivals' mirror judges/feedback (painted from the streamed feed above,
   // drawn by the session as extra field views on the same canvas). Up to 3
-  // rivals are shown as fields; the rest ride the RivalBars overlay. Each keeps
-  // its own scan cursor into its player's note feed.
+  // rivals are shown as fields. Each keeps its own scan cursor into its
+  // player's note feed.
   const rivalsRef = useRef<{ id: number; judge: Judge; feedback: Feedback; cursor: number }[]>([]);
-
-  // Race-the-ghost: the best stored timeline on this board (world best with a
-  // ghost, which may be your own PB). Fetched once per song; absent offline.
-  // Versus plays race the live rival instead.
-  const [ghost, setGhost] = useState<GhostInfo | null>(null);
-  useEffect(() => {
-    setGhost(null);
-    if (req.practice != null || req.versus) return;
-    let alive = true;
-    const hash = chartKey(req.song, req.chart);
-    void (async () => {
-      const board = await fetchLeaderboard(hash, settings.musicRate, 10);
-      const row = board?.rows.find((r) => r.hasGhost);
-      if (!row || !alive) return;
-      const frames = await fetchGhost(hash, settings.musicRate, row.playerId);
-      if (!frames || frames.length === 0 || !alive) return;
-      const mine = row.playerId === getIdentity().playerId;
-      setGhost({ frames, name: mine ? 'YOUR BEST' : row.playerName });
-    })();
-    return () => {
-      alive = false;
-    };
-    // musicRate is fixed for the lifetime of this screen (set on PLAYER
-    // OPTIONS beforehand), so req is the only real dependency.
-  }, [req, settings.musicRate]);
 
   const cleanupBg = () => {
     const m = bgMediaRef.current;
@@ -547,14 +520,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     // view on the session's own canvas. The 100 ms streamer below paints each
     // from its player's judged-note feed; the session just draws what's there.
     // Cap the RENDERED fields at 3 rivals (4 players) so the layout stays
-    // readable and fast — rivals past the cap, or whose exact chart revision
-    // isn't local, are covered by the RivalBars overlay instead.
+    // readable and fast. Rivals past the cap, or whose exact chart revision
+    // isn't local, aren't drawn as fields; the end-of-song standings still
+    // account for every player.
     rivalsRef.current = [];
     const MAX_RIVAL_FIELDS = 3;
     const renderable = (req.versus?.opponents ?? []).filter((o) => o.chart);
     if (renderable.length > MAX_RIVAL_FIELDS) {
       console.log(
-        `[versus] ${renderable.length} rivals have local charts; rendering the first ${MAX_RIVAL_FIELDS} as fields, the rest ride the RivalBars overlay`,
+        `[versus] ${renderable.length} rivals have local charts; rendering the first ${MAX_RIVAL_FIELDS} as fields, the rest only in the end-of-song standings`,
       );
     }
     const rivalCfgs: Parameters<GameSession['setRivalFields']>[0] = [];
@@ -833,14 +807,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             </div>
           </div>
         </div>
-      )}
-
-      {phase === 'playing' && ghost && sessionRef.current && (
-        <GhostRace session={sessionRef.current} ghost={ghost} />
-      )}
-
-      {phase === 'playing' && req.versus && sessionRef.current && (
-        <RivalBars session={sessionRef.current} versus={req.versus} />
       )}
 
       {phase === 'playing' && req.practice && (
