@@ -1,8 +1,11 @@
 /**
  * "COMMON MOVIE" — a procedurally-animated attract-mode background for songs
  * with no BGA of their own. It recreates the DDRMAX/Extreme-era "common movie"
- * vibe: a jet-black silhouette dancer (tapered torso, muscled limbs, sneakers,
- * a swinging ponytail — all filled shapes, iPod-ad style) throwing shapes
+ * vibe, low-poly edition: the dancer is a faceted low-poly anime girl — every
+ * body part is built from flat straight-edged polygon facets filled with a few
+ * stepped near-black shades (lit/shadow planes) under a glowing neon wireframe
+ * of facet edges. Slim hourglass figure, long spring-lagged twin-tail shard
+ * strips, an ahoge wisp, a triangle-fan pleated skirt — throwing shapes
  * inside a neon hexagon tunnel, over a scrolling perspective checkerboard,
  * everything pulsing to the beat. Pure Canvas 2D so the GPU renderer can
  * sample it as a live texture.
@@ -270,9 +273,11 @@ const POSES: readonly Pose[] = [
 ];
 
 // Joint indices into the flat [x,y,...] skeleton buffer. HAL/HAR are wrists
-// (the mitt hand is drawn just beyond them) and FTL/FTR are ankles (the
-// sneaker wedge plants below them). PONY is the ponytail tip — it's stateful
-// (spring-lagged in solve()) so it lives in the buffer and rides the trails.
+// (the hand diamond is drawn just beyond them) and FTL/FTR are ankles (the
+// shoe wedge plants below them). TAILL/TAILR are the twin-tail tips, AHOGE is
+// the cowlick tip, and SKIRT is a lagged point under the pelvis the hem sways
+// off — all stateful (spring-lagged in solve()) so they live in the buffer
+// and ride the ghost trails.
 const PEL = 0,
   SH = 1,
   HEADB = 2,
@@ -289,20 +294,24 @@ const PEL = 0,
   FTL = 13,
   KNR = 14,
   FTR = 15,
-  PONY = 16;
-const JOINTS = 17;
+  TAILL = 16,
+  TAILR = 17,
+  AHOGE = 18,
+  SKIRT = 19;
+const JOINTS = 20;
 
-// Bone lengths / widths as fractions of BODY_H.
-const L_TORSO = 0.32,
-  L_NECK = 0.06,
+// Bone lengths / widths as fractions of BODY_H — cute anime proportions:
+// shorter torso, narrow shoulders, wider hips, long slim legs, small head.
+const L_TORSO = 0.3,
+  L_NECK = 0.055,
   R_HEAD = 0.07,
-  W_SHOULDER = 0.13,
-  W_HIP = 0.075;
-const L_UARM = 0.16,
-  L_FARM = 0.13, // to the wrist — the hand extends ~0.05 beyond, matching old reach
-  L_THIGH = 0.23,
-  L_SHIN = 0.22,
-  L_SHOE = 0.025; // ankle sits this far above the sole; the sneaker fills it
+  W_SHOULDER = 0.1,
+  W_HIP = 0.082;
+const L_UARM = 0.155,
+  L_FARM = 0.125, // to the wrist — the hand extends ~0.05 beyond, matching old reach
+  L_THIGH = 0.25,
+  L_SHIN = 0.24,
+  L_SHOE = 0.025; // ankle sits this far above the sole; the shoe wedge fills it
 
 function easeSnap(p: number): number {
   // Back-ease-out: overshoots ~8% past the target then settles — moves "snap".
@@ -359,9 +368,21 @@ export class AttractBackground {
   // Dancer trail history (flat skeleton buffers, newest last).
   private readonly history: Float32Array[] = [];
   private readonly skel = new Float32Array(JOINTS * 2);
-  // Ponytail tip, smoothed across frames so it lags/swings behind the head.
-  private ponyX = NaN;
-  private ponyY = NaN;
+  // Secondary-motion state, smoothed across frames so hair/cloth lag the body.
+  // The twin-tail tips are full velocity springs (they overshoot, so fast
+  // poses make them whip); the ahoge and skirt points are simple lags.
+  private tailLX = NaN;
+  private tailLY = NaN;
+  private tailLVX = 0;
+  private tailLVY = 0;
+  private tailRX = NaN;
+  private tailRY = NaN;
+  private tailRVX = 0;
+  private tailRVY = 0;
+  private ahogeX = NaN;
+  private ahogeY = NaN;
+  private skirtX = NaN;
+  private skirtY = NaN;
 
   constructor(opts: { beat: () => number; variant?: number }) {
     this.beat = opts.beat;
@@ -734,12 +755,19 @@ export class AttractBackground {
 
   // ---- dancer -------------------------------------------------------------
 
-  /** Solve the rig forward-kinematically into `this.skel` (flat x,y pairs). */
-  private solve(pose: Pose): void {
+  /** Solve the rig forward-kinematically into `this.skel` (flat x,y pairs).
+   *  `bob` (the beat bounce, px) is baked into the root here — instead of
+   *  being added after the fact — so the hair/skirt springs feel it and react.
+   *  `time` only drives the ahoge's slow idle wobble. */
+  private solve(pose: Pose, time: number, bob: number): void {
     const s = this.skel;
     const rootX = CX + pose.shiftX * BODY_H;
     const rootY =
-      FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * BODY_H + pose.crouch * BODY_H - pose.rise * BODY_H;
+      FOOT_Y -
+      (L_THIGH + L_SHIN + L_SHOE) * BODY_H +
+      pose.crouch * BODY_H -
+      pose.rise * BODY_H -
+      bob;
 
     const set = (idx: number, x: number, y: number): void => {
       s[idx * 2] = x;
@@ -777,32 +805,109 @@ export class AttractBackground {
     set(KNR, knrx, knry);
     set(FTR, ...tip(knrx, knry, pose.legRLo, L_SHIN));
 
-    // Ponytail tip: hangs down-back off the head and chases its rest point
-    // with a lag, so head bobs and lateral shifts read as a swishing tail.
-    // A constant sideways bias keeps it peeking out of the silhouette even
-    // when the head is level (a dead-centre tail would hide behind the body).
+    // ---- secondary motion: twin-tails, ahoge, skirt --------------------
+    const B = BODY_H;
     const hx = s[HEAD * 2];
     const hy = s[HEAD * 2 + 1];
-    const restX = hx - 0.05 * BODY_H - Math.sin(pose.head) * R_HEAD * BODY_H * 4;
-    const restY = hy + R_HEAD * BODY_H * 2.6;
-    if (!Number.isFinite(this.ponyX) || !Number.isFinite(this.ponyY)) {
-      this.ponyX = restX;
-      this.ponyY = restY;
+    const r = R_HEAD * B;
+    // Head tilt whips both tails toward the trailing side.
+    const swing = Math.sin(pose.head) * r * 3;
+
+    // Twin-tail tips: velocity springs chasing a rest point that hangs
+    // down-and-out from each side of the head. Underdamped on purpose — fast
+    // pose snaps overshoot the rest point and the tails whip. Stretch is
+    // clamped so a teleport/NaN recovery frame can't tear a tail off.
+    const K = 0.055;
+    const DAMP = 0.8;
+    const MAXLEN = 0.42 * B;
+    const spring = (
+      side: number,
+      px: number,
+      py: number,
+      vx: number,
+      vy: number,
+    ): [number, number, number, number] => {
+      const bx = hx + side * r * 0.9;
+      const by = hy - r * 0.05;
+      const rx = bx + side * 0.075 * B - swing;
+      const ry = by + 0.3 * B;
+      if (!Number.isFinite(rx) || !Number.isFinite(ry)) return [px, py, 0, 0];
+      if (
+        !Number.isFinite(px) ||
+        !Number.isFinite(py) ||
+        !Number.isFinite(vx) ||
+        !Number.isFinite(vy)
+      ) {
+        return [rx, ry, 0, 0];
+      }
+      vx = (vx + (rx - px) * K) * DAMP;
+      vy = (vy + (ry - py) * K) * DAMP;
+      px += vx;
+      py += vy;
+      const dx = px - bx;
+      const dy = py - by;
+      const d = Math.hypot(dx, dy);
+      if (d > MAXLEN) {
+        px = bx + (dx / d) * MAXLEN;
+        py = by + (dy / d) * MAXLEN;
+      }
+      return [px, py, vx, vy];
+    };
+    [this.tailLX, this.tailLY, this.tailLVX, this.tailLVY] = spring(
+      -1,
+      this.tailLX,
+      this.tailLY,
+      this.tailLVX,
+      this.tailLVY,
+    );
+    [this.tailRX, this.tailRY, this.tailRVX, this.tailRVY] = spring(
+      1,
+      this.tailRX,
+      this.tailRY,
+      this.tailRVX,
+      this.tailRVY,
+    );
+    set(TAILL, this.tailLX, this.tailLY);
+    set(TAILR, this.tailRX, this.tailRY);
+
+    // Ahoge tip: a lagged point above the crown with a slow idle wobble so
+    // the cowlick is never perfectly still even in the NaN-beat idle.
+    const ahRX = hx + Math.sin(pose.head) * r * 0.6 + Math.sin(time * 2.1) * 0.012 * B;
+    const ahRY = hy - r * 1.9 + Math.cos(time * 1.7) * 0.005 * B;
+    if (!Number.isFinite(this.ahogeX) || !Number.isFinite(this.ahogeY)) {
+      this.ahogeX = ahRX;
+      this.ahogeY = ahRY;
     }
-    this.ponyX += (restX - this.ponyX) * 0.14;
-    this.ponyY += (restY - this.ponyY) * 0.24;
-    set(PONY, this.ponyX, this.ponyY);
+    this.ahogeX += (ahRX - this.ahogeX) * 0.22;
+    this.ahogeY += (ahRY - this.ahogeY) * 0.3;
+    set(AHOGE, this.ahogeX, this.ahogeY);
+
+    // Skirt anchor: a lagged point under the pelvis. drawBody() reads the
+    // offset between it and the pelvis to sway/flare the hem, so the skirt
+    // trails lateral hip moves and floats a touch on drops and bounces.
+    const skRX = rootX;
+    const skRY = rootY + 0.1 * B;
+    if (!Number.isFinite(this.skirtX) || !Number.isFinite(this.skirtY)) {
+      this.skirtX = skRX;
+      this.skirtY = skRY;
+    }
+    this.skirtX += (skRX - this.skirtX) * 0.16;
+    this.skirtY += (skRY - this.skirtY) * 0.22;
+    set(SKIRT, this.skirtX, this.skirtY);
   }
 
-  /** Paint the dancer from a flat joint buffer as a set of filled silhouette
-   *  shapes: a tapered torso, bulged limbs, mitt hands, sneaker wedges, and a
-   *  ponytail. `mode` picks the pass — 'glow' strokes an additive neon rim
-   *  around every piece (its interior half gets covered by the black pass),
-   *  'black' fills the solid body, 'trail' fills a faint additive ghost. All
-   *  geometry derives from the buffer alone so trails replay old frames. */
+  /** Paint the dancer from a flat joint buffer as a low-poly mesh: every part
+   *  is a handful of flat, straight-edged polygon facets (lineTo only — no
+   *  curves). `mode` picks the pass — 'glow' strokes a fat additive neon rim
+   *  around every facet (its interior half gets covered by the body pass),
+   *  'body' fills each facet with one of a few stepped near-black shades
+   *  (fake lit/shadow planes) then strokes all facet edges as a thin additive
+   *  neon wireframe, and 'trail' strokes only the edges as a faint ghost
+   *  wireframe. All geometry derives from the buffer alone so trails replay
+   *  old frames. */
   private drawBody(
     j: Float32Array,
-    mode: 'glow' | 'black' | 'trail',
+    mode: 'glow' | 'body' | 'trail',
     color: RGB,
     alpha: number,
     rim: number,
@@ -812,32 +917,19 @@ export class AttractBackground {
     const X = (i: number): number => j[i * 2];
     const Y = (i: number): number => j[i * 2 + 1];
 
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    const stroking = mode === 'glow';
-    if (mode === 'black') {
-      ctx.fillStyle = '#000';
-    } else {
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = rgba(color, alpha);
-      ctx.strokeStyle = rgba(color, alpha);
-      ctx.lineWidth = Math.max(1, rim);
-    }
-    const paint = (): void => {
-      if (stroking) ctx.stroke();
-      else ctx.fill();
-    };
-    const disc = (x: number, y: number, r: number): void => {
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, PI * 2);
-      paint();
+    // Facet list: flat [x,y,...] polygons + a shade index (0 dark .. 3 lit),
+    // painted in insertion order (later facets cover earlier ones).
+    const facets: { p: number[]; s: number }[] = [];
+    const F = (s: number, ...p: number[]): void => {
+      facets.push({ p, s });
     };
 
-    // Tapered limb: a quad with quadratic sides (mid bulge = muscle swell) and
-    // rounded tips. Widths are half-widths as fractions of BODY_H.
-    const limb = (a: number, b: number, wa: number, wb: number, bulge: number): void => {
-      const ax = X(a),
+    // Angular tapered limb segment as a two-facet prism: the ridge line runs
+    // off-axis so the two faces are unequal (slim lit face, wide shadow face)
+    // and a mid-edge knot vertex keeps the outline faceted instead of smooth.
+    // Both ends overshoot the joints a touch so bent elbows/knees don't gap.
+    const limb = (a: number, b: number, wa: number, wb: number, sl: number, sr: number): void => {
+      let ax = X(a),
         ay = Y(a),
         bx = X(b),
         by = Y(b);
@@ -846,25 +938,39 @@ export class AttractBackground {
       const len = Math.hypot(dx, dy) || 1;
       dx /= len;
       dy /= len;
+      const o = 0.012 * B;
+      ax -= dx * o;
+      ay -= dy * o;
+      bx += dx * o;
+      by += dy * o;
       const px = -dy,
         py = dx;
       const wA = wa * B,
         wB = wb * B,
-        wM = ((wa + wb) / 2 + bulge) * B;
-      const mx = (ax + bx) / 2,
-        my = (ay + by) / 2;
-      ctx.beginPath();
-      ctx.moveTo(ax + px * wA, ay + py * wA);
-      ctx.quadraticCurveTo(mx + px * wM, my + py * wM, bx + px * wB, by + py * wB);
-      ctx.quadraticCurveTo(bx + dx * wB * 1.4, by + dy * wB * 1.4, bx - px * wB, by - py * wB);
-      ctx.quadraticCurveTo(mx - px * wM, my - py * wM, ax - px * wA, ay - py * wA);
-      ctx.quadraticCurveTo(ax - dx * wA * 1.4, ay - dy * wA * 1.4, ax + px * wA, ay + py * wA);
-      ctx.closePath();
-      paint();
+        wM = Math.max(wA, wB) * 1.12;
+      const mx = ax + dx * (len + 2 * o) * 0.45,
+        my = ay + dy * (len + 2 * o) * 0.45;
+      const ro = -0.2; // ridge offset → asymmetric lit/shadow faces
+      const arx = ax + px * wA * ro,
+        ary = ay + py * wA * ro;
+      const brx = bx + px * wB * ro,
+        bry = by + py * wB * ro;
+      // prettier-ignore
+      F(sl,
+        arx, ary, brx, bry,
+        bx - px * wB, by - py * wB,
+        mx - px * wM, my - py * wM,
+        ax - px * wA, ay - py * wA);
+      // prettier-ignore
+      F(sr,
+        arx, ary, brx, bry,
+        bx + px * wB, by + py * wB,
+        mx + px * wM, my + py * wM,
+        ax + px * wA, ay + py * wA);
     };
 
-    // Mitt hand: an ellipse just beyond the wrist, aligned with the forearm.
-    const hand = (elb: number, wri: number): void => {
+    // Hand: a small diamond just beyond the wrist, aligned with the forearm.
+    const hand = (elb: number, wri: number, s: number): void => {
       const wx = X(wri),
         wy = Y(wri);
       let dx = wx - X(elb),
@@ -872,22 +978,21 @@ export class AttractBackground {
       const len = Math.hypot(dx, dy) || 1;
       dx /= len;
       dy /= len;
-      ctx.beginPath();
-      ctx.ellipse(
-        wx + dx * 0.03 * B,
-        wy + dy * 0.03 * B,
-        0.04 * B,
-        0.027 * B,
-        Math.atan2(dy, dx),
-        0,
-        PI * 2,
-      );
-      paint();
+      const px = -dy,
+        py = dx;
+      const cx = wx + dx * 0.022 * B,
+        cy = wy + dy * 0.022 * B;
+      // prettier-ignore
+      F(s,
+        wx - dx * 0.012 * B, wy - dy * 0.012 * B,
+        cx + px * 0.026 * B, cy + py * 0.026 * B,
+        wx + dx * 0.06 * B, wy + dy * 0.06 * B,
+        cx - px * 0.026 * B, cy - py * 0.026 * B);
     };
 
-    // Sneaker wedge off the ankle. When the shin hangs straight the toe points
-    // outward and the sole sits flat on the floor; as the leg kicks/points the
-    // toe blends toward the shin direction so extensions read as a toe-point.
+    // Dainty flat off the ankle: one angular wedge. When the shin hangs
+    // straight the toe points outward and the sole sits on the floor line; as
+    // the leg kicks the toe blends toward the shin direction (a toe-point).
     const shoe = (kne: number, ank: number, side: number): void => {
       const ax = X(ank),
         ay = Y(ank);
@@ -902,30 +1007,44 @@ export class AttractBackground {
         px = -px;
         py = -py; // perp points toward the sole
       }
-      const tl = 0.085 * B;
+      const tl = 0.07 * B;
       const tx = ax + dx * tl,
         ty = ay + dy * tl;
-      ctx.beginPath();
-      // ankle collar → arched instep → thin toe cap → flat sole → heel bump
-      ctx.moveTo(ax - dx * 0.02 * B - px * 0.02 * B, ay - dy * 0.02 * B - py * 0.02 * B);
-      ctx.quadraticCurveTo(
-        ax + dx * tl * 0.45 - px * 0.034 * B,
-        ay + dy * tl * 0.45 - py * 0.034 * B,
-        tx - px * 0.008 * B,
-        ty - py * 0.008 * B,
-      );
-      ctx.quadraticCurveTo(
-        tx + dx * 0.022 * B,
-        ty + dy * 0.022 * B,
-        tx + px * 0.018 * B,
-        ty + py * 0.018 * B,
-      );
-      ctx.lineTo(ax - dx * 0.045 * B + px * 0.028 * B, ay - dy * 0.045 * B + py * 0.028 * B);
-      ctx.closePath();
-      paint();
+      // ankle line → instep knot → toe tip → toe under → heel
+      // prettier-ignore
+      F(1,
+        ax - dx * 0.018 * B - px * 0.018 * B, ay - dy * 0.018 * B - py * 0.018 * B,
+        ax + dx * 0.03 * B - px * 0.02 * B, ay + dy * 0.03 * B - py * 0.02 * B,
+        tx - px * 0.004 * B, ty - py * 0.004 * B,
+        tx + px * 0.013 * B, ty + py * 0.013 * B,
+        ax - dx * 0.035 * B + px * 0.02 * B, ay - dy * 0.035 * B + py * 0.02 * B);
     };
 
-    // ---- torso: broad shoulders → pinched waist → flared hips → rounded seat.
+    // Knee-boot cuff: an angular band just below the knee, a hair wider than
+    // the shin so it notches the silhouette like a boot/thigh-high top.
+    const cuff = (kne: number, ank: number): void => {
+      const kx = X(kne),
+        ky = Y(kne);
+      let dx = X(ank) - kx,
+        dy = Y(ank) - ky;
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      const px = -dy,
+        py = dx;
+      const cx = kx + dx * 0.055 * B,
+        cy = ky + dy * 0.055 * B;
+      const w = 0.042 * B,
+        h = 0.013 * B;
+      // prettier-ignore
+      F(2,
+        cx - px * w - dx * h, cy - py * w - dy * h,
+        cx + px * w - dx * h, cy + py * w - dy * h,
+        cx + px * w + dx * h, cy + py * w + dy * h,
+        cx - px * w + dx * h, cy - py * w + dy * h);
+    };
+
+    // ---- torso frame (shared by torso plates and skirt fan) ---------------
     const plx = X(PEL),
       ply = Y(PEL),
       scx = X(SH),
@@ -941,83 +1060,226 @@ export class AttractBackground {
       plx + ux * ul * t + vx * w,
       ply + uy * ul * t + vy * w,
     ];
-    const shW = 0.126 * B, // half-width at the shoulder line
-      waistW = 0.06 * B,
-      hipW = 0.092 * B;
-    const [lsx, lsy] = at(1, -shW);
-    const [rsx, rsy] = at(1, shW);
-    ctx.beginPath();
-    ctx.moveTo(lsx, lsy);
-    // trapezius line, bowed slightly above the shoulder centre
-    ctx.quadraticCurveTo(scx + ux * 0.035 * B, scy + uy * 0.035 * B, rsx, rsy);
-    let [cx1, cy1] = at(0.66, 0.085 * B);
-    let [wx1, wy1] = at(0.42, waistW);
-    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1); // ribcage tapering into the waist
-    [cx1, cy1] = at(0.16, 0.098 * B);
-    [wx1, wy1] = at(0, hipW);
-    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1); // waist flaring over the hip
-    // rounded seat under the pelvis
-    [cx1, cy1] = at(0, -hipW);
-    ctx.quadraticCurveTo(plx - ux * 0.07 * B, ply - uy * 0.07 * B, cx1, cy1);
-    [cx1, cy1] = at(0.16, -0.098 * B);
-    [wx1, wy1] = at(0.42, -waistW);
-    ctx.quadraticCurveTo(cx1, cy1, wx1, wy1);
-    [cx1, cy1] = at(0.66, -0.085 * B);
-    ctx.quadraticCurveTo(cx1, cy1, lsx, lsy);
-    ctx.closePath();
-    paint();
-    // deltoid caps over the shoulder joints
-    disc(X(SHL), Y(SHL), 0.047 * B);
-    disc(X(SHR), Y(SHR), 0.047 * B);
 
-    // ---- neck + head + hair.
-    limb(SH, HEADB, 0.03, 0.026, 0);
     const hx = X(HEAD),
-      hy = Y(HEAD);
+      hy = Y(HEAD),
+      r = R_HEAD * B;
     const tilt = hx - X(HEADB); // signed head-tilt offset, drives the hair back
-    disc(hx, hy, R_HEAD * B);
-    // occipital hair volume: a slightly offset second disc breaks the circle
-    disc(hx - tilt * 0.4, hy - R_HEAD * B * 0.18, R_HEAD * B * 0.92);
-    // ponytail: scrunchie puff at the crown-back, tapered swish to the lagged tip
-    const pax = hx - tilt * 0.8,
-      pay = hy - R_HEAD * B * 0.55;
-    disc(pax, pay, 0.028 * B);
-    const ptx = X(PONY),
-      pty = Y(PONY);
-    let pdx = ptx - pax,
-      pdy = pty - pay;
-    const plen = Math.hypot(pdx, pdy) || 1;
-    pdx /= plen;
-    pdy /= plen;
-    const ppx = -pdy,
-      ppy = pdx;
-    const pcx = pax + (ptx - pax) * 0.2,
-      pcy = pay + (pty - pay) * 0.62;
-    const pwB = 0.032 * B,
-      pwM = 0.03 * B;
-    ctx.beginPath();
-    ctx.moveTo(pax + ppx * pwB, pay + ppy * pwB);
-    ctx.quadraticCurveTo(pcx + ppx * pwM, pcy + ppy * pwM, ptx, pty);
-    ctx.quadraticCurveTo(pcx - ppx * pwM, pcy - ppy * pwM, pax - ppx * pwB, pay - ppy * pwB);
-    ctx.closePath();
-    paint();
 
-    // ---- arms: upper (bicep swell) → forearm → mitt hand.
-    limb(SHL, ELL, 0.042, 0.03, 0.007);
-    limb(ELL, HAL, 0.028, 0.018, 0.006);
-    hand(ELL, HAL);
-    limb(SHR, ELR, 0.042, 0.03, 0.007);
-    limb(ELR, HAR, 0.028, 0.018, 0.006);
-    hand(ELR, HAR);
+    // ---- twin-tails (first: behind everything): tapered shard strips of
+    // three angular quads each, zigzagging from a side-of-head base out to
+    // the spring-lagged tip, plus a bright scrunchie diamond at the base.
+    const tail = (side: number, tipI: number): void => {
+      const bx = hx + side * r * 0.9,
+        by = hy - r * 0.05;
+      const tx = X(tipI),
+        ty = Y(tipI);
+      let dx = tx - bx,
+        dy = ty - by;
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      const px = -dy,
+        py = dx;
+      const zig = side * 0.028 * B; // spine zigzag → angular S-curve
+      const p1x = bx + dx * len * 0.38 + px * zig,
+        p1y = by + dy * len * 0.38 + py * zig;
+      const p2x = bx + dx * len * 0.72 - px * zig * 0.7,
+        p2y = by + dy * len * 0.72 - py * zig * 0.7;
+      const w0 = 0.034 * B,
+        w1 = 0.028 * B,
+        w2 = 0.016 * B;
+      // prettier-ignore
+      F(2,
+        bx - px * w0, by - py * w0,
+        p1x - px * w1, p1y - py * w1,
+        p1x + px * w1, p1y + py * w1,
+        bx + px * w0, by + py * w0);
+      // prettier-ignore
+      F(1,
+        p1x - px * w1, p1y - py * w1,
+        p2x - px * w2, p2y - py * w2,
+        p2x + px * w2, p2y + py * w2,
+        p1x + px * w1, p1y + py * w1);
+      F(2, p2x - px * w2, p2y - py * w2, tx, ty, p2x + px * w2, p2y + py * w2);
+      F(3, bx, by - 0.03 * B, bx + 0.024 * B, by, bx, by + 0.03 * B, bx - 0.024 * B, by);
+    };
+    tail(-1, TAILL);
+    tail(1, TAILR);
 
-    // ---- legs: thigh → calf (swell) → sneaker.
-    limb(HIPL, KNL, 0.06, 0.04, 0.008);
-    limb(KNL, FTL, 0.038, 0.018, 0.011);
+    // ---- hair back-mass: an angular dark slab around the skull, drawn
+    // before the head facets so it silhouettes out around them as volume.
+    // prettier-ignore
+    F(0,
+      hx - r * 1.15, hy - r * 0.1,
+      hx - r * 0.8 - tilt * 0.5, hy - r * 1.05,
+      hx - tilt * 0.6, hy - r * 1.3,
+      hx + r * 0.8 - tilt * 0.5, hy - r * 1.0,
+      hx + r * 1.1, hy - r * 0.05,
+      hx + r * 0.85, hy + r * 0.75,
+      hx - r * 0.9, hy + r * 0.8);
+
+    // ---- legs: long slim thigh → shin prisms, cuff band, shoe wedge.
+    limb(HIPL, KNL, 0.054, 0.036, 2, 1);
+    limb(KNL, FTL, 0.034, 0.014, 2, 1);
+    cuff(KNL, FTL);
     shoe(KNL, FTL, -1);
-    limb(HIPR, KNR, 0.06, 0.04, 0.008);
-    limb(KNR, FTR, 0.038, 0.018, 0.011);
+    limb(HIPR, KNR, 0.054, 0.036, 2, 0);
+    limb(KNR, FTR, 0.034, 0.014, 2, 0);
+    cuff(KNR, FTR);
     shoe(KNR, FTR, 1);
 
+    // ---- torso: chest split at the sternum into lit/shadow planes, a waist
+    // plate and a pelvis wedge — an angular hourglass (narrow shoulders,
+    // pinched waist, wider hips).
+    const shW = 0.096 * B,
+      waistW = 0.05 * B,
+      hipW = 0.098 * B;
+    const [lsx, lsy] = at(1.02, -shW);
+    const [rsx, rsy] = at(1.02, shW);
+    const [cpx, cpy] = at(1.08, 0); // collar point
+    const [wlx, wly] = at(0.42, -waistW);
+    const [wrx, wry] = at(0.42, waistW);
+    const [sbx, sby] = at(0.42, 0); // sternum bottom
+    F(2, cpx, cpy, lsx, lsy, wlx, wly, sbx, sby); // chest, lit plane
+    F(1, cpx, cpy, rsx, rsy, wrx, wry, sbx, sby); // chest, shadow plane
+    const [hlx, hly] = at(0.04, -hipW);
+    const [hrx, hry] = at(0.04, hipW);
+    F(1, wlx, wly, wrx, wry, hrx, hry, hlx, hly); // waist plate
+    const [pbx, pby] = at(-0.12, 0);
+    F(0, hlx, hly, hrx, hry, pbx, pby); // pelvis wedge
+    // shoulder caps: small diamonds over the arm sockets
+    const cap = (i: number, s: number): void => {
+      const x = X(i),
+        y = Y(i);
+      // prettier-ignore
+      F(s,
+        x + ux * 0.032 * B, y + uy * 0.032 * B,
+        x + vx * 0.05 * B, y + vy * 0.05 * B,
+        x - ux * 0.032 * B, y - uy * 0.032 * B,
+        x - vx * 0.05 * B, y - vy * 0.05 * B);
+    };
+    cap(SHL, 2);
+    cap(SHR, 1);
+
+    // ---- pleated skirt: a SHORT triangle fan off the hip line — each pleat
+    // is one hard-edged triangle, alternating lit/shadow shades, ending in a
+    // zigzag handkerchief hem. The hem chases the lagged SKIRT point so it
+    // sways opposite lateral moves and flares/lifts a touch on drops,
+    // bounces and big poses — while staying well above the knee so the leg
+    // pose still reads.
+    {
+      const skm = 0.05 * B;
+      const hemOff = Math.max(-skm, Math.min(skm, X(SKIRT) - plx));
+      const vLag = Y(SKIRT) - (ply + 0.1 * B);
+      const lift = Math.min(0.045 * B, Math.abs(hemOff) * 0.8 + Math.abs(vLag) * 0.7);
+      const hemW = 0.16 * B + lift;
+      const drop = 0.12 * B - lift * 0.6;
+      const [fx, fy] = at(0.2, 0); // fan origin, just above the pelvis
+      const pts: number[] = [];
+      for (let k = 0; k <= 6; k++) {
+        let x: number, y: number;
+        if (k === 0 || k === 6) {
+          // hem corners ride up to the hip line so the fan roots at the hips
+          const side = k === 0 ? -1 : 1;
+          [x, y] = at(0.06, side * (hipW + 0.02 * B) + hemOff * 0.3);
+        } else {
+          const d2 = drop + (k % 2 === 1 ? 0.022 * B : 0); // pleat points dip
+          [x, y] = at(-d2 / ul, hemW * ((k - 3) / 2) + hemOff);
+        }
+        pts.push(x, y);
+      }
+      for (let k = 0; k < 6; k++) {
+        F(k % 2 === 0 ? 2 : 0, fx, fy, pts[k * 2], pts[k * 2 + 1], pts[k * 2 + 2], pts[k * 2 + 3]);
+      }
+    }
+
+    // ---- arms: slim prisms + hand diamonds.
+    limb(SHL, ELL, 0.03, 0.021, 2, 1);
+    limb(ELL, HAL, 0.02, 0.013, 2, 1);
+    hand(ELL, HAL, 2);
+    limb(SHR, ELR, 0.03, 0.021, 2, 0);
+    limb(ELR, HAR, 0.02, 0.013, 2, 0);
+    hand(ELR, HAR, 1);
+
+    // ---- neck + faceted head.
+    limb(SH, HEADB, 0.024, 0.02, 1, 1);
+    const chX = hx + tilt * 0.15,
+      chY = hy + r * 0.98; // chin
+    const crX = hx - tilt * 0.25,
+      crY = hy - r * 1.02; // crown top
+    // skull: a lit front plane and a shadow back plane split chin→crown
+    // prettier-ignore
+    F(3,
+      chX, chY,
+      hx + r * 0.78, hy + r * 0.45,
+      hx + r * 0.92, hy - r * 0.3,
+      hx + r * 0.5 - tilt * 0.2, hy - r * 0.95,
+      crX, crY);
+    // prettier-ignore
+    F(1,
+      chX, chY,
+      crX, crY,
+      hx - r * 0.55 - tilt * 0.2, hy - r * 0.92,
+      hx - r * 0.9, hy - r * 0.28,
+      hx - r * 0.74, hy + r * 0.5);
+    // bangs: a zigzag fringe plate across the brow
+    // prettier-ignore
+    F(2,
+      hx - r * 0.88, hy - r * 0.15,
+      hx - r * 0.45, hy + r * 0.1,
+      hx - r * 0.1 + tilt * 0.2, hy - r * 0.2,
+      hx + r * 0.35, hy + r * 0.15,
+      hx + r * 0.85, hy - r * 0.2,
+      hx + r * 0.55 - tilt * 0.3, hy - r * 0.9,
+      crX, crY,
+      hx - r * 0.6 - tilt * 0.3, hy - r * 0.88);
+    // side locks framing the face: two long thin triangles
+    F(1, hx - r * 0.95, hy - r * 0.2, hx - r * 0.5, hy + r * 0.15, hx - r * 1.05, hy + r * 1.5);
+    F(1, hx + r * 0.95, hy - r * 0.2, hx + r * 1.05, hy + r * 1.45, hx + r * 0.5, hy + r * 0.2);
+    // ahoge: one thin triangle wisp from the crown to its wobbling tip
+    F(2, crX - 0.009 * B, crY + 0.004 * B, X(AHOGE), Y(AHOGE), crX + 0.009 * B, crY);
+
+    // ---- paint the facet list ---------------------------------------------
+    ctx.save();
+    // Skips (never draws) any facet with a non-finite vertex — NaN guard for
+    // the idle/lead-in cases and half-initialized spring state.
+    const trace = (p: number[]): boolean => {
+      for (let i = 0; i < p.length; i++) if (!Number.isFinite(p[i])) return false;
+      ctx.beginPath();
+      ctx.moveTo(p[0], p[1]);
+      for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
+      ctx.closePath();
+      return true;
+    };
+    if (mode === 'body') {
+      // Stepped facet fills, near-black up to a dark accent tint, so the flat
+      // planes read as a shaded low-poly mesh (still very dark overall).
+      const ink: RGB = [5, 6, 12];
+      const shades = [0.05, 0.12, 0.2, 0.3].map((t) => rgba(mix(ink, color, t), 1));
+      for (const f of facets) {
+        if (!trace(f.p)) continue;
+        ctx.fillStyle = shades[f.s];
+        ctx.fill();
+      }
+      // The key low-poly cue: every facet edge stroked as a thin additive
+      // neon wireframe over the dark fills.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineJoin = 'miter';
+      ctx.miterLimit = 3;
+      ctx.strokeStyle = rgba(color, Math.min(1, alpha));
+      ctx.lineWidth = 1;
+      for (const f of facets) if (trace(f.p)) ctx.stroke();
+    } else {
+      // 'glow': fat additive rim around every facet (interiors get covered by
+      // the body pass). 'trail': the same wireframe, thin and faint.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = rgba(color, alpha);
+      ctx.lineWidth = mode === 'glow' ? Math.max(1, rim) : 1;
+      for (const f of facets) if (trace(f.p)) ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -1058,9 +1320,9 @@ export class AttractBackground {
       bob = 0.015 * BODY_H * (0.5 + 0.5 * Math.sin(time * 2.4));
     }
 
-    this.solve(pose);
-    // Bake the beat bounce into every joint's y.
-    for (let i = 0; i < JOINTS; i++) this.skel[i * 2 + 1] -= bob;
+    // The beat bounce is baked into the root inside solve() so the hair and
+    // skirt springs react to it.
+    this.solve(pose, time, bob);
 
     // Squash-and-stretch about the foot line (hips lead, so it reads as groove).
     const sy = 1 + 0.03 * Math.sin(PI * phase);
@@ -1070,20 +1332,22 @@ export class AttractBackground {
     ctx.scale(sx, sy);
     ctx.translate(-CX, -FOOT_Y);
 
-    // Ghost-trail afterimages behind the body (older = fainter, offset).
+    // Ghost-trail afterimages behind the body (older = fainter, offset) —
+    // faceted wireframe replays of old skeleton frames.
     const n = this.history.length;
-    if (n > 11) this.drawTrail(this.history[n - 11], this.pal.accentA, 0.12, -3);
-    if (n > 6) this.drawTrail(this.history[n - 6], this.pal.accentB, 0.25, 3);
+    if (n > 11) this.drawTrail(this.history[n - 11], this.pal.accentA, 0.18, -3);
+    if (n > 6) this.drawTrail(this.history[n - 6], this.pal.accentB, 0.3, 3);
 
-    // Rim glow, then the pure-black silhouette on top.
+    // Rim glow, then the shaded low-poly body (dark facet fills + neon
+    // wireframe edges that pulse on the beat) on top.
     this.drawBody(
       this.skel,
       'glow',
       this.pal.accentA,
-      0.5 * (1 + 1.5 * kick),
+      0.35 * (1 + 1.5 * kick),
       0.024 * BODY_H * (1 + 0.8 * kick),
     );
-    this.drawBody(this.skel, 'black', this.pal.accentA, 1, 0);
+    this.drawBody(this.skel, 'body', this.pal.accentA, 0.5 + 0.4 * kick, 0);
     ctx.restore();
 
     // Hand-burst sparkles on the sky-punch beats (1 & 3).
@@ -1091,7 +1355,7 @@ export class AttractBackground {
       const idx = ((Math.floor(beat) % 8) + 8) % 8;
       if ((idx === 0 || idx === 2) && phase < 0.22) {
         const hx = this.skel[HAR * 2];
-        const hy = this.skel[HAR * 2 + 1] - bob;
+        const hy = this.skel[HAR * 2 + 1]; // bob is already baked into the skeleton
         const life = 1 - phase / 0.22;
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
