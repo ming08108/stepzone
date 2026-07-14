@@ -269,6 +269,25 @@ const MOCAP_SWAY = 0; // pin the pelvis on the pad: the clip's root WANDERS arou
 // (stepping, weight sway) lives in the joints RELATIVE to the pelvis, so pinning
 // the root keeps her centred on the pad while the body still moves naturally.
 
+// CHART-REACTIVE GROOVE — the fixed mocap loop reads as "canned" during the
+// clip's own calm stretches, so the body does a knee-bend bounce on every note and
+// anticipates the next one, scaled by how busy the chart is around now (a lookahead
+// over the real beatmap). The bounce sinks the whole pelvis toward the pad; the
+// foot-IK clamps the planted feet to the floor, so the KNEES absorb the dip while
+// the torso and arms stay upright and undistorted (no per-segment amplitude scaling
+// — that broke the arms before; no torso slouch — an upper-body-only dip did that).
+// y is DOWN, so the dip is +y (pelvis sinks on the beat) and the anticipation coil
+// is -y (a small pre-note rise that releases into the hit).
+const GROOVE_WIN = 2; // beats of lookahead for the local note-density energy
+const GROOVE_DENSITY_REF = 2; // notes/beat that reads as full energy (caps at 1)
+const GROOVE_ENERGY_LP = 0.08; // low-pass on the density envelope (per frame)
+const GROOVE_HIT_K = 5.5; // decay rate of the per-note dip pulse (in beats)
+const GROOVE_BEAT_K = 4.5; // decay of the steady on-beat pulse between notes
+const GROOVE_MIN = 0.022; // knee-bend bounce at rest energy (fraction of leg length)
+const GROOVE_MAX = 0.06; // knee-bend bounce at full energy
+const GROOVE_ANTIC = 0.34; // beats before a note the anticipation coil starts
+const GROOVE_ANTIC_AMT = 0.5; // coil rise as a fraction of the dip amplitude
+
 /** Circular / arithmetic mean of a per-frame float over the whole clip — the
  *  neutral the yaw/sway are measured against, so she centres on the viewer.
  *  Computed once at module load (deterministic, no per-frame cost). */
@@ -455,6 +474,10 @@ export class AttractDancer {
   // ---- accents fired by note hits (bursts + glow only, not body pose) ----
   private hitBeat = -1e9;
   private hitCols = 0;
+
+  // ---- chart-reactive upper-body groove (see GROOVE_* consts) ----
+  private energyLP = 0.4; // low-passed local note density (0..1)
+  private grooveDip = 0; // upper-body bounce this frame (fraction of leg length, +y down)
 
   // ---- dance-pad panel flashes (beat each panel was last stepped on) ----
   private readonly padFlash = new Float64Array(4).fill(-1e9);
@@ -667,6 +690,9 @@ export class AttractDancer {
     // ---- 1. scheduler: fire hit accents, command footsteps ------------------
     if (chart) this.scheduleChart(beat);
     else if (valid) this.scheduleSynth(beat);
+
+    // ---- 1b. chart-reactive upper-body groove (density lookahead + anticipation)
+    this.updateGroove(valid, chart, clock, phase);
 
     // ---- 2. feet: chart panel targets (locked plants + minJerk/halfSine
     //        swings) + the per-foot mocap→chart-target blend weight -----------
@@ -969,6 +995,50 @@ export class AttractDancer {
     }
   }
 
+  /** Chart-reactive upper-body groove. Looks AHEAD over the beatmap to gauge how
+   *  busy the music is around now (note density → an energy envelope), then drives
+   *  a rigid vertical bounce of the torso/arms/head (applied in solve3D): a dip
+   *  pulse on each note hit, a small steady on-beat pulse between notes, and an
+   *  anticipation coil that rises just before the next note and releases into it.
+   *  Amplitude scales with energy, so the clip's calm stretches still groove when
+   *  the chart is busy and settle when it rests. Pelvis/legs/feet are untouched. */
+  private updateGroove(valid: boolean, chart: boolean, beat: number, phase: number): void {
+    if (!valid || !Number.isFinite(beat)) {
+      this.grooveDip = 0;
+      return;
+    }
+    // Local note density over a short lookahead window → energy in [0,1].
+    let energy: number;
+    let nextBeat: number;
+    if (chart) {
+      const steps = this.steps;
+      let i = this.hitIdx + 1;
+      nextBeat = i < steps.length ? steps[i].beat : beat + 1;
+      let c = 0;
+      while (i < steps.length && steps[i].beat < beat + GROOVE_WIN) {
+        c++;
+        i++;
+      }
+      energy = clamp(c / GROOVE_WIN / GROOVE_DENSITY_REF, 0, 1);
+    } else {
+      // Synth attract pattern: ~one note per beat, steady moderate energy.
+      nextBeat = Math.floor(beat) + 1;
+      energy = 0.6;
+    }
+    this.energyLP += (energy - this.energyLP) * GROOVE_ENERGY_LP;
+    const amp = GROOVE_MIN + (GROOVE_MAX - GROOVE_MIN) * clamp(this.energyLP, 0, 1);
+    // Dip: a decaying pulse on every note hit + a steady on-beat pulse so the
+    // groove never fully flatlines between sparse notes.
+    const bd = Math.max(0, beat - this.hitBeat);
+    const hit = Number.isFinite(bd) ? Math.exp(-GROOVE_HIT_K * bd) : 0;
+    const pulse = Math.exp(-GROOVE_BEAT_K * phase);
+    // Anticipation coil (lookahead): rise as the next note nears, release on hit.
+    const toNext = nextBeat - beat;
+    const coil = toNext > 0 && toNext < GROOVE_ANTIC ? 1 - toNext / GROOVE_ANTIC : 0;
+    const dip = amp * (0.7 * hit + 0.3 * pulse) - amp * GROOVE_ANTIC_AMT * coil * coil;
+    this.grooveDip = Number.isFinite(dip) ? dip : 0;
+  }
+
   // ---- 3D skeleton solve --------------------------------------------------------
 
   private readonly sp4 = new Float64Array(4); // springTail out: px, py, vx, vy
@@ -1042,6 +1112,14 @@ export class AttractDancer {
     let pelZ = (md[48] - MEAN_HIPZ) * legPx * MOCAP_SWAY;
     const lowestFootYoff = Math.max(moff[11 * 3 + 1], moff[14 * 3 + 1]); // y DOWN
     let pelY = FOOT_Y - L_SHOE * B - lowestFootYoff;
+    // Chart-reactive bounce: sink the WHOLE body toward the pad on the beat (y is
+    // DOWN, so +grooveDip lowers the pelvis). The planted feet are pinned to the
+    // floor by the foot-IK clamp below, so the knees absorb the dip — a real
+    // knee-bend groove, not a torso slouch — and the torso/arms stay upright and
+    // undistorted. Applied BEFORE the reach clamp so an anticipation lift (a small
+    // pelvis RISE, -grooveDip) that would over-extend a planted leg is corrected.
+    const grooveY = (Number.isFinite(this.grooveDip) ? this.grooveDip : 0) * legPx;
+    pelY += grooveY;
 
     // HARD pelvis reach clamp: a planted leg must never over-extend to its chart
     // panel — drop the pelvis (increase pelY) so the worst planted leg reaches.
@@ -1118,7 +1196,14 @@ export class AttractDancer {
       // Blend the mocap ankle toward the chart target by the per-foot weight.
       const w = clamp(this.footBlend[f], 0, 1);
       const tx = s3[ftI * 3] + (this.footX[f] - s3[ftI * 3]) * w;
-      const ty = s3[ftI * 3 + 1] + (this.footYv[f] - s3[ftI * 3 + 1]) * w;
+      // The groove dipped the WHOLE skeleton (pelY += grooveY), including this
+      // mocap ankle. Undo that dip on the foot's mocap reference so the feet stay
+      // grounded while the hips sink — the knee then absorbs the bounce. Planted
+      // feet track the fixed chart target (already bounce-independent); this keeps
+      // the idle (low-blend) feet planted on the pad too, instead of riding the
+      // body down off the front edge.
+      const mFootY = s3[ftI * 3 + 1] - grooveY;
+      const ty = mFootY + (this.footYv[f] - mFootY) * w;
       const tz = s3[ftI * 3 + 2] + (this.footZ[f] - s3[ftI * 3 + 2]) * w;
       let dx = tx - hx;
       let dy = ty - hy;
