@@ -212,6 +212,13 @@ fn fs(
   // Re-encode to sRGB for textured prims (linear lighting → sRGB store);
   // flat-color prims keep the renderer's original non-linear passthrough.
   if (useTex) { lit = pow(max(lit, vec3f(0.0)), vec3f(1.0 / 2.2)); }
+  // Post-clamp neon GRADE: recolour the FINAL pixel toward the environment hue
+  // (magenta on one side, cyan on the other). Applied here — after the exposure
+  // clamp — so no brightness choice can wash the tint out (earlier the ~1.0
+  // ceiling ate half of it, leaving a near-grey torso). Normalized by its max
+  // channel so it only shifts hue, never darkens.
+  let em = max(max(envCol.r, envCol.g), envCol.b);
+  lit = lit * mix(vec3f(1.0), envCol / em, 0.3);
 
   let outA = select(1.0, alpha, isBlend) * frame.tint.a;
   return vec4f(lit, outA);
