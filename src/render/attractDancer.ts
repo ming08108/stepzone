@@ -6,52 +6,40 @@
  * opaque flat-shaded body facets, `additive` holds the neon silhouette edges,
  * rim-glow and hand-burst spikes.
  *
- * MOTION MODEL (first principles, not authored angle curves):
+ * MOTION MODEL (one coherent source — real full-body dance mocap):
  *
- *  1. CENTRE OF MASS is the character. A weighted body carries momentum, so
- *     every visible motion is the shadow of the CoM plus a family of CLOSED-FORM
- *     springs — nothing is numerically integrated, so a 0.1s hitch or a tempo
- *     warp can never blow the state up. Physics runs in SECONDS; the chart runs
- *     in BEATS. A low-passed `bps` converts between them, so height/hang emerge
- *     from tempo rather than being keyed.
+ *  1. THE WHOLE BODY (torso, arms, head, legs) is reconstructed every frame from
+ *     one baked full-body dance clip (mocapDance.ts): 15 joints as positions
+ *     relative to the hips, in a pelvis heading-aligned frame, leg-length units.
+ *     We yaw-damp the clip so she faces the viewer, ground the LOWEST foot to the
+ *     pad floor plane (the bounce emerges from foot/pelvis relative motion, never
+ *     a float), and map the joints onto our skel3 with an L/R cross (she faces
+ *     us, so mocap-left reads as screen-right).
  *
- *  2. LATERAL / DEPTH CoM is an UNDER-damped spring (it overshoots = the vault
- *     read) chasing an anticipatory support-weight target: as a foot swings the
- *     weight commits onto the standing leg, scaled by the step gap so fast
- *     same-side steps become taps. VERTICAL CoM is a critically-damped bob into
- *     each beat. A JUMP swaps both for an analytic ballistic parabola seeded
- *     continuously from the spring state at takeoff; the fall speed is fed back
- *     into the landing spring as its initial velocity, so the squash emerges.
+ *  2. FOOT-IK layer: the scheduler + per-foot state machine still produce a
+ *     plant/swing target on the chart's arrow panels, landing exactly on the note
+ *     beat (StepParity panels, crossovers included). Each foot is blended from its
+ *     MOCAP position toward that chart target (full while a step owns the foot,
+ *     easing to a resting blend between steps), then the leg is re-solved with the
+ *     analytic two-bone IK (law of cosines, forward knee pole). A HARD pelvis
+ *     reach clamp drops the pelvis so a planted leg never over-extends. A chart
+ *     JUMP is simply a two-foot step through this same layer.
  *
- *  3. FEET are a tiny per-foot state machine (stance / swing). A swing is a
- *     minimum-jerk horizontal glide + half-sine vertical lift over a beat
- *     window that lands exactly on the note beat, on the exact StepParity panel
- *     (crossovers included). Jumps swing both feet and tuck the knees in flight.
+ *  3. THE DANCEPAD is a physical 3D slab in the SAME worldspace, projected through
+ *     the same camera: a dark platform on the floor plane with four arrow panels
+ *     at the foot-target spots, lit on the beat they are stepped.
  *
- *  4. LEGS keep an analytic two-bone IK (law of cosines, crossover-aware knee
- *     pole, soft knee floor) onto the animated ankle; a HARD pelvis-reach clamp
- *     drops the pelvis so the worst planted leg always stays reachable.
- *
- *  5. TORSO leans into the CoM's lateral acceleration (≈atan(aₓ/G)) and pitches
- *     with forward accel; the shoulder line counter-twists against pelvis yaw.
- *     ARMS are a sparse accent vocabulary (scalar set-points chosen by the
- *     scheduler) plus a staggered shoulder→elbow→forearm spring chain for
- *     follow-through, driven primarily by the contralateral leg phase, with a
- *     between-steps groove orbit so they never dangle. HEAD is a damped look +
- *     beat nod + slight counter to the torso.
- *
- *  6. SECONDARY MOTION — twin-tails, ahoge and skirt hem — ride simple damped
+ *  4. SECONDARY MOTION — twin-tails, ahoge and skirt hem — ride simple damped
  *     springs layered after the body solve (standard cloth/hair smoothing).
  *
- * With no chart the scheduler synthesizes an 8-beat L/D/R/U(+jump) pattern;
- * with no beat (NaN/negative lead-in) the phase clock runs off `time`.
- * Everything is deterministic (no Math.random / Date.now) and framerate-
- * independent (closed-form springs, dt clamped ≤ 0.1s); nothing allocates per
- * frame, and every emitted value is guarded against non-finite (skel3 also
- * feeds the VRM aim-retarget — a single NaN would poison it).
+ * With no chart the scheduler synthesizes an 8-beat L/D/R/U pattern; with no beat
+ * (NaN/negative lead-in) the clocks run off `time`. Everything is deterministic
+ * (no Math.random / Date.now) and framerate-independent (dt clamped ≤ 0.1s);
+ * nothing allocates per frame, and every emitted value is guarded against
+ * non-finite (skel3 also feeds the VRM aim-retarget — one NaN would poison it).
  */
 
-import { MOCAP_DIRS, MOCAP_FRAMES } from './mocapDance';
+import { MOCAP_DIRS, MOCAP_FRAMES, MOCAP_STRIDE } from './mocapDance';
 
 // ---- design space (matches attractBackground.ts) ---------------------------
 
@@ -90,11 +78,6 @@ function lerp(a: number, b: number, t: number): number {
 function clamp(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
 }
-function smooth01(x: number): number {
-  const t = clamp(x, 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
 /** The 4 variants, keyed by the `variant` ctor arg (0..3). */
 const PALETTES: readonly Palette[] = [
   {
@@ -143,34 +126,9 @@ const PALETTES: readonly Palette[] = [
   },
 ];
 
-// ---- physics tunables --------------------------------------------------------
-// Lengths in design px, time in SECONDS. The chart schedule is in beats; a
-// low-passed `bps` (this.bps) converts. These are the knobs to tune the feel.
-
-/** Gravity, px/s². Jump apex h = G·T²/8 emerges from the airtime T, so this
- *  sets how a jump reads at a given tempo (bigger G ⇒ snappier, lower hang). */
-const G = 2000;
-
-/** CoM lateral (x) "vault" spring: under-damped so the weight OVERSHOOTS the
- *  support foot a few px each step — the read that sells the weight transfer. */
-const COM_OMEGA = 12; // rad/s
-const COM_ZETA = 0.62; // <1 ⇒ overshoot
-/** CoM depth (z) spring: softer, so U/D steps read as a pitch lean + hip list
- *  rather than a hard slide toward/away from the camera. */
-const COM_OMEGA_Z = 10;
-const COM_ZETA_Z = 0.72;
-
-/** Critically-damped spring half-lives (s). Staggered down the arm so the
- *  shoulder leads, the elbow trails and the forearm whips in last = a limp,
- *  weighted follow-through instead of one rigid unit arriving at once. */
-const HL_BOB = 0.09; // vertical beat bob
-const HL_LEAN = 0.1;
-const HL_PITCH = 0.12;
-const HL_YAW = 0.14;
-const HL_TWIST = 0.12;
-const HL_SIDE = 0.14;
-const HL_LIST = 0.1;
-const HL_HEAD = 0.12; // head look / nod / roll
+// ---- tempo / footwork tunables ----------------------------------------------
+// Lengths in design px. The chart schedule is in beats; a low-passed `bps`
+// (this.bps) tracks local tempo.
 
 /** Local tempo tracking: bps = lowpass(Δbeat/Δt), clamped to a sane band. */
 const BPS_LP = 0.12;
@@ -180,13 +138,13 @@ const BPS_MAX = 8;
 /** Foot-swing window (beats), clamped shorter by the gap to the next note so
  *  fast streams stay crisp. A step lands exactly on its note beat. */
 const STEP_SWING_BEATS = 0.42;
-/** Jump budget (beats): a load crouch, then the airtime, landing on the beat.
- *  Airtime drives apex height physically (h = G·T²/8), so it must be long enough
- *  to read: ~1.1 beats ≈ 0.5s at 128 BPM → ~60px apex (vs a 0.5-beat twitch that
- *  barely left the floor). Dense charts compress it via windupFor, so fast songs
- *  naturally become quick low hops — correct. */
-const JUMP_LOAD_BEATS = 0.24;
-const JUMP_AIR_BEATS = 1.1;
+
+/** Foot-IK blend: how strongly a foot is pulled from its MOCAP position toward
+ *  the chart panel target. 1 while a step owns the foot; between steps it eases
+ *  toward FOOT_CHART_REST so the planted foot mostly holds its last panel while
+ *  the leg still breathes with the mocap. FOOT_BLEND_RATE = ease speed (1/s). */
+const FOOT_CHART_REST = 0.35;
+const FOOT_BLEND_RATE = 9;
 
 // ---- physics helpers (pure, allocation-free) --------------------------------
 
@@ -279,37 +237,95 @@ const ZSKIN = 0,
   ZEYE = 5,
   ZBLUSH = 6;
 
-// Bone lengths / widths as fractions of BODY_H — cute anime proportions.
-const L_TORSO = 0.3,
-  L_NECK = 0.045,
-  R_HEAD = 0.08,
-  W_SHOULDER = 0.1,
-  W_HIP = 0.082;
-const L_UARM = 0.155,
-  L_FARM = 0.125,
-  L_THIGH = 0.25,
+// Proportions as fractions of BODY_H — cute anime proportions. The full-body
+// mocap supplies every joint POSITION (in leg-length units), so only the head
+// radius and the leg lengths (the leg-length unit + the two-bone IK) are needed
+// here; the torso/arm bone lengths are implicit in the mocap and no longer used.
+const R_HEAD = 0.08;
+const L_THIGH = 0.25,
   L_SHIN = 0.24,
   L_SHOE = 0.025;
 
-// ---- mocap upper body (Bandai Namco dance dataset, CC BY-NC) -----------------
-// The arms/neck/head are driven by baked dance mocap (chest-local direction
-// vectors) grafted onto the physics torso frame; the legs/CoM/jump stay
-// procedural (panel-accurate). BEAT SYNC: the clip's own tempo (found by
-// autocorrelating its motion energy) is 13 frames/beat, and the baked segment is
-// a whole 40 beats (520 frames); advancing exactly MOCAP_FPB frames per musical
-// beat locks the dance to the beat and loops on a beat boundary with no drift, so
-// the arms speed up / slow down WITH the song. MOCAP_PHASE nudges the downbeat.
-const MOCAP_FPB = 13; // baked frames per musical beat (= the clip's detected tempo)
+// ---- full-body dance mocap (Bandai Namco dance dataset, CC BY-NC) -------------
+// ONE baked full-body clip drives the entire body (mocapDance.ts: 15 joints as
+// hip-relative positions in a pelvis heading-aligned frame, leg-length units,
+// then [heading,hipY,hipX,hipZ]). BEAT SYNC: advancing exactly MOCAP_FPB frames
+// per musical beat locks the dance to the beat and loops with no drift.
+//
+// SIGN / MAPPING CONSTS — the coordinate signs are hard to get right without
+// seeing the render; the parent verifies visually and flips these from captures.
+// Wire them here structurally; do not over-tune blind.
+const MOCAP_FPB = 6.5; // baked frames advanced per musical beat (520 frames loop)
 const MOCAP_PHASE = 0; // beats of phase offset to align the clip's accent to the beat
 const MOCAP_SEAM = 12; // frames of loop cross-blend hiding the segment seam
-// Arm amplitude: blend each mocap ARM direction partway back toward a relaxed
-// hang (chest-local down). <1 calms the dance — big overhead flings shrink to
-// subtler grooves — without changing its timing or beat-lock. Head/neck are
-// left at full mocap so the head still reads alive.
-const MOCAP_AMP = 0.55;
-const MOCAP_SR = 1; // sign of the across (right) axis remap
-const MOCAP_SF = 1; // sign of the forward axis remap
-const MOCAP_SWAP = 1; // 1 = mocap-L feeds screen-RIGHT arm (crossed), 0 = direct
+const MOCAP_SR = 1; // sign of the mocap +right (screenRight) axis remap
+const MOCAP_SF = 1; // sign of the mocap +fwd (screenFwd) axis remap
+const MOCAP_SWAP = 1; // 1 = mocap-L → our screen-RIGHT joints (crossed), 0 = direct
+const MOCAP_YAW_DAMP = 0.35; // fraction of the clip's heading kept (keeps her ~facing us)
+const MOCAP_SWAY = 0; // pin the pelvis on the pad: the clip's root WANDERS around the
+// capture volume (large translation), which flung her off-screen; the real dance
+// (stepping, weight sway) lives in the joints RELATIVE to the pelvis, so pinning
+// the root keeps her centred on the pad while the body still moves naturally.
+
+/** Circular / arithmetic mean of a per-frame float over the whole clip — the
+ *  neutral the yaw/sway are measured against, so she centres on the viewer.
+ *  Computed once at module load (deterministic, no per-frame cost). */
+function clipMean(k: number): number {
+  let s = 0;
+  for (let f = 0; f < MOCAP_FRAMES; f++) s += MOCAP_DIRS[f * MOCAP_STRIDE + k];
+  return s / MOCAP_FRAMES;
+}
+const MEAN_HEADING = (() => {
+  let sx = 0;
+  let sy = 0;
+  for (let f = 0; f < MOCAP_FRAMES; f++) {
+    const h = MOCAP_DIRS[f * MOCAP_STRIDE + 45];
+    sx += Math.cos(h);
+    sy += Math.sin(h);
+  }
+  return Math.atan2(sy, sx);
+})();
+const MEAN_HIPX = clipMean(47);
+const MEAN_HIPZ = clipMean(48);
+
+/** skel3 joint index → source mocap joint index (−1 = derived/accessory). The
+ *  L/R cross: the dancer faces the viewer, so mocap-LEFT joints (3/4/5 arm,
+ *  9/10/11 leg) feed our screen-RIGHT indices and vice-versa (MOCAP_SWAP=1). */
+function buildMocapMap(swap: number): Int8Array {
+  const m = new Int8Array(JOINTS).fill(-1);
+  m[SH] = 0; // Chest
+  m[HEADB] = 1; // Neck
+  m[HEAD] = 2; // Head
+  if (swap === 1) {
+    m[SHR] = 3;
+    m[ELR] = 4;
+    m[HAR] = 5; // mocap L arm → our R
+    m[SHL] = 6;
+    m[ELL] = 7;
+    m[HAL] = 8; // mocap R arm → our L
+    m[HIPR] = 9;
+    m[KNR] = 10;
+    m[FTR] = 11; // mocap L leg → our R
+    m[HIPL] = 12;
+    m[KNL] = 13;
+    m[FTL] = 14; // mocap R leg → our L
+  } else {
+    m[SHL] = 3;
+    m[ELL] = 4;
+    m[HAL] = 5;
+    m[SHR] = 6;
+    m[ELR] = 7;
+    m[HAR] = 8;
+    m[HIPL] = 9;
+    m[KNL] = 10;
+    m[FTL] = 11;
+    m[HIPR] = 12;
+    m[KNR] = 13;
+    m[FTR] = 14;
+  }
+  return m;
+}
+const MOCAP_MAP = buildMocapMap(MOCAP_SWAP);
 
 // Fixed key light (upper-left) for the flat facet shading.
 const LX = -0.62;
@@ -326,23 +342,14 @@ const PERSP_F = 3.4 * BODY_H;
 const TILT = 0.22;
 const Z_MAX = PERSP_F * 0.45;
 
-// ---- CoM rest geometry (derived from the proportions) -----------------------
+// ---- rest geometry (derived from the proportions) ---------------------------
 
-/** Rest CoM height (px, y DOWN): the pelvis when standing on both feet. */
-const REST_COM_Y = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * BODY_H * 0.985;
-/** Rest hip→ankle vertical span — feet hang this far below the pelvis; a jump
- *  keeps that (feet rise WITH the body) and the tuck subtracts from it. */
-const HANG0 = FOOT_Y - L_SHOE * BODY_H - REST_COM_Y;
-/** Beat-bob depth (px): the CoM sinks this much INTO each count. */
-const BOB_AMP = 0.03 * BODY_H;
-/** Pre-takeoff load crouch depth (px). */
-const JUMP_LOAD = 0.11 * BODY_H;
-/** Base foot swing clearance + in-flight knee tuck (fractions of BODY_H). The
- *  swing clearance gives a visible passing pose (foot lifts + knee flexes) so a
- *  step reads as lift-and-plant, not a slide; the tuck pulls the feet up under
- *  the body at the jump apex so knees bend in the air. */
+/** Rest pelvis height (px, y DOWN): the pelvis when standing on both feet. Used
+ *  only as a non-finite fallback for the mocap-grounded pelvis. */
+const PEL_REST_Y = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * BODY_H * 0.985;
+/** Base foot-swing clearance (fraction of BODY_H): the foot lifts this far in a
+ *  swing so a step reads as lift-and-plant, not a slide. */
 const SWING_LIFT = 0.07;
-const JUMP_TUCK = 0.28;
 
 // ---- footwork constants -------------------------------------------------------
 
@@ -407,56 +414,14 @@ export class AttractDancer {
   private readonly skel = new Float32Array(JOINTS * 2); // projected 2D joints
   private readonly skel3 = new Float64Array(JOINTS * 3); // 3D joints (x,y,z)
   private readonly jscale = new Float32Array(JOINTS); // per-joint perspective scale
-  private readonly sp2 = new Float64Array(2); // spring stepper out: [x, v]
-  private readonly md = new Float64Array(18); // sampled mocap dirs this frame
+  private readonly md = new Float64Array(MOCAP_STRIDE); // sampled mocap frame (49)
+  private readonly moff = new Float64Array(45); // world pelvis-relative offsets (15×xyz)
+  private readonly footBlend = new Float64Array(2); // per-foot mocap→chart-target weight
 
   // ---- timing / tempo ----
   private lastTime = NaN;
   private prevBeat = NaN;
   private bps = 2; // low-passed beats-per-second
-
-  // ---- centre of mass (the weight). Design px, y DOWN so gravity is +y. ----
-  private comX = CX;
-  private comY = REST_COM_Y;
-  private comZ = 0;
-  private comVX = 0;
-  private comVY = 0;
-  private comVZ = 0;
-  private goalX = CX; // this frame's support-weight target (lateral, depth)
-  private goalZ = 0;
-  private wbias = 0; // signed lateral weight bias in [-1,1] (+ = screen-right)
-
-  // ---- jump (ballistic regime) ----
-  private airborne = false;
-  private jpPending = false; // scheduled, not yet taken off
-  private jpTakeoff = -1e9; // beats
-  private jpLand = -1e9;
-  private jpJl = 0; // panel each foot lands on
-  private jpJr = 3;
-  private jT = 0.3; // airtime (s), set at takeoff
-  private jY0 = REST_COM_Y; // takeoff CoM state (continuous seed)
-  private jVY0 = 0;
-  private jX0 = CX;
-  private jZ0 = 0;
-  private jVX0 = 0;
-  private jVZ0 = 0;
-
-  // ---- torso / head pose springs (each a critically-damped scalar) ----
-  private sLean = 0;
-  private sLeanV = 0;
-  private sPitch = 0;
-  private sPitchV = 0;
-  private sYaw = 0; // pelvis yaw
-  private sYawV = 0;
-  private sTwist = 0; // shoulder yaw vs pelvis
-  private sTwistV = 0;
-  private sSide = 0; // ribcage side-shift (contrapposto)
-  private sSideV = 0;
-  private sList = 0; // pelvic list (support hip hikes)
-  private sListV = 0;
-  private sHyaw = 0;
-  private sHyawV = 0;
-  private faceLook = 0; // decaying gaze target toward the last step panel
 
   // ---- feet (0 = screen-left, 1 = screen-right) ----
   private readonly footState = new Uint8Array(2); // 0 stance, 1 swing
@@ -474,7 +439,7 @@ export class AttractDancer {
   private readonly footZ = new Float64Array(2);
   private readonly pt = new Float64Array(2); // panelTarget out (x, z)
   private readonly padPts = new Float64Array(16); // projected arrow outline (x,y)*8
-  private curGapSec = 1; // gap of the active step (scales the weight transfer)
+  private readonly padPlat = new Float64Array(16); // projected pad slab + tile corners
   private lastFoot = 1; // which foot stepped last (U/D alternation)
 
   // ---- chart cursors ----
@@ -613,42 +578,11 @@ export class AttractDancer {
     }
   }
 
-  /** Reset the whole physics state to a neutral two-foot stance (seek/rewind,
-   *  and construction). Springs settle, CoM parks over the feet, feet plant. */
+  /** Reset to a neutral two-foot stance (seek/rewind, and construction): tempo
+   *  parks, both feet plant on the neutral stance, blends go mocap-only. */
   private resetPhysics(): void {
     const B = BODY_H;
     this.bps = 2;
-    this.airborne = false;
-    this.jpPending = false;
-    this.jpTakeoff = -1e9;
-    this.jpLand = -1e9;
-    this.jpJl = 0;
-    this.jpJr = 3;
-    this.jT = 0.3;
-    this.jY0 = REST_COM_Y;
-    this.jVY0 = 0;
-    this.jX0 = CX;
-    this.jZ0 = 0;
-    this.jVX0 = 0;
-    this.jVZ0 = 0;
-    this.comX = CX;
-    this.comY = REST_COM_Y;
-    this.comZ = 0;
-    this.comVX = 0;
-    this.comVY = 0;
-    this.comVZ = 0;
-    this.goalX = CX;
-    this.goalZ = 0;
-    this.wbias = 0;
-    this.curGapSec = 1;
-    this.faceLook = 0;
-    this.sLean = this.sLeanV = 0;
-    this.sPitch = this.sPitchV = 0;
-    this.sYaw = this.sYawV = 0;
-    this.sTwist = this.sTwistV = 0;
-    this.sSide = this.sSideV = 0;
-    this.sList = this.sListV = 0;
-    this.sHyaw = this.sHyawV = 0;
     for (let f = 0; f < 2; f++) {
       const x = CX + (f === 0 ? -1 : 1) * STANCE * B;
       this.plantX[f] = x;
@@ -664,6 +598,7 @@ export class AttractDancer {
       this.footX[f] = x;
       this.footZ[f] = 0;
       this.footYv[f] = FOOT_Y - L_SHOE * B;
+      this.footBlend[f] = 0;
     }
     this.faceTurn = 0;
   }
@@ -679,73 +614,6 @@ export class AttractDancer {
     this.armFarLeft = true;
     this.legFarLeft = true;
     this.resetPhysics();
-  }
-
-  // ---- closed-form spring steppers (stable at ANY dt) ------------------------
-
-  /** Holden exact critically-damped spring. Steps (x, v) toward (goal, goalV)
-   *  over dt with the given half-life; writes [x', v'] into sp2. No overshoot,
-   *  unconditionally stable, framerate-independent. NaN ⇒ snap to goal. */
-  private critStep(
-    x: number,
-    v: number,
-    goal: number,
-    goalV: number,
-    halflife: number,
-    dt: number,
-  ): void {
-    if (!Number.isFinite(x) || !Number.isFinite(v)) {
-      x = goal;
-      v = 0;
-    }
-    const d = (4 * 0.6931471805599453) / (halflife + 1e-5); // 4 ln2 / halflife
-    const c = goal + (4 * goalV) / d;
-    const y = d * 0.5;
-    const j0 = x - c;
-    const j1 = v + j0 * y;
-    const e = Math.exp(-y * dt);
-    let nx = e * (j0 + j1 * dt) + c;
-    let nv = e * (v - j1 * y * dt);
-    if (!Number.isFinite(nx)) {
-      nx = goal;
-      nv = 0;
-    }
-    if (!Number.isFinite(nv)) nv = 0;
-    this.sp2[0] = nx;
-    this.sp2[1] = nv;
-  }
-
-  /** Exact UNDER-damped spring (ζ<1) toward a stationary goal — the CoM vault
-   *  wants a little overshoot. Closed-form (sin/cos of the damped frequency),
-   *  stable at any dt; writes [x', v'] into sp2. NaN ⇒ snap. */
-  private underStep(
-    x: number,
-    v: number,
-    goal: number,
-    omega: number,
-    zeta: number,
-    dt: number,
-  ): void {
-    if (!Number.isFinite(x) || !Number.isFinite(v)) {
-      x = goal;
-      v = 0;
-    }
-    const z = clamp(zeta, 0.05, 0.999);
-    const wd = omega * Math.sqrt(1 - z * z);
-    const e = Math.exp(-z * omega * dt);
-    const cw = Math.cos(wd * dt);
-    const sw = Math.sin(wd * dt);
-    const dsp = x - goal;
-    const bC = (v + z * omega * dsp) / wd;
-    let nx = goal + e * (dsp * cw + bC * sw);
-    let nv = e * (v * cw - (z * omega * bC + wd * dsp) * sw);
-    if (!Number.isFinite(nx)) {
-      nx = goal;
-      nv = 0;
-    }
-    if (!Number.isFinite(nv)) nv = 0;
-    this.sp2[0] = nx;
-    this.sp2[1] = nv;
   }
 
   /** Build this frame's mesh into REUSED internal buffers; returns current
@@ -790,26 +658,19 @@ export class AttractDancer {
     const drv = valid ? beat : clock; // physics beat driver
     const phase = clock - Math.floor(clock);
     const kick = valid ? Math.exp(-6 * phase) : 0;
-    const bop = 0.5 + 0.5 * Math.cos(phase * Math.PI * 2); // 1 ON the count
-    // ---- 1. scheduler: fire hit accents, command footsteps / jumps ----------
+    // ---- 1. scheduler: fire hit accents, command footsteps ------------------
     if (chart) this.scheduleChart(beat);
     else if (valid) this.scheduleSynth(beat);
 
-    // ---- 2. jump regime transitions (takeoff / land) ------------------------
-    if (this.jpPending && !this.airborne && drv >= this.jpTakeoff) this.takeoff();
-    if (this.airborne && drv >= this.jpLand) this.land();
-
-    // ---- 3. CoM: closed-form springs (grounded) or ballistic (airborne) -----
-    this.stepCoM(drv, valid, dt, bop);
-
-    // ---- 4. feet: locked plants + minJerk/halfSine swings -------------------
+    // ---- 2. feet: chart panel targets (locked plants + minJerk/halfSine
+    //        swings) + the per-foot mocap→chart-target blend weight -----------
     this.stepFeet(drv, valid, dt);
 
-    // ---- 5. torso / head / arm goal springs ---------------------------------
-    this.stepPose(dt, bop);
-    this.sampleMocap(drv, valid, time); // upper body = baked dance mocap
+    // ---- 3. sample the full-body dance mocap for this frame -----------------
+    this.sampleMocap(drv, valid, time);
 
-    // ---- 6. solve the 3D skeleton (FK + two-bone leg IK), project -----------
+    // ---- 4. reconstruct the 3D skeleton from the mocap, apply the foot-IK
+    //        layer, project through the camera, run the hair/cloth springs ----
     this.solve3D(time, s30);
 
     // ---- 7. paint params -----------------------------------------------------
@@ -843,123 +704,22 @@ export class AttractDancer {
     return this.out;
   }
 
-  // ---- centre of mass --------------------------------------------------------
+  // ---- feet (chart-panel targets) --------------------------------------------
 
-  /** Grounded: lateral/depth = under-damped springs toward the anticipatory
-   *  support-weight target; vertical = a critically-damped bob into each beat
-   *  (+ a pre-jump load crouch). Airborne: an analytic parabola seeded from the
-   *  spring state at takeoff, so position AND velocity stay continuous. */
-  private stepCoM(drv: number, valid: boolean, dt: number, bop: number): void {
-    const B = BODY_H;
-    if (this.airborne) {
-      const span = Math.max(this.jpLand - this.jpTakeoff, 1e-4);
-      const frac = clamp((drv - this.jpTakeoff) / span, 0, 1);
-      const tau = frac * this.jT; // seconds into the flight
-      this.comY = this.jY0 + this.jVY0 * tau + 0.5 * G * tau * tau;
-      this.comX = this.jX0 + this.jVX0 * tau;
-      this.comZ = this.jZ0 + this.jVZ0 * tau;
-      this.comVY = this.jVY0 + G * tau;
-      this.comVX = this.jVX0;
-      this.comVZ = this.jVZ0;
-    } else {
-      this.weightTarget(drv);
-      this.underStep(this.comX, this.comVX, this.goalX, COM_OMEGA, COM_ZETA, dt);
-      this.comX = this.sp2[0];
-      this.comVX = this.sp2[1];
-      this.underStep(this.comZ, this.comVZ, this.goalZ, COM_OMEGA_Z, COM_ZETA_Z, dt);
-      this.comZ = this.sp2[0];
-      this.comVZ = this.sp2[1];
-      // Vertical bob toward a phase goal (sink ON the count), + a load crouch
-      // during the pre-takeoff windup of a pending jump.
-      let goalY = REST_COM_Y + BOB_AMP * bop;
-      if (this.jpPending && drv < this.jpTakeoff) {
-        const w = this.jpTakeoff - JUMP_LOAD_BEATS;
-        goalY += JUMP_LOAD * smooth01((drv - w) / Math.max(JUMP_LOAD_BEATS, 1e-3));
-      }
-      this.critStep(this.comY, this.comVY, goalY, 0, HL_BOB, dt);
-      this.comY = this.sp2[0];
-      this.comVY = this.sp2[1];
-    }
-    if (!valid) {
-      // Lead-in: ease the CoM back toward the neutral centre.
-      const k = 1 - Math.exp(-dt * 4);
-      this.comX += (CX - this.comX) * k;
-      this.comZ += (0 - this.comZ) * k;
-    }
-    if (!Number.isFinite(this.comX)) {
-      this.comX = CX;
-      this.comVX = 0;
-    }
-    if (!Number.isFinite(this.comY)) {
-      this.comY = REST_COM_Y;
-      this.comVY = 0;
-    }
-    if (!Number.isFinite(this.comZ)) {
-      this.comZ = 0;
-      this.comVZ = 0;
-    }
-    // Signed lateral weight bias for the torso list / contrapposto.
-    this.wbias = clamp((this.comX - CX) / (0.14 * B), -1, 1);
-  }
-
-  /** The anticipatory support-weight target: a convex blend of the feet, with a
-   *  swinging foot UNLOADED (weight on the standing leg) and anticipating its
-   *  landing spot. The deviation from the plain midpoint is scaled by the step
-   *  gap, so fast same-side steps barely shift the weight (taps). */
-  private weightTarget(drv: number): void {
-    let sumw = 0;
-    let tx = 0;
-    let tz = 0;
-    let mx = 0;
-    let mz = 0;
-    for (let f = 0; f < 2; f++) {
-      let px: number;
-      let pz: number;
-      let load: number;
-      if (this.footState[f] === 1) {
-        const span = Math.max(this.landBeatA[f] - this.liftBeatA[f], 1e-4);
-        const tau = clamp((drv - this.liftBeatA[f]) / span, 0, 1);
-        px = this.toX[f]; // anticipate the landing spot
-        pz = this.toZ[f];
-        load = 0.1 + 0.9 * smooth01((tau - 0.7) / 0.3); // nearly weightless, reloads late
-      } else {
-        px = this.plantX[f];
-        pz = this.plantZ[f];
-        load = 1;
-      }
-      tx += load * px;
-      tz += load * pz;
-      sumw += load;
-      mx += px;
-      mz += pz;
-    }
-    mx *= 0.5;
-    mz *= 0.5;
-    const rawX = sumw > 1e-6 ? tx / sumw : mx;
-    const rawZ = sumw > 1e-6 ? tz / sumw : mz;
-    // Commit HARD over the support foot (overshoot the load-weighted centroid by
-    // ~30%) so the hips visibly stack over the standing leg — a real contrapposto,
-    // not a hover at the midpoint. Scaled by gap so fast same-side steps stay taps.
-    const wShift = clamp(this.curGapSec / 0.4, 0.3, 1) * 1.3;
-    let gx = mx + (rawX - mx) * wShift;
-    let gz = mz + (rawZ - mz) * wShift;
-    if (!Number.isFinite(gx)) gx = CX;
-    if (!Number.isFinite(gz)) gz = 0;
-    this.goalX = gx;
-    this.goalZ = gz;
-  }
-
-  // ---- feet ------------------------------------------------------------------
-
-  /** Advance each foot: hold plant, or run a minJerk horizontal glide + a
-   *  half-sine vertical lift over its beat window, landing exactly on the note
-   *  beat. Airborne feet rise with the CoM and tuck (knees bend in flight). */
+  /** Advance each foot's CHART target: hold plant, or run a minJerk horizontal
+   *  glide + a half-sine vertical lift over its beat window, landing exactly on
+   *  the note beat, always on the pad floor plane. Also eases the per-foot
+   *  mocap→chart blend weight (1 while a step owns the foot, FOOT_CHART_REST
+   *  between steps, 0 during the chart-less lead-in). */
   private stepFeet(drv: number, valid: boolean, dt: number): void {
     const B = BODY_H;
+    const ground = FOOT_Y - L_SHOE * B;
+    const blendK = 1 - Math.exp(-dt * FOOT_BLEND_RATE);
     for (let f = 0; f < 2; f++) {
       let x: number;
       let z: number;
       let y: number;
+      let owns = false; // a step currently owns this foot (mid-swing)
       if (!valid) {
         // Lead-in: ease plants back to the neutral stance (feet only).
         const k = 1 - Math.exp(-dt * 4);
@@ -969,8 +729,9 @@ export class AttractDancer {
         this.footState[f] = 0;
         x = this.plantX[f];
         z = this.plantZ[f];
-        y = FOOT_Y - L_SHOE * B;
+        y = ground;
       } else if (this.footState[f] === 1) {
+        owns = true;
         const span = Math.max(this.landBeatA[f] - this.liftBeatA[f], 1e-4);
         let tau = (drv - this.liftBeatA[f]) / span;
         if (tau >= 1) {
@@ -978,91 +739,37 @@ export class AttractDancer {
           this.plantX[f] = this.toX[f];
           this.plantZ[f] = this.toZ[f];
           this.footState[f] = 0;
+          owns = false;
           x = this.plantX[f];
           z = this.plantZ[f];
-          y = this.airborne ? this.comY + HANG0 : FOOT_Y - L_SHOE * B;
+          y = ground;
         } else {
           tau = tau < 0 ? 0 : tau;
           const mj = minJerk(tau);
           x = this.fromX[f] + (this.toX[f] - this.fromX[f]) * mj;
           z = this.fromZ[f] + (this.toZ[f] - this.fromZ[f]) * mj;
-          if (this.airborne) {
-            // Feet hang HANG0 below the (rising) CoM, tucked by the lift arc.
-            y = this.comY + HANG0 - this.liftHA[f] * halfSine(tau);
-          } else {
-            y = FOOT_Y - L_SHOE * B - this.liftHA[f] * halfSine(tau);
-          }
+          y = ground - this.liftHA[f] * halfSine(tau);
         }
       } else {
         x = this.plantX[f];
         z = this.plantZ[f];
-        y = this.airborne ? this.comY + HANG0 : FOOT_Y - L_SHOE * B;
+        y = ground;
       }
       if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(y)) {
         x = CX + (f === 0 ? -1 : 1) * STANCE * B;
         z = 0;
-        y = FOOT_Y - L_SHOE * B;
+        y = ground;
       }
       this.footX[f] = x;
       this.footZ[f] = z;
       this.footYv[f] = y;
+      // Blend weight: full while a step owns the foot, resting between steps,
+      // zero during the chart-less lead-in (pure mocap).
+      const target = valid ? (owns ? 1 : FOOT_CHART_REST) : 0;
+      let fb = this.footBlend[f];
+      if (!Number.isFinite(fb)) fb = target;
+      this.footBlend[f] = fb + (target - fb) * blendK;
     }
-  }
-
-  // ---- torso / head pose -----------------------------------------------------
-
-  /** Lean into the CoM's lateral acceleration (≈atan(aₓ/G) — the exact physics
-   *  of ground reaction through the CoM), pitch with forward accel + a beat dip,
-   *  yaw the hips into the travel and counter-twist the shoulders, list onto the
-   *  support hip. Head: damped look + beat nod + counter-roll. All critically
-   *  damped so they trail the CoM with weight, never snap. */
-  private stepPose(dt: number, bop: number): void {
-    // Analytic spring accelerations (goalV = 0): a = -ω²·disp - 2ζω·v.
-    const ax =
-      -COM_OMEGA * COM_OMEGA * (this.comX - this.goalX) - 2 * COM_ZETA * COM_OMEGA * this.comVX;
-    const az =
-      -COM_OMEGA_Z * COM_OMEGA_Z * (this.comZ - this.goalZ) -
-      2 * COM_ZETA_Z * COM_OMEGA_Z * this.comVZ;
-
-    const leanGoal = this.airborne ? 0 : clamp(Math.atan2(ax, G) * 0.55, -0.34, 0.34);
-    const pitchGoal = clamp(
-      (this.airborne ? 0 : Math.atan2(az, G) * 0.5) + 0.03 * bop - 0.012,
-      -0.28,
-      0.4,
-    );
-    const yawGoal = this.airborne ? 0 : clamp(this.comVX * 0.0016, -0.28, 0.28);
-    // Held contrapposto from the weight bias (posture, not the transient
-    // accel-lean): support hip hikes / free hip drops, ribcage counters into an
-    // S-curve, shoulders counter-twist. Bigger gains so weight COMMITMENT reads.
-    const twistGoal = clamp(-this.sYaw * 0.6 - this.wbias * 0.16, -0.5, 0.5);
-    const sideGoal = clamp(-this.wbias * 0.024, -0.09, 0.09);
-    const listGoal = clamp(this.wbias * 0.09, -0.12, 0.12);
-
-    // Gaze decays back to centre between steps.
-    this.faceLook *= Math.pow(0.5, dt / 0.4);
-    const hyawGoal = clamp(this.faceLook - this.sYaw * 0.3, -0.5, 0.5);
-
-    this.critStep(this.sLean, this.sLeanV, leanGoal, 0, HL_LEAN, dt);
-    this.sLean = this.sp2[0];
-    this.sLeanV = this.sp2[1];
-    this.critStep(this.sPitch, this.sPitchV, pitchGoal, 0, HL_PITCH, dt);
-    this.sPitch = this.sp2[0];
-    this.sPitchV = this.sp2[1];
-    this.critStep(this.sYaw, this.sYawV, yawGoal, 0, HL_YAW, dt);
-    this.sYaw = this.sp2[0];
-    this.sYawV = this.sp2[1];
-    this.critStep(this.sTwist, this.sTwistV, twistGoal, 0, HL_TWIST, dt);
-    this.sTwist = this.sp2[0];
-    this.sTwistV = this.sp2[1];
-    this.critStep(this.sSide, this.sSideV, sideGoal, 0, HL_SIDE, dt);
-    this.sSide = this.sp2[0];
-    this.sSideV = this.sp2[1];
-    this.critStep(this.sList, this.sListV, listGoal, 0, HL_LIST, dt);
-    this.sList = this.sp2[0];
-    this.sListV = this.sp2[1];
-    this.critStep(this.sHyaw, this.sHyawV, hyawGoal, 0, HL_HEAD, dt);
-    this.sHyaw = this.sp2[0];
-    this.sHyawV = this.sp2[1];
   }
 
   // ---- scheduler -------------------------------------------------------------
@@ -1134,10 +841,10 @@ export class AttractDancer {
     }
   }
 
-  /** Beats of wind-up a row needs before its note beat (swing window, or the
-   *  jump load + airtime), clamped shorter by the gap so streams stay crisp. */
-  private windupFor(st: Step, gap: number): number {
-    if (this.isJump(st)) return Math.min(JUMP_LOAD_BEATS + JUMP_AIR_BEATS, gap * 0.9);
+  /** Beats of wind-up a row needs before its note beat (the foot-swing window),
+   *  clamped shorter by the gap so streams stay crisp. Two-foot rows (jumps) use
+   *  the same window — both feet just swing together through the foot-IK. */
+  private windupFor(_st: Step, gap: number): number {
     return clamp(Math.min(STEP_SWING_BEATS, gap * 0.85), 0.1, STEP_SWING_BEATS);
   }
 
@@ -1160,16 +867,15 @@ export class AttractDancer {
     return st.cols & 4 ? 2 : 1;
   }
 
-  /** Command one note row. Jumps are first-class (both feet + a ballistic
-   *  parabola); single steps swing one foot to its panel. Also fires the arm
-   *  accent and the gaze/weight-transfer context for the physics core. */
-  private commitStep(st: Step, gap: number, beat: number): void {
+  /** Command one note row. A two-foot row (jump) swings BOTH feet to their
+   *  panels on the beat; a single step swings one foot. The foot-IK layer then
+   *  plants them — there is no ballistic jump any more (the mocap has its own
+   *  hops). Landing lands exactly on the note beat. */
+  private commitStep(st: Step, _gap: number, beat: number): void {
     const lp = st.lCol !== undefined && Number.isFinite(st.lCol) ? Math.trunc(st.lCol) : -1;
     const rp = st.rCol !== undefined && Number.isFinite(st.rCol) ? Math.trunc(st.rCol) : -1;
     const lSteps = lp >= 0 && lp <= 3;
     const rSteps = rp >= 0 && rp <= 3;
-    const w = this.windupFor(st, gap);
-    this.curGapSec = clamp(gap / this.bps, 0.05, 4);
 
     if (this.isJump(st)) {
       // Panels from parity when present; otherwise split the lit columns
@@ -1187,13 +893,8 @@ export class AttractDancer {
         }
         if (jl < 0) return; // empty row — nothing to do
       }
-      this.jpJl = jl;
-      this.jpJr = jr;
-      this.jpLand = st.beat;
-      const load = Math.min(JUMP_LOAD_BEATS, w * 0.4);
-      this.jpTakeoff = st.beat - Math.min(JUMP_AIR_BEATS, w - load);
-      this.jpPending = true;
-      this.faceLook = 0;
+      this.assignFoot(0, jl, beat, st.beat);
+      this.assignFoot(1, jr, beat, st.beat);
       this.lastFoot = 1;
       return;
     }
@@ -1212,7 +913,6 @@ export class AttractDancer {
       else foot = 1 - this.lastFoot;
     }
     this.assignFoot(foot, panel, beat, st.beat);
-    this.faceLook = clamp((this.pt[0] - CX) / (0.3 * BODY_H), -1, 1) * 0.22;
     this.lastFoot = foot;
   }
 
@@ -1235,43 +935,6 @@ export class AttractDancer {
     this.landBeatA[foot] = landBeat;
     const dist = Math.hypot(this.pt[0] - x0, this.pt[1] - z0);
     this.liftHA[foot] = clamp(SWING_LIFT * BODY_H + 0.14 * dist, 0.045 * BODY_H, 0.15 * BODY_H);
-  }
-
-  /** Enter the airborne regime: both feet swing to their panels + tuck, and the
-   *  CoM is seeded with a ballistic parabola whose apex emerges from the airtime
-   *  (vy = G·T/2). Position AND velocity are carried over from the spring. */
-  private takeoff(): void {
-    const B = BODY_H;
-    this.assignFoot(0, this.jpJl, this.jpTakeoff, this.jpLand);
-    this.assignFoot(1, this.jpJr, this.jpTakeoff, this.jpLand);
-    this.liftHA[0] = JUMP_TUCK * B;
-    this.liftHA[1] = JUMP_TUCK * B;
-    this.airborne = true;
-    this.jpPending = false;
-    this.jT = Math.max((this.jpLand - this.jpTakeoff) / this.bps, 0.05);
-    this.jY0 = this.comY;
-    this.jVY0 = (-G * this.jT) / 2; // upward (y DOWN)
-    this.jX0 = this.comX;
-    this.jZ0 = this.comZ;
-    this.jVX0 = this.comVX;
-    this.jVZ0 = this.comVZ;
-  }
-
-  /** Leave the airborne regime: commit both plants and feed the impact velocity
-   *  (G·T/2 downward) into the vertical spring as its initial velocity, so the
-   *  landing squash depth EMERGES from the fall speed (C1 by construction). */
-  private land(): void {
-    this.airborne = false;
-    for (let f = 0; f < 2; f++) {
-      this.plantX[f] = this.toX[f];
-      this.plantZ[f] = this.toZ[f];
-      this.footState[f] = 0;
-    }
-    this.comY = this.jY0;
-    this.comVY = (G * this.jT) / 2; // downward impact → squash
-    this.comVX = this.jVX0;
-    this.comVZ = this.jVZ0;
-    this.curGapSec = 1; // settle centred between the panels
   }
 
   /** 3D floor spot for a panel (0=L,1=D,2=U,3=R), per foot. The pad lies flat
@@ -1300,11 +963,12 @@ export class AttractDancer {
 
   private readonly sp4 = new Float64Array(4); // springTail out: px, py, vx, vy
 
-  /** Sample the baked dance-mocap upper body into `this.md` (18 chest-local
-   *  direction floats), interpolated between frames and cross-blended over the
-   *  loop seam so the wrap doesn't pop. Advanced by the beat (native tempo) with
-   *  a time fallback during the chart-less lead-in. */
+  /** Sample the baked full-body dance clip into `this.md` (49 floats: 15 joint
+   *  positions + pelvis motion), interpolated between frames and cross-blended
+   *  over the loop seam so the wrap doesn't pop. Advanced by the beat (native
+   *  tempo) with a time fallback during the chart-less lead-in. */
   private sampleMocap(drv: number, valid: boolean, time: number): void {
+    const S = MOCAP_STRIDE;
     const t = valid ? (drv + MOCAP_PHASE) * MOCAP_FPB : time * 30;
     let fp = t % MOCAP_FRAMES;
     if (!(fp >= 0)) fp += MOCAP_FRAMES;
@@ -1312,199 +976,125 @@ export class AttractDancer {
     const f0 = Math.floor(fp);
     const a = fp - f0;
     const f1 = f0 + 1 >= MOCAP_FRAMES ? 0 : f0 + 1;
-    const o0 = f0 * 18;
-    const o1 = f1 * 18;
+    const o0 = f0 * S;
+    const o1 = f1 * S;
     const md = this.md;
-    for (let k = 0; k < 18; k++)
+    for (let k = 0; k < S; k++)
       md[k] = MOCAP_DIRS[o0 + k] + (MOCAP_DIRS[o1 + k] - MOCAP_DIRS[o0 + k]) * a;
     if (fp > MOCAP_FRAMES - MOCAP_SEAM) {
       const w = (fp - (MOCAP_FRAMES - MOCAP_SEAM)) / MOCAP_SEAM;
-      for (let k = 0; k < 18; k++) md[k] += (MOCAP_DIRS[k] - md[k]) * w;
+      for (let k = 0; k < S; k++) md[k] += (MOCAP_DIRS[k] - md[k]) * w;
     }
   }
 
-  /** FK the torso/head/arms from the pose springs, two-bone-IK the legs onto
-   *  the animated ankle targets, project everything through the weak-perspective
-   *  camera, then run the secondary hair/cloth springs on the projected joints.
-   *  The pose scalars are already framerate-independent spring states; this just
-   *  turns them into joint positions and pixels. */
+  /** Reconstruct the WHOLE body from the sampled full-body mocap frame: pelvis
+   *  world transform (yaw-damped heading + damped hip sway + grounded so the
+   *  lowest foot touches the pad floor), every joint = pelvis + its mocap offset
+   *  (L/R crossed), then the foot-IK layer (blend each foot toward its chart
+   *  panel target and re-solve the leg with two-bone IK). Then project through
+   *  the weak-perspective camera and run the secondary hair/cloth springs. */
   private solve3D(time: number, s30: number): void {
     const B = BODY_H;
     const s3 = this.skel3;
+    const md = this.md;
+    const moff = this.moff;
+    const r = R_HEAD * B; // head radius (used by faceTurn + the hair springs)
+    const legPx = (L_THIGH + L_SHIN + L_SHOE) * B; // one leg length in px
 
-    // Clamped pose scalars (a spring is stable, but never trust math into IK).
-    const yaw = clamp(this.sYaw, -0.7, 0.7);
-    const lean = clamp(this.sLean, -0.5, 0.5);
-    const pitch = clamp(this.sPitch, -0.5, 0.6);
-    const twist = clamp(this.sTwist, -0.8, 0.8);
-    const side = clamp(this.sSide, -0.08, 0.08);
-    const hyaw = clamp(this.sHyaw, -0.8, 0.8);
-    const list = clamp(this.sList, -0.08, 0.08);
+    // --- pelvis world transform from the mocap heading -----------------------
+    // yaw = damped deviation from the clip's mean heading (keeps her ~facing us).
+    const yawRaw = md[45] - MEAN_HEADING;
+    const yaw = clamp(Number.isFinite(yawRaw) ? yawRaw * MOCAP_YAW_DAMP : 0, -1.2, 1.2);
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    // Frame axes (px per leg-length unit), with the tunable sign flips. y is DOWN
+    // so mocap +up maps to screen up via suY = -1. srX/srZ map mocap +right,
+    // sfX/sfZ map mocap +fwd (toward the viewer).
+    const srX = MOCAP_SR * cy;
+    const srZ = MOCAP_SR * -sy;
+    const suY = -1;
+    const sfX = MOCAP_SF * sy;
+    const sfZ = MOCAP_SF * cy;
+    // World pelvis-relative offset of every mocap joint (leg-length → px).
+    for (let j = 0; j < 15; j++) {
+      const rr = md[j * 3];
+      const uu = md[j * 3 + 1];
+      const ff = md[j * 3 + 2];
+      moff[j * 3] = (rr * srX + ff * sfX) * legPx;
+      moff[j * 3 + 1] = uu * suY * legPx;
+      moff[j * 3 + 2] = (rr * srZ + ff * sfZ) * legPx;
+    }
 
-    // Pelvis frame from yaw (the hip lateral axis; it yaws with the CoM travel).
-    const latX = Math.cos(yaw);
-    const latZ = -Math.sin(yaw);
-    const fwdX = Math.sin(yaw);
-    const fwdZ = Math.cos(yaw);
+    // Pelvis position: damped horizontal hip sway; grounded so the LOWEST foot
+    // sits on the pad floor plane (the bounce comes from the feet/pelvis relative
+    // motion, NOT from md[46], so she never floats).
+    let pelX = CX + (md[47] - MEAN_HIPX) * legPx * MOCAP_SWAY;
+    let pelZ = (md[48] - MEAN_HIPZ) * legPx * MOCAP_SWAY;
+    const lowestFootYoff = Math.max(moff[11 * 3 + 1], moff[14 * 3 + 1]); // y DOWN
+    let pelY = FOOT_Y - L_SHOE * B - lowestFootYoff;
 
-    // Pelvis = CoM, with a HARD reach clamp (not a spring, no ZMP): drop the
-    // pelvis so the WORST planted leg stays inside its reach — the CoM is in the
-    // support hull by construction, so overshoot-out is free, but a leg must
-    // never over-extend and rubber-band.
-    let pelX = this.comX;
-    let pelY = this.comY;
-    let pelZ = this.comZ;
-    if (!this.airborne) {
-      const maxR = (L_THIGH + L_SHIN) * B * 0.98;
-      for (let f = 0; f < 2; f++) {
-        if (this.footState[f] !== 0) continue; // planted legs only
-        const hxx = pelX + (f === 0 ? -1 : 1) * latX * W_HIP * B;
-        const hzz = pelZ + (f === 0 ? -1 : 1) * latZ * W_HIP * B;
-        const dh = Math.hypot(this.footX[f] - hxx, this.footZ[f] - hzz);
-        const vs = Math.sqrt(Math.max(0, maxR * maxR - dh * dh));
-        const need = this.footYv[f] - vs; // hip must be at least this far down
-        if (Number.isFinite(need) && need > pelY) pelY = need;
-      }
+    // HARD pelvis reach clamp: a planted leg must never over-extend to its chart
+    // panel — drop the pelvis (increase pelY) so the worst planted leg reaches.
+    const maxR = (L_THIGH + L_SHIN) * B * 0.98;
+    for (let f = 0; f < 2; f++) {
+      if (this.footState[f] !== 0) continue; // planted legs only
+      const mHip = MOCAP_MAP[f === 0 ? HIPL : HIPR];
+      const hxx = pelX + moff[mHip * 3];
+      const hzz = pelZ + moff[mHip * 3 + 2];
+      const dh = Math.hypot(this.footX[f] - hxx, this.footZ[f] - hzz);
+      const vs = Math.sqrt(Math.max(0, maxR * maxR - dh * dh));
+      const need = this.footYv[f] - vs - moff[mHip * 3 + 1];
+      if (Number.isFinite(need) && need > pelY) pelY = need;
     }
     if (!Number.isFinite(pelX)) pelX = CX;
-    if (!Number.isFinite(pelY)) pelY = REST_COM_Y;
+    if (!Number.isFinite(pelY)) pelY = PEL_REST_Y;
     if (!Number.isFinite(pelZ)) pelZ = 0;
+
+    // --- place every skeleton joint = pelvis + its mocap offset (L/R crossed) --
+    for (let j = 0; j < JOINTS; j++) {
+      const mj = MOCAP_MAP[j];
+      if (mj < 0) continue; // pelvis + derived/accessory joints, filled below
+      s3[j * 3] = pelX + moff[mj * 3];
+      s3[j * 3 + 1] = pelY + moff[mj * 3 + 1];
+      s3[j * 3 + 2] = pelZ + moff[mj * 3 + 2];
+    }
     s3[PEL * 3] = pelX;
     s3[PEL * 3 + 1] = pelY;
     s3[PEL * 3 + 2] = pelZ;
 
-    // Shoulder frame adds the twist (shoulders counter-rotate vs the pelvis).
-    const yawS = clamp(yaw + twist, -1.1, 1.1);
-    const latSX = Math.cos(yawS);
-    const latSZ = -Math.sin(yawS);
-    const fwdSX = Math.sin(yawS);
-    const fwdSZ = Math.cos(yawS);
-    // Torso up vector: straight up, rolled by lean toward lateral, pitched
-    // toward the viewer-forward.
-    const sinL = Math.sin(lean);
-    const cosL = Math.cos(lean);
-    const sinP = Math.sin(pitch);
-    const cosP = Math.cos(pitch);
-    const ux = latX * sinL * cosP + fwdX * sinP;
-    const uy = -cosL * cosP;
-    const uz = latZ * sinL * cosP + fwdZ * sinP;
+    // Head-yaw hint for the 2D face features (driven straight from the pelvis
+    // yaw — the head joint itself already carries the mocap look).
+    this.faceTurn = clamp(Math.sin(yaw) * r * 0.9, -r, r);
 
-    // Chest (= shoulder center) with the ribcage side-shift (contrapposto).
-    const shX = pelX + ux * L_TORSO * B + latSX * side * B;
-    const shY = pelY + uy * L_TORSO * B;
-    const shZ = pelZ + uz * L_TORSO * B + latSZ * side * B;
-    s3[SH * 3] = shX;
-    s3[SH * 3 + 1] = shY;
-    s3[SH * 3 + 2] = shZ;
-    s3[COLLAR * 3] = shX + ux * 0.06 * B;
-    s3[COLLAR * 3 + 1] = shY + uy * 0.06 * B;
-    s3[COLLAR * 3 + 2] = shZ + uz * 0.06 * B;
+    // COLLAR: a bit up the neck from the chest.
+    s3[COLLAR * 3] = s3[SH * 3] + (s3[HEADB * 3] - s3[SH * 3]) * 0.3;
+    s3[COLLAR * 3 + 1] = s3[SH * 3 + 1] + (s3[HEADB * 3 + 1] - s3[SH * 3 + 1]) * 0.3;
+    s3[COLLAR * 3 + 2] = s3[SH * 3 + 2] + (s3[HEADB * 3 + 2] - s3[SH * 3 + 2]) * 0.3;
 
-    // Neck + head from the dance mocap: transform its chest-local direction
-    // vectors (neck = md 0..2, head = md 3..5) into world through our chest frame
-    // (right = shoulder-lateral, up = torso-up, fwd = torso-forward), then hang
-    // the neck/head at our own bone lengths. The mocap carries the natural neck
-    // curve, so no manual lean is needed. `mdW*` are reused per-joint scratch.
-    const md = this.md;
-    const r = R_HEAD * B;
-    let mdx = MOCAP_SR * md[0] * latSX + md[1] * ux + MOCAP_SF * md[2] * fwdSX;
-    let mdy = md[1] * uy;
-    let mdz = MOCAP_SR * md[0] * latSZ + md[1] * uz + MOCAP_SF * md[2] * fwdSZ;
-    let ml = Math.hypot(mdx, mdy, mdz) || 1;
-    const nbX = shX + (mdx / ml) * L_NECK * B;
-    const nbY = shY + (mdy / ml) * L_NECK * B;
-    const nbZ = shZ + (mdz / ml) * L_NECK * B;
-    s3[HEADB * 3] = nbX;
-    s3[HEADB * 3 + 1] = nbY;
-    s3[HEADB * 3 + 2] = nbZ;
-    mdx = MOCAP_SR * md[3] * latSX + md[4] * ux + MOCAP_SF * md[5] * fwdSX;
-    mdy = md[4] * uy;
-    mdz = MOCAP_SR * md[3] * latSZ + md[4] * uz + MOCAP_SF * md[5] * fwdSZ;
-    ml = Math.hypot(mdx, mdy, mdz) || 1;
-    s3[HEAD * 3] = nbX + (mdx / ml) * r * 0.9;
-    s3[HEAD * 3 + 1] = nbY + (mdy / ml) * r * 0.9;
-    s3[HEAD * 3 + 2] = nbZ + (mdz / ml) * r * 0.9;
-    this.faceTurn = clamp(Math.sin(hyaw + yawS * 0.35) * r * 0.5, -r, r);
-
-    // Shoulder sockets: on the twisted shoulder line, counter-tilted against
-    // the pelvic list (weight-bearing hip up ⇒ same-side shoulder down). Kept
-    // SMALL — the spine absorbs most of the list, so the shoulders barely tilt;
-    // a big coupling raised one shoulder up to the neck base and read as a hunch
-    // (and it drives the VRM chest's shoulder-plane pole, tilting the neck too).
-    const shTilt = list * B * 0.22;
-    s3[SHL * 3] = shX - latSX * W_SHOULDER * B;
-    s3[SHL * 3 + 1] = shY - shTilt;
-    s3[SHL * 3 + 2] = shZ - latSZ * W_SHOULDER * B;
-    s3[SHR * 3] = shX + latSX * W_SHOULDER * B;
-    s3[SHR * 3 + 1] = shY + shTilt;
-    s3[SHR * 3 + 2] = shZ + latSZ * W_SHOULDER * B;
-
-    // Waist corners (torso-plate geometry rides the frame so body yaw
-    // foreshortens the plates through z).
+    // Waist corners: 42% up the pelvis→chest midline, ± a half-width along the
+    // hip line, so the torso plates foreshorten with the body yaw through z.
+    const wcX = pelX + (s3[SH * 3] - pelX) * 0.42;
+    const wcY = pelY + (s3[SH * 3 + 1] - pelY) * 0.42;
+    const wcZ = pelZ + (s3[SH * 3 + 2] - pelZ) * 0.42;
+    let lx = s3[HIPR * 3] - s3[HIPL * 3];
+    let ly = s3[HIPR * 3 + 1] - s3[HIPL * 3 + 1];
+    let lz = s3[HIPR * 3 + 2] - s3[HIPL * 3 + 2];
+    const ll = Math.hypot(lx, ly, lz) || 1;
+    lx /= ll;
+    ly /= ll;
+    lz /= ll;
     const waistW = 0.05 * B;
-    const latWX = (latX + latSX) * 0.5;
-    const latWZ = (latZ + latSZ) * 0.5;
-    const wcX = pelX + ux * L_TORSO * B * 0.42 + latSX * side * B * 0.42;
-    const wcY = pelY + uy * L_TORSO * B * 0.42;
-    const wcZ = pelZ + uz * L_TORSO * B * 0.42 + latSZ * side * B * 0.42;
-    s3[WSTL * 3] = wcX - latWX * waistW;
-    s3[WSTL * 3 + 1] = wcY;
-    s3[WSTL * 3 + 2] = wcZ - latWZ * waistW;
-    s3[WSTR * 3] = wcX + latWX * waistW;
-    s3[WSTR * 3 + 1] = wcY;
-    s3[WSTR * 3 + 2] = wcZ + latWZ * waistW;
+    s3[WSTL * 3] = wcX - lx * waistW;
+    s3[WSTL * 3 + 1] = wcY - ly * waistW;
+    s3[WSTL * 3 + 2] = wcZ - lz * waistW;
+    s3[WSTR * 3] = wcX + lx * waistW;
+    s3[WSTR * 3 + 1] = wcY + ly * waistW;
+    s3[WSTR * 3 + 2] = wcZ + lz * waistW;
 
-    // Hips: pelvis frame, listed (support hip hikes).
-    s3[HIPL * 3] = pelX - latX * W_HIP * B;
-    s3[HIPL * 3 + 1] = pelY + list * B;
-    s3[HIPL * 3 + 2] = pelZ - latZ * W_HIP * B;
-    s3[HIPR * 3] = pelX + latX * W_HIP * B;
-    s3[HIPR * 3 + 1] = pelY - list * B;
-    s3[HIPR * 3 + 2] = pelZ + latZ * W_HIP * B;
-
-    // Arms from the dance mocap: transform each mocap arm's chest-local upper-arm
-    // and forearm direction vectors into world through our chest frame, then hang
-    // the elbow/hand off our own shoulder positions at our own bone lengths. The
-    // dancer faces the viewer, so the mocap's anatomical L feeds our screen-RIGHT
-    // arm (MOCAP_SWAP). Real mocap keeps the shoulder→elbow→hand bend plane
-    // natural, which is what the VRM aim-retarget's pole reads.
-    for (let f = 0; f < 2; f++) {
-      const soI = f === 0 ? SHL : SHR;
-      const elI = f === 0 ? ELL : ELR;
-      const haI = f === 0 ? HAL : HAR;
-      const useR = MOCAP_SWAP === 1 ? f === 0 : f === 1;
-      const uo = useR ? 12 : 6; // upper-arm dir offset in md
-      const fo = useR ? 15 : 9; // forearm dir offset in md
-      // Damp toward a relaxed hang (chest-local down = 0,-1,0) to calm the dance.
-      const dn = 1 - MOCAP_AMP;
-      let lr = md[uo] * MOCAP_AMP;
-      let lu = md[uo + 1] * MOCAP_AMP - dn;
-      let lf = md[uo + 2] * MOCAP_AMP;
-      let ax = MOCAP_SR * lr * latSX + lu * ux + MOCAP_SF * lf * fwdSX;
-      let ay = lu * uy;
-      let az = MOCAP_SR * lr * latSZ + lu * uz + MOCAP_SF * lf * fwdSZ;
-      let al = Math.hypot(ax, ay, az) || 1;
-      const eX = s3[soI * 3] + (ax / al) * L_UARM * B;
-      const eY = s3[soI * 3 + 1] + (ay / al) * L_UARM * B;
-      const eZ = s3[soI * 3 + 2] + (az / al) * L_UARM * B;
-      s3[elI * 3] = eX;
-      s3[elI * 3 + 1] = eY;
-      s3[elI * 3 + 2] = eZ;
-      lr = md[fo] * MOCAP_AMP;
-      lu = md[fo + 1] * MOCAP_AMP - dn;
-      lf = md[fo + 2] * MOCAP_AMP;
-      ax = MOCAP_SR * lr * latSX + lu * ux + MOCAP_SF * lf * fwdSX;
-      ay = lu * uy;
-      az = MOCAP_SR * lr * latSZ + lu * uz + MOCAP_SF * lf * fwdSZ;
-      al = Math.hypot(ax, ay, az) || 1;
-      s3[haI * 3] = eX + (ax / al) * L_FARM * B;
-      s3[haI * 3 + 1] = eY + (ay / al) * L_FARM * B;
-      s3[haI * 3 + 2] = eZ + (az / al) * L_FARM * B;
-    }
-
-    // Legs: analytic two-bone IK from each hip to its animated ankle. The
-    // knee pole aims forward (toward the viewer) and slightly outward, so
-    // knees bend naturally and never flip sides — crossovers included.
+    // --- foot-IK layer: blend each foot from its MOCAP position toward the chart
+    // panel target, then re-solve the leg with the analytic two-bone IK (law of
+    // cosines, forward-dominant knee pole). Hip stays from the mocap; KN/FT are
+    // overwritten. A JUMP is just both feet stepping through this layer.
     const l1 = L_THIGH * B;
     const l2 = L_SHIN * B;
     for (let f = 0; f < 2; f++) {
@@ -1515,9 +1105,14 @@ export class AttractDancer {
       const hx = s3[hipI * 3];
       const hy = s3[hipI * 3 + 1];
       const hz = s3[hipI * 3 + 2];
-      let dx = this.footX[f] - hx;
-      let dy = this.footYv[f] - hy;
-      let dz = this.footZ[f] - hz;
+      // Blend the mocap ankle toward the chart target by the per-foot weight.
+      const w = clamp(this.footBlend[f], 0, 1);
+      const tx = s3[ftI * 3] + (this.footX[f] - s3[ftI * 3]) * w;
+      const ty = s3[ftI * 3 + 1] + (this.footYv[f] - s3[ftI * 3 + 1]) * w;
+      const tz = s3[ftI * 3 + 2] + (this.footZ[f] - s3[ftI * 3 + 2]) * w;
+      let dx = tx - hx;
+      let dy = ty - hy;
+      let dz = tz - hz;
       let d = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (!(d > 1e-4)) {
         dx = 0;
@@ -1529,30 +1124,25 @@ export class AttractDancer {
       const ny = dy / d;
       const nz = dz / d;
       // Soft knees: never lock the chain fully straight (keeps a natural bend
-      // and kills the rubber-band pop at full reach). Clamp well below full
-      // reach — a barely-bent knee vanishes on a smooth tights-clad VRoid leg
-      // and reads as a stretched straight column, so keep a visible flex.
+      // and kills the rubber-band pop at full reach).
       const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.94);
       const ca = clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1);
       const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
-      // Knee pole: point the knees mostly FORWARD (over the toes) with only a
-      // little outward splay. A strongly outward pole bowed the knees way past
-      // the feet into a bow-legged "( )" — worse once the knees bend more — so
-      // forward-dominant keeps a natural athletic track; a bit of outward still
-      // gives 3D volume and never inverts the joint.
-      let px = sgn * latX * 0.4 + fwdX * 0.78;
+      // Knee pole: mostly FORWARD (over the toes) with a little outward splay,
+      // in the mocap heading frame — never inverts the joint.
+      let px = sgn * srX * 0.4 + sfX * 0.78;
       let py = 0;
-      let pz = sgn * latZ * 0.4 + fwdZ * 0.78;
+      let pz = sgn * srZ * 0.4 + sfZ * 0.78;
       const dot = px * nx + py * ny + pz * nz;
       px -= nx * dot;
       py -= ny * dot;
       pz -= nz * dot;
       let pl = Math.sqrt(px * px + py * py + pz * pz);
       if (!(pl > 1e-4)) {
-        px = sgn * latX;
+        px = sgn * srX;
         py = 0;
-        pz = sgn * latZ;
-        pl = 1;
+        pz = sgn * srZ;
+        pl = Math.hypot(px, pz) || 1;
       }
       px /= pl;
       py /= pl;
@@ -1560,11 +1150,23 @@ export class AttractDancer {
       s3[knI * 3] = hx + nx * (l1 * ca) + px * (l1 * sa);
       s3[knI * 3 + 1] = hy + ny * (l1 * ca) + py * (l1 * sa);
       s3[knI * 3 + 2] = hz + nz * (l1 * ca) + pz * (l1 * sa);
-      // Ankle re-derived on the (possibly reach-clamped) chain — exactly l2
-      // from the knee, so hip→knee→ankle is one connected chain.
       s3[ftI * 3] = hx + nx * dc;
       s3[ftI * 3 + 1] = hy + ny * dc;
       s3[ftI * 3 + 2] = hz + nz * dc;
+    }
+
+    // Guard every skel3 value against non-finite (it also feeds the VRM
+    // aim-retarget — one NaN would poison it). Fall back to the pelvis.
+    for (let j = 0; j < JOINTS; j++) {
+      if (
+        !Number.isFinite(s3[j * 3]) ||
+        !Number.isFinite(s3[j * 3 + 1]) ||
+        !Number.isFinite(s3[j * 3 + 2])
+      ) {
+        s3[j * 3] = pelX;
+        s3[j * 3 + 1] = pelY;
+        s3[j * 3 + 2] = pelZ;
+      }
     }
 
     // ---- project the body joints through the tilted weak-perspective camera.
@@ -1922,15 +1524,56 @@ export class AttractDancer {
     out[oi + 1] = HORIZON + (yy - HORIZON) * s;
   }
 
-  /** The dance pad: four flat arrows on the floor at the panel targets. Each
-   *  is a dim neon outline at rest; on the beat it is stepped it flashes bright
-   *  (additive glow fill + hot outline) and fades over ~a beat. Drawn first so
-   *  the dancer's body and feet layer over it — feet read as ON the panels. */
+  /** The physical 3D dancepad: a dark slab on the floor plane (world y=FOOT_Y),
+   *  spanning the four panels, projected through the same camera as the body,
+   *  with a faked front lip for thickness — then a square tile + a chevron arrow
+   *  per panel (dim at rest, flashing bright on the beat it is stepped). Drawn
+   *  first so the dancer's body and feet layer over it (feet read as ON it). */
   private emitPad(beat: number): void {
+    const B = BODY_H;
     const pts = this.padPts;
+    const pp = this.padPlat;
     const pa = this.pal.accentA;
     const pb = this.pal.accentB;
     const wht = this.pal.white;
+    const gb = this.pal.gradBot;
+
+    // --- platform slab: dark rounded quad spanning the panels ---
+    const hw = 0.42 * B; // half width in world x
+    const zN = 0.34 * B; // near edge (+z, toward the viewer)
+    const zF = -0.42 * B; // far edge (−z)
+    this.projFloor(CX - hw, zN, pp, 0); // front-left
+    this.projFloor(CX + hw, zN, pp, 2); // front-right
+    this.projFloor(CX + hw, zF, pp, 4); // back-right
+    this.projFloor(CX - hw, zF, pp, 6); // back-left
+    const dr = (gb[0] / 255) * 0.55;
+    const dg = (gb[1] / 255) * 0.55;
+    const dbl = (gb[2] / 255) * 0.55;
+    this.solidTri(pp[0], pp[1], pp[2], pp[3], pp[4], pp[5], dr, dg, dbl);
+    this.solidTri(pp[0], pp[1], pp[4], pp[5], pp[6], pp[7], dr, dg, dbl);
+    // Front lip: extrude the near edge down in screen space (fakes thickness).
+    const lip = 0.045 * B;
+    this.solidTri(pp[0], pp[1], pp[2], pp[3], pp[2], pp[3] + lip, dr * 0.5, dg * 0.5, dbl * 0.5);
+    this.solidTri(
+      pp[0],
+      pp[1],
+      pp[2],
+      pp[3] + lip,
+      pp[0],
+      pp[1] + lip,
+      dr * 0.5,
+      dg * 0.5,
+      dbl * 0.5,
+    );
+    // Dim rim outline around the slab top.
+    const rr = (pb[0] / 255) * 0.1;
+    const rg = (pb[1] / 255) * 0.1;
+    const rb = (pb[2] / 255) * 0.1;
+    this.padEdge(pp[0], pp[1], pp[2], pp[3], 0.8, rr, rg, rb);
+    this.padEdge(pp[2], pp[3], pp[4], pp[5], 0.8, rr, rg, rb);
+    this.padEdge(pp[4], pp[5], pp[6], pp[7], 0.8, rr, rg, rb);
+    this.padEdge(pp[6], pp[7], pp[0], pp[1], 0.8, rr, rg, rb);
+
     for (let oi = 0; oi < 4; oi++) {
       const panel = PAD_ORDER[oi];
       const cx = PAD_CX[panel];
@@ -1940,6 +1583,18 @@ export class AttractDancer {
       // Perpendicular in the floor plane (rotate the pointing dir 90°).
       const pvx = -puz;
       const pvz = pux;
+
+      // Dark square tile under the arrow (a physical panel on the slab).
+      const ts = PAD_HS * 1.16;
+      this.projFloor(cx + pux * ts + pvx * ts, cz + puz * ts + pvz * ts, pp, 8);
+      this.projFloor(cx - pux * ts + pvx * ts, cz - puz * ts + pvz * ts, pp, 10);
+      this.projFloor(cx - pux * ts - pvx * ts, cz - puz * ts - pvz * ts, pp, 12);
+      this.projFloor(cx + pux * ts - pvx * ts, cz + puz * ts - pvz * ts, pp, 14);
+      const tr = (gb[0] / 255) * 0.9 + 0.02;
+      const tg = (gb[1] / 255) * 0.9 + 0.02;
+      const tb = (gb[2] / 255) * 0.9 + 0.03;
+      this.solidTri(pp[8], pp[9], pp[10], pp[11], pp[12], pp[13], tr, tg, tb);
+      this.solidTri(pp[8], pp[9], pp[12], pp[13], pp[14], pp[15], tr, tg, tb);
       // Project the 7 arrow-outline points + centroid (index 7) to screen.
       let mx = 0;
       let my = 0;

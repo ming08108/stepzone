@@ -330,10 +330,11 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let colLine = (1.0 - smoothstep(0.5 * pxc, 1.5 * pxc, dc)) * step(abs(round(cf)), 7.0);
     col = col + u.accentB.rgb * (0.35 * colLine * min(1.0, t * 3.0));
 
-    // --- dance pad: four arrows on the floor (L, D, U, R), flashing on the
-    //     step that lands on each panel. Drawn here so the pad shows under EVERY
-    //     dancer (the 2D procedural one and every 3D avatar). Stationary in the
-    //     floor's (column cf, row rc) frame so it doesn't ride the treadmill. ---
+    // --- dance pad: DISABLED here. The arrows now live on the physical 3D
+    //     dancepad rendered in worldspace by AttractDancer.emitPad (see
+    //     attractDancer.ts), so the background floor no longer draws them. The
+    //     loop is kept but its contribution is zeroed to avoid touching the
+    //     surrounding floor math / unused bindings. ---
     let rc = t * 14.0;
     let padRC = 9.6;                             // centre of the pad, at her feet
     // The four panels in a DDR '+' cross, where the feet actually land: Left and
@@ -349,7 +350,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         let fl = u.pad[i];
         // Neon arrow: teal outline at rest, ramping to hot white on the step.
         let acol = mix(u.accentB.rgb, u.white.rgb, fl);
-        col = mix(col, acol, m * (0.32 + 0.85 * fl) * fog * inSpread);
+        col = mix(col, acol, m * (0.32 + 0.85 * fl) * fog * inSpread * 0.0);
       }
     }
   }
