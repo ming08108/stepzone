@@ -622,14 +622,22 @@ export class SkinnedModel {
                 format,
                 blend: blend
                   ? {
-                      // Blend color over what's there; keep destination alpha so
-                      // the composited silhouette stays opaque.
+                      // Standard "over" compositing. Color blends src over dst;
+                      // alpha ACCUMULATES (src + dst·(1−src)) so a blend prim
+                      // makes the offscreen opaque where it covers — otherwise a
+                      // model whose materials are ALL alpha-blended (common in
+                      // MMD-derived VRMs) leaves the whole silhouette at the
+                      // clear alpha (0) and composites to nothing.
                       color: {
                         srcFactor: 'src-alpha',
                         dstFactor: 'one-minus-src-alpha',
                         operation: 'add',
                       },
-                      alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+                      alpha: {
+                        srcFactor: 'one',
+                        dstFactor: 'one-minus-src-alpha',
+                        operation: 'add',
+                      },
                     }
                   : undefined,
               },
