@@ -248,10 +248,14 @@ export class SkinnedModel {
   private bindPaletteLocals!: Float32Array<ArrayBuffer>; // palette-order bind locals
   private readonly qA = new Float32Array(4);
   private readonly qB = new Float32Array(4);
+  private readonly qC = new Float32Array(4); // pole roll delta
   private readonly vDir = new Float32Array(3);
   private readonly vComp = new Float32Array(3);
   private readonly vWorld = new Float32Array(3);
   private readonly vLocal = new Float32Array(3);
+  private readonly vN = new Float32Array(3); // pole: target bend-plane normal
+  private readonly vN1 = new Float32Array(3); // pole: aim-rotated rest normal
+  private readonly vSeg = new Float32Array(3); // pole: scratch segment
 
   // --- Foot/root placement (feet step to our foot joints). ------------------
   private placeEnabled = false;
@@ -400,6 +404,31 @@ export class SkinnedModel {
         hold: chain.hold ?? false,
         narrowX: chain.narrowX ?? 1,
       };
+      // Pole (bend-plane) control: precompute the REST bend-plane normal from the
+      // three model humanoid bones' bind positions, in model space.
+      if (chain.pole && chain.poleModel) {
+        const pa = resolveBone(chain.poleModel[0]);
+        const pb = resolveBone(chain.poleModel[1]);
+        const pc = resolveBone(chain.poleModel[2]);
+        if (pa >= 0 && pb >= 0 && pc >= 0) {
+          const g = bindGlobals;
+          const e1x = g[pb * 16 + 12] - g[pa * 16 + 12];
+          const e1y = g[pb * 16 + 13] - g[pa * 16 + 13];
+          const e1z = g[pb * 16 + 14] - g[pa * 16 + 14];
+          const e2x = g[pc * 16 + 12] - g[pb * 16 + 12];
+          const e2y = g[pc * 16 + 13] - g[pb * 16 + 13];
+          const e2z = g[pc * 16 + 14] - g[pb * 16 + 14];
+          const nx = e1y * e2z - e1z * e2y;
+          const ny = e1z * e2x - e1x * e2z;
+          const nz = e1x * e2y - e1y * e2x;
+          const nl = Math.hypot(nx, ny, nz);
+          if (nl > 1e-5) {
+            const s = (chain.poleSign ?? 1) / nl;
+            bone.restN = new Float32Array([nx * s, ny * s, nz * s]);
+            bone.poleSrc = chain.pole;
+          }
+        }
+      }
       this.retargetBones.push(bone);
       this.retargetByNode[node] = bone;
     }
@@ -835,6 +864,101 @@ export class SkinnedModel {
    * Unmapped bones (fingers, poles, feet) keep their bind local. Allocation-free
    * and NaN-safe: degenerate directions fall back to the bind pose.
    */
+
+  /** Map a source-space segment p→q into model space (axis signs + order). */
+  private mapSeg(out: Float32Array, skel: Float64Array, p: number, q: number): void {
+    const comp = this.vComp;
+    comp[0] = (skel[q * 3] - skel[p * 3]) * X_SIGN;
+    comp[1] = (skel[q * 3 + 1] - skel[p * 3 + 1]) * Y_SIGN;
+    comp[2] = (skel[q * 3 + 2] - skel[p * 3 + 2]) * Z_SIGN;
+    out[0] = comp[AXIS_ORDER[0]];
+    out[1] = comp[AXIS_ORDER[1]];
+    out[2] = comp[AXIS_ORDER[2]];
+  }
+
+  /** Rotate vec3 `v` by unit quat `qq` → `out` (t = 2·q.xyz×v; out = v + w·t + q.xyz×t). */
+  private rotVec(out: Float32Array, qq: Float32Array, v: Float32Array): void {
+    const x = qq[0],
+      y = qq[1],
+      z = qq[2],
+      w = qq[3];
+    const vx = v[0],
+      vy = v[1],
+      vz = v[2];
+    const tx = 2 * (y * vz - z * vy);
+    const ty = 2 * (z * vx - x * vz);
+    const tz = 2 * (x * vy - y * vx);
+    out[0] = vx + w * tx + (y * tz - z * ty);
+    out[1] = vy + w * ty + (z * tx - x * tz);
+    out[2] = vz + w * tz + (x * ty - y * tx);
+  }
+
+  /**
+   * Spin the aim delta `q` about the aim axis `dir` so the bone's bend plane
+   * matches the source animation's — a pole/twist constraint. Without it the
+   * forearm roll is undetermined (minimal-arc), which flips the hand and rotates
+   * the elbow's hinge plane on a skinned arm. `q` is modified in place; no-op if
+   * the limb is near-straight (normal degenerates → fall back to plain aim).
+   */
+  private applyPoleRoll(
+    q: Float32Array,
+    dir: Float32Array,
+    bone: RetargetBone,
+    skel: Float64Array,
+    idx: Record<string, number>,
+  ): void {
+    const ps = bone.poleSrc!;
+    const ia = idx[ps[0]],
+      ib = idx[ps[1]],
+      ic = idx[ps[2]];
+    if (ia === undefined || ib === undefined || ic === undefined) return;
+    // Target bend-plane normal N = seg1 × seg2, in model space.
+    const seg = this.vSeg,
+      N = this.vN;
+    this.mapSeg(seg, skel, ia, ib);
+    const s1x = seg[0],
+      s1y = seg[1],
+      s1z = seg[2];
+    const l1 = Math.hypot(s1x, s1y, s1z);
+    this.mapSeg(seg, skel, ib, ic);
+    const l2 = Math.hypot(seg[0], seg[1], seg[2]);
+    N[0] = s1y * seg[2] - s1z * seg[1];
+    N[1] = s1z * seg[0] - s1x * seg[2];
+    N[2] = s1x * seg[1] - s1y * seg[0];
+    const nRaw = Math.hypot(N[0], N[1], N[2]);
+    // Fade the correction out as the arm straightens (|N|/(|seg1||seg2|) =
+    // sin(elbow angle) → 0): the bend plane is undefined for a straight arm, so
+    // easing to zero avoids a roll POP as it passes through near-straight.
+    const bendSin = nRaw / (l1 * l2 + 1e-9);
+    const t = (bendSin - 0.12) / (0.32 - 0.12);
+    const w = t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t); // smoothstep
+    if (w <= 0) return; // effectively straight → plain aim
+    // Rest normal, carried through the aim delta so it sits in the aimed frame.
+    const N1 = this.vN1;
+    this.rotVec(N1, q, bone.restN!);
+    // Project both normals ⟂ dir so the correcting spin is purely about the aim.
+    const p1 = N1[0] * dir[0] + N1[1] * dir[1] + N1[2] * dir[2];
+    N1[0] -= p1 * dir[0];
+    N1[1] -= p1 * dir[1];
+    N1[2] -= p1 * dir[2];
+    const p2 = N[0] * dir[0] + N[1] * dir[1] + N[2] * dir[2];
+    N[0] -= p2 * dir[0];
+    N[1] -= p2 * dir[1];
+    N[2] -= p2 * dir[2];
+    const pl1 = Math.hypot(N1[0], N1[1], N1[2]),
+      pl2 = Math.hypot(N[0], N[1], N[2]);
+    if (pl1 < 1e-4 || pl2 < 1e-4) return;
+    N1[0] /= pl1;
+    N1[1] /= pl1;
+    N1[2] /= pl1;
+    N[0] /= pl2;
+    N[1] /= pl2;
+    N[2] /= pl2;
+    quatFromTo(this.qC, 0, N1, N); // spin about dir aligning N1 → N
+    if (w < 1) quatSlerpIdentity(this.qC, 0, this.qC, 0, w); // ease in with bend
+    quatMul(q, 0, this.qC, 0, q, 0); // q = qRoll · q
+  }
+
   retargetFromSkeleton(skel: Float64Array, idx: Record<string, number>): void {
     // Start from bind: unmapped palette joints stay at their rest local.
     this.retargetLocals.set(this.bindPaletteLocals);
@@ -903,6 +1027,10 @@ export class SkinnedModel {
             // q = delta rotating restDir → target; damp short/noisy bones by
             // easing the delta toward identity, then apply on the bind global.
             quatFromTo(q, 0, bone.restDir, dir);
+            // Pole roll: spin `q` about the aim so the limb's bend plane matches
+            // the source, fixing forearm twist (the hand flipping / elbow-plane
+            // error a bare aim leaves undetermined off an A-pose bind).
+            if (bone.restN && bone.poleSrc) this.applyPoleRoll(q, dir, bone, skel, idx);
             if (bone.damp < 1) quatSlerpIdentity(q, 0, q, 0, bone.damp);
             quatMul(q, 0, q, 0, this.bindGlobalQuat, bone.node * 4); // newWorld
             // localRot = inverse(parentCurrentGlobal) * newWorld

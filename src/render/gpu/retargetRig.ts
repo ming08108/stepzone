@@ -47,6 +47,18 @@ export interface BoneChain {
    *  chains so wide animation steps don't read as a splayed, bow-legged
    *  stance on the model's proportions. */
   narrowX?: number;
+  /** Bend-plane pole control for a 2-bone limb (fixes forearm ROLL/twist that a
+   *  bare minimal-arc aim leaves undetermined — invisible on tube limbs, but on
+   *  a skinned arm it flips the hand and rotates the elbow's hinge plane).
+   *  `pole` names three SOURCE joints (shoulder, elbow, wrist) whose bend-plane
+   *  normal `cross(elbow−shoulder, wrist−elbow)` is the TARGET roll reference;
+   *  `poleModel` names the matching three MODEL humanoid bones for the REST
+   *  normal. Both bones of a limb pass the same triples so they share one plane.
+   *  When the limb is near-straight (normal degenerates) it falls back to the
+   *  plain aim. `poleSign` flips the rest normal if the L/R crossing inverts it. */
+  pole?: readonly [string, string, string];
+  poleModel?: readonly [string, string, string];
+  poleSign?: number;
 }
 
 export const BONE_CHAINS: readonly BoneChain[] = [
@@ -101,11 +113,42 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   // but only ~30%, so the socket elevates a little to spread the deformation
   // without the over-reach a full clavicle aim caused (the old compounding bug).
   { bone: 'leftShoulder', restChild: 'leftUpperArm', from: 'shoulderR', to: 'elbowR', damp: 0.3 },
-  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderR', to: 'elbowR' },
-  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowR', to: 'handR' },
+  // Upper + fore-arm share the elbow bend plane (shoulderR/elbowR/handR source,
+  // leftUpperArm/leftLowerArm/leftHand model) so the forearm can't twist the
+  // hand off the wrist and the elbow hinge stays in the right plane.
+  {
+    bone: 'leftUpperArm',
+    restChild: 'leftLowerArm',
+    from: 'shoulderR',
+    to: 'elbowR',
+    pole: ['shoulderR', 'elbowR', 'handR'],
+    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+  },
+  {
+    bone: 'leftLowerArm',
+    restChild: 'leftHand',
+    from: 'elbowR',
+    to: 'handR',
+    pole: ['shoulderR', 'elbowR', 'handR'],
+    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+  },
   { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderL', to: 'elbowL', damp: 0.3 },
-  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderL', to: 'elbowL' },
-  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowL', to: 'handL' },
+  {
+    bone: 'rightUpperArm',
+    restChild: 'rightLowerArm',
+    from: 'shoulderL',
+    to: 'elbowL',
+    pole: ['shoulderL', 'elbowL', 'handL'],
+    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+  },
+  {
+    bone: 'rightLowerArm',
+    restChild: 'rightHand',
+    from: 'elbowL',
+    to: 'handL',
+    pole: ['shoulderL', 'elbowL', 'handL'],
+    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+  },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
   { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
   { bone: 'leftFoot', restChild: 'leftFoot', from: 'footR', to: 'footR', hold: true },
@@ -124,4 +167,9 @@ export interface RetargetBone {
   damp: number; // 1 = full aim, <1 steadies toward rest
   hold: boolean; // hold bind world orientation (level foot) instead of aiming
   narrowX: number; // <1 pulls the aim target toward the centerline (legs)
+  // Pole (bend-plane) control — set only on arm bones. `restN` is the bind
+  // bend-plane normal in model space (unit); `poleSrc` are the three source
+  // joint names whose live bend-plane normal is the target roll reference.
+  restN?: Float32Array<ArrayBuffer>;
+  poleSrc?: readonly [string, string, string];
 }
