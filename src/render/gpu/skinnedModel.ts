@@ -91,7 +91,7 @@ interface GpuPrimitive {
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
 const DRAW_FLOATS = DRAW_STRIDE / 4;
-const FRAME_FLOATS = 28; // viewProj(16) + lightDir(4) + tint(4) + camPos(4)
+const FRAME_FLOATS = 32; // viewProj(16) + lightDir(4) + tint(4) + camPos(4) + env(4)
 
 const WGSL = /* wgsl */ `
 struct Frame {
@@ -99,6 +99,7 @@ struct Frame {
   lightDir : vec4f,
   tint     : vec4f,
   camPos   : vec4f,
+  env      : vec4f,   // rgb = scene's current neon hue (cycles with the rings), w = rim blend
 };
 @group(0) @binding(0) var<uniform> frame : Frame;
 @group(0) @binding(1) var<storage, read> palette : array<mat4x4f>;
@@ -219,11 +220,25 @@ fn fs(
     + albedo * front * select(0.0, 0.14, isFace);
   // Hot rim — BLEND the silhouette toward saturated neon; strong on the body, cut
   // hard on the face (a neon rim across a nose reads as grime at this scale).
+  // The rim colour picks up the SCENE's current neon hue (frame.env, cycling with
+  // the hexagon rings on the beat) so she reads as lit BY the tunnel, not pasted
+  // on — blended over the facing-based cyan/magenta so the edge still has variation.
+  // Only the rim samples the scene; the body tint/grade/tone stay as tuned.
+  let rimCol = mix(envCol, frame.env.rgb, frame.env.w) * 2.3;
   let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
-  lit = mix(lit, envCol * 2.3, clamp(rimAmt * select(0.92, 0.2, isFace), 0.0, 0.9));
+  lit = mix(lit, rimCol, clamp(rimAmt * select(0.92, 0.2, isFace), 0.0, 0.9));
   // Pad up-glow: magenta light from the deck onto downward-facing surfaces
   // (shins, shoe tops, jaw underside) — grounds her ON the lit stage.
   lit += vec3f(1.0, 0.3, 0.72) * max(-n.y, 0.0) * 0.5;
+  // Highlight rolloff (body only): soft-knee compress the top end so the white
+  // cardigan keeps a gradient instead of clipping FLAT to detail-free 1.0 at the
+  // framebuffer store (the sleeves blew out in extended-arm reach poses). Leaves
+  // midtones below the knee untouched and asymptotes to 1.0 so nothing hard-clips.
+  if (!isFace) {
+    let knee = 0.72;
+    let over = max(lit - vec3f(knee), vec3f(0.0));
+    lit = min(lit, vec3f(knee)) + (1.0 - knee) * (over / (over + vec3f(1.0 - knee)));
+  }
   // Re-encode to sRGB for textured prims (linear lighting → sRGB store);
   // flat-color prims keep the renderer's original non-linear passthrough.
   if (useTex) { lit = pow(max(lit, vec3f(0.0)), vec3f(1.0 / 2.2)); }
@@ -285,6 +300,7 @@ export class SkinnedModel {
   }
 
   private tint: [number, number, number, number] = [1, 1, 1, 1];
+  private env: [number, number, number, number] = [0.7, 0.42, 0.95, 0]; // scene rim hue; w=0 → off by default
 
   // --- Retargeting bind data + scratch (built in the constructor). ----------
   private retargetBones: RetargetBone[] = [];
@@ -1341,6 +1357,13 @@ export class SkinnedModel {
     this.tint = [r, g, b, a];
   }
 
+  /** Set the scene's current neon hue (0..1 RGB) for the silhouette rim, so she
+   *  reads as lit by the tunnel; `strength` (0..1) blends it over the facing-based
+   *  cyan/magenta rim. Only the rim is affected — the body tint/tone are unchanged. */
+  setEnv(r: number, g: number, b: number, strength = 0.75): void {
+    this.env = [r, g, b, strength];
+  }
+
   /** Number of glTF materials (for `setMaterialColors`). */
   get materialCount(): number {
     return this.nMaterials;
@@ -1451,6 +1474,10 @@ export class SkinnedModel {
     this.frameData[25] = eye[1];
     this.frameData[26] = eye[2];
     this.frameData[27] = 0;
+    this.frameData[28] = this.env[0]; // scene neon rim hue (cycles with the rings)
+    this.frameData[29] = this.env[1];
+    this.frameData[30] = this.env[2];
+    this.frameData[31] = this.env[3]; // rim blend strength (0 = keep facing cyan/magenta)
     this.device.queue.writeBuffer(this.frameBuf, 0, this.frameData);
 
     // 4. Per-draw uniforms (model matrix + material + skin flags).

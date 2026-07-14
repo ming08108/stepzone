@@ -641,6 +641,21 @@ export class AttractGpu {
     // turned the face into a murky, hollow-eyed smudge in-game.
     void dim;
     model.setTint(1.22, 1.19, 1.26);
+    // Scene-synced rim: cycle her silhouette rim through the same neon the hexagon
+    // rings sweep (accentA→B→D, on the beat pump the rings use) so she reads as lit
+    // BY the tunnel instead of pasted on. Only the rim samples this (see setEnv).
+    const acc = [this.pal.accentA, this.pal.accentB, this.pal.accentD];
+    const cyc = (((b * 0.5) % 3) + 3) % 3;
+    const seg = Math.floor(cyc);
+    const f = cyc - seg;
+    const c0 = acc[seg % 3];
+    const c1 = acc[(seg + 1) % 3];
+    model.setEnv(
+      c0[0] + (c1[0] - c0[0]) * f,
+      c0[1] + (c1[1] - c0[1]) * f,
+      c0[2] + (c1[2] - c0[2]) * f,
+      0.7,
+    );
     // Dynamic camera — a proper moving shot, not a static frame: a wide,
     // two-frequency orbit sweeps most of the way around her and never repeats;
     // the eye cranes up and dips on a slower arc; it breathes in/out and punches
