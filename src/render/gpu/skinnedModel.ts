@@ -618,14 +618,14 @@ export class SkinnedModel {
 
     const FINGERS = ['Index', 'Middle', 'Ring', 'Little'] as const;
     const SEGS = ['Proximal', 'Intermediate', 'Distal'] as const;
-    const CURL = [0.3, 0.44, 0.28]; // radians per phalanx, tighter toward the tip
-    const THUMB = [0.32, 0.2, 0.12]; // gentler — the thumb folds toward the palm edge
+    const CURL = [0.4, 0.54, 0.35]; // radians per phalanx, tighter toward the tip
+    const THUMB = [0.34, 0.22, 0.14]; // gentler — the thumb folds toward the palm edge
     // Slight wrist EXTENSION baked into the hand bone: the hand isn't retargeted,
     // so on an extended/raised arm it keeps its bind break at the wrist and, with
     // the finger curl, reads as a limp hand drooping off the forearm. A small
     // extension (about local Z, opposite the finger flexion) lifts the palm back
     // toward the forearm line so the hand continues the arm instead of hanging.
-    const WRIST_EXT = 0.26;
+    const WRIST_EXT = 0.19;
     for (const side of ['left', 'right'] as const) {
       const sgn = side === 'left' ? 1 : -1;
       const jb = side === 'left' ? 'L' : 'R';
