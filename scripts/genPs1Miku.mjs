@@ -27,7 +27,9 @@ const SKIN = [1.0, 0.85, 0.76];
 const WHITE = [0.93, 0.95, 0.97];
 const NAVY = [0.086, 0.102, 0.18]; // #161A2E — sleeves + skirt
 const BOOT = [0.05, 0.055, 0.09]; // boots, a touch darker than the navy
-const MAG = [0.878, 0.2, 0.541]; // #E0338A — hair-tie accent
+const MAG = [0.878, 0.2, 0.541]; // #E0338A — hair-tie / earphone accent
+const GREY = [0.32, 0.35, 0.42]; // headset band + ear pods
+const RED = [0.86, 0.22, 0.28]; // a collar function button
 
 // Material table: name → { color, tex? }. Order fixes material index.
 const MATS = [
@@ -36,7 +38,9 @@ const MATS = [
   { key: 'top', color: WHITE },
   { key: 'navy', color: NAVY }, // detached sleeves + skirt
   { key: 'boot', color: BOOT },
-  { key: 'mag', color: MAG }, // hair-tie modules
+  { key: 'mag', color: MAG }, // hair-tie modules + earphone accents
+  { key: 'grey', color: GREY }, // headset
+  { key: 'red', color: RED }, // collar button
   { key: 'face', color: [1, 1, 1], tex: true }, // sampled face texture
 ];
 const MI = Object.fromEntries(MATS.map((m, i) => [m.key, i]));
@@ -296,10 +300,54 @@ for (const s of [-1, 1]) {
   tube('hair', 'head', mid, tip, 0.08, 0.016, 6); // lower tail, tapering to a point
 }
 
+// Headset — Miku's single most iconic prop. A grey band arcs ear-to-ear over the
+// crown; each ear has a pod (grey) with a pink speaker centre and a teal
+// "conductor" fin sweeping up-and-back.
+{
+  const earY = HEADCY - 0.01;
+  const bandPts = [
+    [-0.15, earY + 0.02, 0.0],
+    [-0.1, HEADCY + 0.13, 0.0],
+    [0.1, HEADCY + 0.13, 0.0],
+    [0.15, earY + 0.02, 0.0],
+  ];
+  for (let i = 0; i < bandPts.length - 1; i++)
+    tube('grey', 'head', bandPts[i], bandPts[i + 1], 0.02, 0.02, 4, { capA: false, capB: false });
+  for (const s of [-1, 1]) {
+    const inner = [s * 0.125, earY, 0.0];
+    const outer = [s * 0.175, earY, 0.0];
+    tube('grey', 'head', inner, outer, 0.058, 0.062, 8); // ear pod
+    tube(
+      'mag',
+      'head',
+      vadd(outer, [s * 0.001, 0, 0]),
+      vadd(outer, [s * 0.02, 0, 0]),
+      0.03,
+      0.026,
+      8,
+      {
+        capA: false,
+      },
+    ); // pink speaker centre
+    // Teal conductor fin: a thin blade sweeping up and back from the pod.
+    addBox('hair', 'head', s * 0.185, earY + 0.06, 0.05, 0.012, 0.07, 0.03, {
+      hxTop: 0.012,
+      hzTop: 0.012,
+    });
+  }
+}
+
 // Neck (rounded)
 tube('skin', 'neck', [0, W('neck')[1] - 0.02, 0], [0, W('neck')[1] + 0.07, 0], 0.045, 0.045, 6);
-// Collar band (navy) at the base of the neck.
+// Collar band (navy) at the base of the neck, with a row of little function
+// buttons down the front (red / teal / magenta) — a nod to her shirt's detailing.
 tube('navy', 'chest', [0, W('chest')[1] + 0.06, 0], [0, W('chest')[1] + 0.11, 0], 0.075, 0.06, 8);
+{
+  const cy = W('chest')[1] + 0.04;
+  const btn = ['red', 'hair', 'mag'];
+  for (let i = 0; i < 3; i++)
+    addBox(btn[i], 'chest', 0.0, cy - i * 0.03, -0.078, 0.011, 0.011, 0.008);
+}
 
 // Torso: two rounded 8-gon segments (spine, chest) so it bends. White top.
 segTube('top', 'hips', 'spine', 'spine', 0.115, 0.11, 8, { capA: false });
@@ -349,6 +397,7 @@ for (const side of ['left', 'right']) {
   tube('boot', U, lerp(hip, knee, 0.55), knee, 0.07, 0.068, 6, { capA: false }); // boot (thigh part)
   tube('boot', L, knee, foot, 0.068, 0.06, 6); // boot (shin)
   addBox('boot', F, foot[0], foot[1] - 0.05, -0.06, 0.07, 0.04, 0.12); // boot foot + toe
+  addBox('boot', F, foot[0], foot[1] - 0.085, 0.03, 0.06, 0.025, 0.045); // raised heel
 }
 
 // ---------------------------------------------------------------------------
