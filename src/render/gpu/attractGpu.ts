@@ -52,14 +52,22 @@ const MODEL_POOL: Record<string, DancerModel> = {
   B: { url: '/models/AvatarSample_B.vrm' },
   C: { url: '/models/AvatarSample_C.vrm' },
   Miku: { url: '/models/AvatarSample_B.vrm', hair: [0.05, 0.78, 0.72] },
+  // `Real` = an actual Hatsune Miku VRM. NOT shipped (Crypton's Piapro Character
+  // License restricts redistribution) — Miku*.vrm is gitignored, so drop your own
+  // licensed copy in public/models/ to use it. Forced-only (never in the random
+  // rotation), so it's inert for anyone without the file (loadModel falls back to
+  // the procedural dancer if the fetch 404s).
+  Real: { url: '/models/Miku4.vrm' },
 };
 
-/** Pick a dancer: `?dancerModel=Miku` forces one (testing), else random. */
+/** Avatars in the random rotation (redistributable only — excludes `Real`). */
+const RANDOM_KEYS = ['A', 'B', 'C', 'Miku'] as const;
+
+/** Pick a dancer: `?dancerModel=Real` forces any pool entry, else random. */
 function pickModel(): DancerModel {
-  const keys = Object.keys(MODEL_POOL);
   const forced = new URLSearchParams(location.search).get('dancerModel');
   if (forced && MODEL_POOL[forced]) return MODEL_POOL[forced];
-  return MODEL_POOL[keys[Math.floor(Math.random() * keys.length)]];
+  return MODEL_POOL[RANDOM_KEYS[Math.floor(Math.random() * RANDOM_KEYS.length)]];
 }
 
 /** One mood/variant's colors, as 0..1 float RGB ready for the uniform buffer. */
