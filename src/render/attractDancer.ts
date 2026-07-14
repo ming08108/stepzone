@@ -302,6 +302,11 @@ const L_UARM = 0.155,
 const MOCAP_FPB = 13; // baked frames per musical beat (= the clip's detected tempo)
 const MOCAP_PHASE = 0; // beats of phase offset to align the clip's accent to the beat
 const MOCAP_SEAM = 12; // frames of loop cross-blend hiding the segment seam
+// Arm amplitude: blend each mocap ARM direction partway back toward a relaxed
+// hang (chest-local down). <1 calms the dance — big overhead flings shrink to
+// subtler grooves — without changing its timing or beat-lock. Head/neck are
+// left at full mocap so the head still reads alive.
+const MOCAP_AMP = 0.55;
 const MOCAP_SR = 1; // sign of the across (right) axis remap
 const MOCAP_SF = 1; // sign of the forward axis remap
 const MOCAP_SWAP = 1; // 1 = mocap-L feeds screen-RIGHT arm (crossed), 0 = direct
@@ -1470,9 +1475,14 @@ export class AttractDancer {
       const useR = MOCAP_SWAP === 1 ? f === 0 : f === 1;
       const uo = useR ? 12 : 6; // upper-arm dir offset in md
       const fo = useR ? 15 : 9; // forearm dir offset in md
-      let ax = MOCAP_SR * md[uo] * latSX + md[uo + 1] * ux + MOCAP_SF * md[uo + 2] * fwdSX;
-      let ay = md[uo + 1] * uy;
-      let az = MOCAP_SR * md[uo] * latSZ + md[uo + 1] * uz + MOCAP_SF * md[uo + 2] * fwdSZ;
+      // Damp toward a relaxed hang (chest-local down = 0,-1,0) to calm the dance.
+      const dn = 1 - MOCAP_AMP;
+      let lr = md[uo] * MOCAP_AMP;
+      let lu = md[uo + 1] * MOCAP_AMP - dn;
+      let lf = md[uo + 2] * MOCAP_AMP;
+      let ax = MOCAP_SR * lr * latSX + lu * ux + MOCAP_SF * lf * fwdSX;
+      let ay = lu * uy;
+      let az = MOCAP_SR * lr * latSZ + lu * uz + MOCAP_SF * lf * fwdSZ;
       let al = Math.hypot(ax, ay, az) || 1;
       const eX = s3[soI * 3] + (ax / al) * L_UARM * B;
       const eY = s3[soI * 3 + 1] + (ay / al) * L_UARM * B;
@@ -1480,9 +1490,12 @@ export class AttractDancer {
       s3[elI * 3] = eX;
       s3[elI * 3 + 1] = eY;
       s3[elI * 3 + 2] = eZ;
-      ax = MOCAP_SR * md[fo] * latSX + md[fo + 1] * ux + MOCAP_SF * md[fo + 2] * fwdSX;
-      ay = md[fo + 1] * uy;
-      az = MOCAP_SR * md[fo] * latSZ + md[fo + 1] * uz + MOCAP_SF * md[fo + 2] * fwdSZ;
+      lr = md[fo] * MOCAP_AMP;
+      lu = md[fo + 1] * MOCAP_AMP - dn;
+      lf = md[fo + 2] * MOCAP_AMP;
+      ax = MOCAP_SR * lr * latSX + lu * ux + MOCAP_SF * lf * fwdSX;
+      ay = lu * uy;
+      az = MOCAP_SR * lr * latSZ + lu * uz + MOCAP_SF * lf * fwdSZ;
       al = Math.hypot(ax, ay, az) || 1;
       s3[haI * 3] = eX + (ax / al) * L_FARM * B;
       s3[haI * 3 + 1] = eY + (ay / al) * L_FARM * B;
