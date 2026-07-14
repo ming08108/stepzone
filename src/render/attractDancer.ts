@@ -399,7 +399,7 @@ const IDLE = (() => {
     [CH_SWAY]: 0.07,
     [CH_LIST]: 0.03,
     [CH_LEAN]: 0.065,
-    [CH_TWIST]: -0.17,
+    [CH_TWIST]: -0.21,
     [CH_YAW]: 0.13,
     [CH_SIDE]: -0.015,
     [CH_PELVZ]: 0.014,
@@ -457,7 +457,7 @@ const IDLE = (() => {
     [CH_SWAY]: -0.042,
     [CH_LIST]: -0.018,
     [CH_LEAN]: -0.04,
-    [CH_TWIST]: 0.1,
+    [CH_TWIST]: 0.13,
     [CH_YAW]: -0.08,
     [CH_SIDE]: 0.009,
     [CH_HROLL]: 0.035,
@@ -2073,7 +2073,7 @@ export class AttractDancer {
       acc[CH_SWAY] += lfo * 0.016; // fuller side-to-side weight transfer
       acc[CH_LIST] += lfo * 0.012;
       acc[CH_LEAN] += lfo * 0.028;
-      acc[CH_TWIST] -= lfo * 0.045;
+      acc[CH_TWIST] -= lfo * 0.06; // shoulders counter-rotate harder against the hips
       acc[CH_HROLL] -= lfo * 0.028;
       // Arm breathing: elbows squeeze a touch INTO each count and release
       // through the "and" (slightly out of phase left/right off the weight
