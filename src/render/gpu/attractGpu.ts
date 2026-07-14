@@ -639,7 +639,7 @@ export class AttractGpu {
     // dimmed tunnel) regardless of the field's bg dim. Dimming her down was what
     // turned the face into a murky, hollow-eyed smudge in-game.
     void dim;
-    model.setTint(1.32, 1.32, 1.36);
+    model.setTint(1.08, 1.06, 1.12);
     // Dynamic camera — a proper moving shot, not a static frame: a wide,
     // two-frequency orbit sweeps most of the way around her and never repeats;
     // the eye cranes up and dips on a slower arc; it breathes in/out and punches

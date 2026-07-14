@@ -188,19 +188,20 @@ fn fs(
   // The bands are lifted (0.72..1.05) so nothing sinks into a dead grey.
   let ndl = dot(n, l) * 0.5 + 0.5; // half-lambert — softer wrap, no black side
   let band = smoothstep(0.34, 0.5, ndl) * 0.2 + smoothstep(0.55, 0.72, ndl) * 0.18;
-  let shade = 0.9 + band; // brighter base — she was underexposed
+  // Keep the exposure MODEST so lit white cloth lands ~0.8, not clipped to 1.0 —
+  // clipping forced R=G=B and erased the neon tint (bright-but-grey torso). The
+  // colour comes from a STRONG multiply-tint, not from cranking brightness.
+  let shade = 0.72 + band;
   // The neon world's colour, by facing: cyan on one side, magenta on the other.
   let envCol = mix(vec3f(0.35, 0.85, 1.15), vec3f(1.2, 0.42, 0.95), n.x * 0.5 + 0.5);
-  // TINT the albedo toward that neon (multiplied, not added) so even a white
-  // outfit goes lavender/cyan instead of staying neutral grey — additive light
-  // washed out on white, which is why the earlier pass read as "bright but flat".
-  let tinted = albedo * mix(vec3f(1.0), envCol, 0.52);
-  // Ambient neon fill into the shadow side + a camera-facing fill so the FACE is
-  // never a black void. The front fill is NEON-tinted (not white) — a white fill
-  // bleached the tint back to grey on the camera-facing cardigan.
-  let fill = envCol * (1.0 - ndl) * 0.24;
+  // TINT the albedo toward that neon (multiplied) so even a white outfit goes
+  // lavender/cyan; kept strong (0.6) since the exposure no longer blows it out.
+  let tinted = albedo * mix(vec3f(1.0), envCol, 0.6);
+  // Ambient neon fill into the shadow side + a small neon (not white) camera-
+  // facing fill so the FACE reads without bleaching the cardigan back to grey.
+  let fill = envCol * (1.0 - ndl) * 0.18;
   let front = max(dot(n, viewDir), 0.0);
-  var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.16;
+  var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.1;
   // Hot rim — BLEND the silhouette toward saturated neon (not additive), cranked
   // so the burning cyan/magenta edge beats the bright hexagons behind her.
   let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
