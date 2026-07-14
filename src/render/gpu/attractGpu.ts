@@ -53,6 +53,10 @@ const MODEL_POOL: Record<string, DancerModel> = {
   B: { url: '/models/AvatarSample_B.vrm' },
   C: { url: '/models/AvatarSample_C.vrm' },
   Miku: { url: '/models/AvatarSample_B.vrm', hair: [0.05, 0.78, 0.72] },
+  // A hand-crafted, PS1-style Miku — ORIGINAL low-poly geometry + a painted face
+  // texture (scripts/genPs1Miku.mjs), so unlike `Real` it ships freely. Rigid
+  // segmented limbs + flat shading = peak PlayStation-era character. Tiny (~80KB).
+  PS1: { url: '/models/PS1Miku.vrm' },
   // `Real` = an actual Hatsune Miku VRM. NOT shipped (Crypton's Piapro Character
   // License restricts redistribution) — Miku*.vrm is gitignored, so drop your own
   // licensed copy in public/models/ to use it. Forced-only (never in the random
@@ -62,7 +66,7 @@ const MODEL_POOL: Record<string, DancerModel> = {
 };
 
 /** Avatars in the random rotation (redistributable only — excludes `Real`). */
-const RANDOM_KEYS = ['A', 'B', 'C', 'Miku'] as const;
+const RANDOM_KEYS = ['A', 'B', 'C', 'Miku', 'PS1'] as const;
 
 /** Pick a dancer: `?dancerModel=Real` forces any pool entry, else random. */
 function pickModel(): DancerModel {
