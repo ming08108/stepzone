@@ -271,6 +271,10 @@ export class SkinnedModel {
   private posScale = NaN; // our→model scale, locked on first retarget
   private readonly pelvis0 = new Float32Array(3); // our pelvis on first retarget
   private haveAnchor = false;
+  // Place the feet as independent siblings (robot rig) vs. body-only (VRM, where
+  // the feet are descendants of the hips, so translating the hips moves the
+  // whole body and the aimed leg bones follow the stepped foot positions).
+  private placeFeetSep = false;
 
   // --- Per-material color override (recolor to the scene palette). ----------
   private matColor!: Float32Array<ArrayBuffer>; // nMaterials * 3 rgb
@@ -434,14 +438,28 @@ export class SkinnedModel {
     }
 
     // --- Foot/root placement setup. -----------------------------------------
-    // Body (pelvis proxy) and both Foot bones share the same parent (the
-    // armature root "Bone"); place them in that parent's frame. Feet meshes are
-    // children of the Foot bones, so moving a Foot bone steps its foot.
-    const bodyP = nameToPalette.get('Body');
-    const footLP = nameToPalette.get('Foot.L');
-    const footRP = nameToPalette.get('Foot.R');
-    const ulP = nameToPalette.get('UpperLeg.L');
-    const llP = nameToPalette.get('LowerLeg.L');
+    // The body (pelvis proxy) is TRANSLATED from our animation's pelvis so the
+    // whole figure bounces on the beat, shifts its weight, and launches on a
+    // jump — the aim retarget only rotates bones, so without this the body is
+    // pinned at bind and the dance reads as arm-flailing over a static torso.
+    //
+    // Resolve through the VRM humanoid map (all shipped avatars) with a fallback
+    // to the robot rig's node names. On the robot, Body + both feet are SIBLINGS
+    // under the armature root and each is placed independently. On a VRM the feet
+    // are DESCENDANTS of the hips, so we translate the hips only and let the
+    // aimed leg bones carry the feet to their stepped spots (placeFeetSep=false).
+    const palOfBone = (vrmName: string, robotName: string): number | undefined => {
+      if (humanoid && humanoid[vrmName] !== undefined) {
+        const p = paletteOfNode.get(humanoid[vrmName]);
+        if (p !== undefined) return p;
+      }
+      return nameToPalette.get(robotName);
+    };
+    const bodyP = palOfBone('hips', 'Body');
+    const footLP = palOfBone('leftFoot', 'Foot.L');
+    const footRP = palOfBone('rightFoot', 'Foot.R');
+    const ulP = palOfBone('leftUpperLeg', 'UpperLeg.L');
+    const llP = palOfBone('leftLowerLeg', 'LowerLeg.L');
     if (
       bodyP !== undefined &&
       footLP !== undefined &&
@@ -449,6 +467,7 @@ export class SkinnedModel {
       ulP !== undefined &&
       llP !== undefined
     ) {
+      this.placeFeetSep = !humanoid; // robot: independent feet; VRM: body only
       this.placeBody = bodyP;
       this.placeBodyNode = joints[bodyP];
       this.placeFootL = footLP;
@@ -456,29 +475,36 @@ export class SkinnedModel {
       this.placeFootR = footRP;
       this.placeFootRNode = joints[footRP];
       const parentNode = model.nodes[this.placeBodyNode].parent;
-      if (parentNode >= 0) {
-        // Full inverse of the parent (armature-root) bind global — it carries a
-        // large export scale + a 90° rotation, so a world→local conversion needs
-        // the whole matrix, not just the rotation.
-        mat4Invert(this.invParentGlobal, 0, bindGlobals, parentNode * 16);
-        // Our pelvis maps to Body's bind world position.
-        this.pelvisAnchor[0] = bindGlobals[this.placeBodyNode * 16 + 12];
-        this.pelvisAnchor[1] = bindGlobals[this.placeBodyNode * 16 + 13];
-        this.pelvisAnchor[2] = bindGlobals[this.placeBodyNode * 16 + 14];
-        // Model leg path length (hip→knee→ankle) for the our→model scale.
-        const ulN = joints[ulP];
-        const llN = joints[llP];
-        const endN = findDescendantByName(model, llN, 'LowerLeg.L_end');
-        const seg = (a: number, b: number): number =>
-          Math.hypot(
-            bindGlobals[a * 16 + 12] - bindGlobals[b * 16 + 12],
-            bindGlobals[a * 16 + 13] - bindGlobals[b * 16 + 13],
-            bindGlobals[a * 16 + 14] - bindGlobals[b * 16 + 14],
-          );
-        this.modelLegLen =
-          seg(ulN, llN) + (endN >= 0 ? seg(llN, endN) : seg(llN, this.placeFootLNode));
-        this.placeEnabled = this.modelLegLen > 1e-6;
+      // Full inverse of the body's parent bind global (carries the VRM export
+      // scale + pre-rotation); identity if the body is itself a scene root.
+      if (parentNode >= 0) mat4Invert(this.invParentGlobal, 0, bindGlobals, parentNode * 16);
+      else {
+        this.invParentGlobal.fill(0);
+        this.invParentGlobal[0] =
+          this.invParentGlobal[5] =
+          this.invParentGlobal[10] =
+          this.invParentGlobal[15] =
+            1;
       }
+      // Our pelvis maps to the body bone's bind world position.
+      this.pelvisAnchor[0] = bindGlobals[this.placeBodyNode * 16 + 12];
+      this.pelvisAnchor[1] = bindGlobals[this.placeBodyNode * 16 + 13];
+      this.pelvisAnchor[2] = bindGlobals[this.placeBodyNode * 16 + 14];
+      // Model leg path length (hip→knee→ankle) for the our→model scale.
+      const ulN = joints[ulP];
+      const llN = joints[llP];
+      const endN = this.placeFeetSep
+        ? findDescendantByName(model, llN, 'LowerLeg.L_end')
+        : this.placeFootLNode;
+      const seg = (a: number, b: number): number =>
+        Math.hypot(
+          bindGlobals[a * 16 + 12] - bindGlobals[b * 16 + 12],
+          bindGlobals[a * 16 + 13] - bindGlobals[b * 16 + 13],
+          bindGlobals[a * 16 + 14] - bindGlobals[b * 16 + 14],
+        );
+      this.modelLegLen =
+        seg(ulN, llN) + (endN >= 0 ? seg(llN, endN) : seg(llN, this.placeFootLNode));
+      this.placeEnabled = this.modelLegLen > 1e-6;
     }
 
     this.applyFingerCurl(paletteOfNode);
@@ -1127,8 +1153,11 @@ export class SkinnedModel {
     if (!(s > 0)) return;
 
     this.placeNodeAt(this.placeBody, this.placeBodyNode, skel, pi, s);
-    this.placeNodeAt(this.placeFootL, this.placeFootLNode, skel, fl, s);
-    this.placeNodeAt(this.placeFootR, this.placeFootRNode, skel, fr, s);
+    if (this.placeFeetSep) {
+      // Robot rig: feet are siblings of the body — pin each one independently.
+      this.placeNodeAt(this.placeFootL, this.placeFootLNode, skel, fl, s);
+      this.placeNodeAt(this.placeFootR, this.placeFootRNode, skel, fr, s);
+    }
   }
 
   /**
