@@ -1045,6 +1045,19 @@ export class SkinnedModel {
     N[0] /= pl2;
     N[1] /= pl2;
     N[2] /= pl2;
+    // Keep the source bend-normal on the SAME side as the bind normal. An elbow
+    // (and knee) hinges only one way, so the bend plane's orientation relative to
+    // rest is fixed; the raw cross product, however, flips sign as the arm sweeps
+    // its roll through the plane containing `dir`, which would spin the hand a
+    // full ~180° backwards (the folded arms-up-near-head twist). Choosing the
+    // nearer of ±N caps the correction at ≤90° and makes that flip impossible —
+    // it supersedes the old fixed `poleSign` guess, which can't be right for
+    // every pose.
+    if (N1[0] * N[0] + N1[1] * N[1] + N1[2] * N[2] < 0) {
+      N[0] = -N[0];
+      N[1] = -N[1];
+      N[2] = -N[2];
+    }
     quatFromTo(this.qC, 0, N1, N); // spin about dir aligning N1 → N
     if (w < 1) quatSlerpIdentity(this.qC, 0, this.qC, 0, w); // ease in with bend
     quatMul(q, 0, this.qC, 0, q, 0); // q = qRoll · q

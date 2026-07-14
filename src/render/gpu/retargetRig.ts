@@ -128,16 +128,45 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   { bone: 'leftShoulder', restChild: 'leftUpperArm', from: 'shoulderR', to: 'elbowR', damp: 0.3 },
   // Upper + fore-arm share the elbow bend plane (shoulderR/elbowR/handR source,
   // leftUpperArm/leftLowerArm/leftHand model) so the forearm can't twist the
-  // hand off the wrist and the elbow hinge stays in the right plane.
-  // No bend-plane pole: with real full-body mocap the source arm is already in a
-  // valid configuration, so a plain minimal-arc aim reproduces it without the
-  // pole's sign flipping near folded/near-straight poses (which twisted the
-  // forearm on arms-up-near-head frames). The mocap keeps the hand on the wrist.
-  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderR', to: 'elbowR' },
-  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowR', to: 'handR' },
+  // hand off the wrist and the elbow hinge stays in the right plane. Both bones
+  // pass the same triple so they roll into one plane. The pole's forearm-roll is
+  // what holds the (un-retargeted) hand in line with the wrist; a bare aim leaves
+  // that roll free and the rigid hand flops as the arm swings. It no longer needs
+  // a `poleSign`: the solver now takes the source bend-normal on the bind side
+  // (an elbow hinges one way), so it can't flip 180° on folded arms-up poses.
+  {
+    bone: 'leftUpperArm',
+    restChild: 'leftLowerArm',
+    from: 'shoulderR',
+    to: 'elbowR',
+    pole: ['shoulderR', 'elbowR', 'handR'],
+    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+  },
+  {
+    bone: 'leftLowerArm',
+    restChild: 'leftHand',
+    from: 'elbowR',
+    to: 'handR',
+    pole: ['shoulderR', 'elbowR', 'handR'],
+    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+  },
   { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderL', to: 'elbowL', damp: 0.3 },
-  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderL', to: 'elbowL' },
-  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowL', to: 'handL' },
+  {
+    bone: 'rightUpperArm',
+    restChild: 'rightLowerArm',
+    from: 'shoulderL',
+    to: 'elbowL',
+    pole: ['shoulderL', 'elbowL', 'handL'],
+    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+  },
+  {
+    bone: 'rightLowerArm',
+    restChild: 'rightHand',
+    from: 'elbowL',
+    to: 'handL',
+    pole: ['shoulderL', 'elbowL', 'handL'],
+    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+  },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
   { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
   { bone: 'leftFoot', restChild: 'leftFoot', from: 'footR', to: 'footR', hold: true },
