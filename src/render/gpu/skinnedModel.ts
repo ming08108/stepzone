@@ -80,6 +80,7 @@ interface GpuPrimitive {
   pipeline: GPURenderPipeline; // variant for this prim's alpha mode + cull
   texBind: GPUBindGroup; // group 2: base-color texture + sampler
   recolor: boolean; // replace texture hue with baseColor, keep luminance (hair tint)
+  faceKind: number; // 0 = body, 1 = face/skin (spare the neon wash), 2 = eye highlight (emissive)
 }
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
@@ -154,6 +155,8 @@ fn fs(
   let useTex = (draw.flags & 1u) != 0u;
   let isBlend = (draw.flags & 2u) != 0u;
   let recolor = (draw.flags & 4u) != 0u;
+  let isFace = (draw.flags & 8u) != 0u;  // face/skin: spare the neon wash, warm fill
+  let isEyeHi = (draw.flags & 16u) != 0u; // eye highlight: emissive catchlight
 
   // Albedo: sampled texture × factor (textured), or the flat material color.
   // The base-color texture is created sRGB so the sample is already linear.
@@ -191,22 +194,25 @@ fn fs(
   // Keep the exposure MODEST so lit white cloth lands ~0.8, not clipped to 1.0 —
   // clipping forced R=G=B and erased the neon tint (bright-but-grey torso). The
   // colour comes from a STRONG multiply-tint, not from cranking brightness.
-  let shade = 0.84 + band; // the post-clamp grade protects the hue, so she can be
-  // punchier without the torso washing back to grey — brighter for arcade screens.
+  // Face prims are spared the neon wash — the earlier pass crushed the eyes/skin
+  // into the body's rose hue (a mannequin with no readable face). Lift the shade
+  // floor, cut the tint/grade/rim on the face, and warm it with a camera fill.
+  let shade = select(0.84, 0.98, isFace) + band; // brighter base for arcade screens
   // The neon world's colour, by facing: cyan on one side, magenta on the other.
   let envCol = mix(vec3f(0.35, 0.85, 1.15), vec3f(1.2, 0.42, 0.95), n.x * 0.5 + 0.5);
   // TINT the albedo toward that neon (multiplied) so even a white outfit goes
-  // lavender/cyan; kept strong (0.6) since the exposure no longer blows it out.
-  let tinted = albedo * mix(vec3f(1.0), envCol, 0.6);
-  // Ambient neon fill into the shadow side + a small neon (not white) camera-
-  // facing fill so the FACE reads without bleaching the cardigan back to grey.
+  // lavender/cyan; strong on the body, gentle on the face so skin stays skin.
+  let tinted = albedo * mix(vec3f(1.0), envCol, select(0.6, 0.15, isFace));
+  // Ambient neon fill + a camera-facing warm fill (stronger on the face) so the
+  // face reads without bleaching the cardigan back to grey.
   let fill = envCol * (1.0 - ndl) * 0.18;
   let front = max(dot(n, viewDir), 0.0);
-  var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.1;
-  // Hot rim — BLEND the silhouette toward saturated neon (not additive), cranked
-  // so the burning cyan/magenta edge beats the bright hexagons behind her.
+  var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.1
+    + albedo * front * select(0.0, 0.32, isFace);
+  // Hot rim — BLEND the silhouette toward saturated neon; strong on the body, cut
+  // hard on the face (a neon rim across a nose reads as grime at this scale).
   let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
-  lit = mix(lit, envCol * 2.3, clamp(rimAmt * 0.92, 0.0, 0.9));
+  lit = mix(lit, envCol * 2.3, clamp(rimAmt * select(0.92, 0.2, isFace), 0.0, 0.9));
   // Pad up-glow: magenta light from the deck onto downward-facing surfaces
   // (shins, shoe tops, jaw underside) — grounds her ON the lit stage.
   lit += vec3f(1.0, 0.3, 0.72) * max(-n.y, 0.0) * 0.5;
@@ -219,7 +225,11 @@ fn fs(
   // ceiling ate half of it, leaving a near-grey torso). Normalized by its max
   // channel so it only shifts hue, never darkens.
   let em = max(max(envCol.r, envCol.g), envCol.b);
-  lit = lit * mix(vec3f(1.0), envCol / em, 0.3);
+  lit = lit * mix(vec3f(1.0), envCol / em, select(0.3, 0.08, isFace));
+  // Eye highlights: bypass all lighting and go emissive — two bright catchlights
+  // that survive the dither and attract distance. This is the pixel that flips
+  // "mannequin" to "she's performing for you".
+  if (isEyeHi) { lit = albedo * 1.9; }
 
   let outA = select(1.0, alpha, isBlend) * frame.tint.a;
   return vec4f(lit, outA);
@@ -817,7 +827,18 @@ export class SkinnedModel {
         pipeline: getPipeline(isBlend, cull, zWrite),
         texBind: mat && p.materialIndex >= 0 ? materialBind[p.materialIndex] : defaultBind,
         recolor: false,
+        faceKind: 0,
       };
+    });
+    // Classify FACE prims by material name so they can be spared the neon wash —
+    // the eyes/face were crushed into the same rose hue as the body (a mannequin
+    // with no readable eyes). VRM/MToon materials are reliably named. Eye
+    // highlights go emissive (bright catchlights); face/skin get gentler tint.
+    prims.forEach((gp, i) => {
+      const name = model.materials[model.primitives[i].materialIndex]?.name ?? '';
+      if (/highlight|eye_?extra|eyestar|catchlight/i.test(name)) gp.faceKind = 2;
+      else if (/face|skin|eye|iris|mouth|brow|lash|eyeline|pupil|sclera/i.test(name))
+        gp.faceKind = 1;
     });
     // Optional hair recolor (e.g. a teal "Miku" look): tint every HAIR-named
     // material to `recolorHair`, keeping the texture's luminance for shading.
@@ -1366,7 +1387,12 @@ export class SkinnedModel {
       this.drawData[o + 19] = p.baseColor[3];
       this.drawDataU32[o + 20] = p.jointBase;
       this.drawDataU32[o + 21] = p.skinIndex >= 0 ? 1 : 0;
-      this.drawDataU32[o + 22] = (p.useTexture ? 1 : 0) | (p.isBlend ? 2 : 0) | (p.recolor ? 4 : 0);
+      this.drawDataU32[o + 22] =
+        (p.useTexture ? 1 : 0) |
+        (p.isBlend ? 2 : 0) |
+        (p.recolor ? 4 : 0) |
+        (p.faceKind === 1 ? 8 : 0) |
+        (p.faceKind === 2 ? 16 : 0);
       this.drawData[o + 23] = p.alphaCutoff; // f32 alpha cutoff
     }
     if (this.prims.length > 0) this.device.queue.writeBuffer(this.drawBuf, 0, this.drawData);
