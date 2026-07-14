@@ -26,7 +26,7 @@ const TEAL = [0.224, 0.773, 0.733]; // #39C5BB — hair + all teal accents
 const SKIN = [1.0, 0.85, 0.76];
 const WHITE = [0.93, 0.95, 0.97];
 const NAVY = [0.086, 0.102, 0.18]; // #161A2E — sleeves + skirt
-const BOOT = [0.05, 0.055, 0.09]; // boots, a touch darker than the navy
+const BOOT = [0.13, 0.17, 0.3]; // boots — brighter blue-teal so they don't sink into the dark
 const MAG = [0.878, 0.2, 0.541]; // #E0338A — hair-tie / earphone accent
 const GREY = [0.32, 0.35, 0.42]; // headset band + ear pods
 const RED = [0.86, 0.22, 0.28]; // a collar function button
@@ -41,7 +41,8 @@ const MATS = [
   { key: 'mag', color: MAG }, // hair-tie modules + earphone accents
   { key: 'grey', color: GREY }, // headset
   { key: 'red', color: RED }, // collar button
-  { key: 'face', color: [1, 1, 1], tex: true }, // sampled face texture
+  { key: 'deco', color: [1, 1, 1], tex: true, texIndex: 1 }, // "01" arm decal
+  { key: 'face', color: [1, 1, 1], tex: true, texIndex: 0 }, // sampled face texture
 ];
 const MI = Object.fromEntries(MATS.map((m, i) => [m.key, i]));
 
@@ -62,12 +63,14 @@ const BONES = {
   rightUpperArm: { parent: 'rightShoulder', t: [0.07, 0, 0] },
   rightLowerArm: { parent: 'rightUpperArm', t: [0.24, 0, 0] },
   rightHand: { parent: 'rightLowerArm', t: [0.22, 0, 0] },
+  // Legs a touch shorter (0.40 vs 0.42/segment) → idol proportion, legs ~50% of
+  // height with a slightly bigger head, instead of a stretched silhouette.
   leftUpperLeg: { parent: 'hips', t: [-0.09, 0, 0] },
-  leftLowerLeg: { parent: 'leftUpperLeg', t: [0, -0.42, 0] },
-  leftFoot: { parent: 'leftUpperLeg', t: [0, -0.42, 0], _via: 'leftLowerLeg' },
+  leftLowerLeg: { parent: 'leftUpperLeg', t: [0, -0.4, 0] },
+  leftFoot: { parent: 'leftUpperLeg', t: [0, -0.4, 0], _via: 'leftLowerLeg' },
   rightUpperLeg: { parent: 'hips', t: [0.09, 0, 0] },
-  rightLowerLeg: { parent: 'rightUpperLeg', t: [0, -0.42, 0] },
-  rightFoot: { parent: 'rightUpperLeg', t: [0, -0.42, 0], _via: 'rightLowerLeg' },
+  rightLowerLeg: { parent: 'rightUpperLeg', t: [0, -0.4, 0] },
+  rightFoot: { parent: 'rightUpperLeg', t: [0, -0.4, 0], _via: 'rightLowerLeg' },
 };
 // Fix the feet parents (chain through the lower legs).
 BONES.leftFoot.parent = 'leftLowerLeg';
@@ -352,11 +355,30 @@ tube('navy', 'chest', [0, W('chest')[1] + 0.06, 0], [0, W('chest')[1] + 0.11, 0]
 // Torso: two rounded 8-gon segments (spine, chest) so it bends. White top.
 segTube('top', 'hips', 'spine', 'spine', 0.115, 0.11, 8, { capA: false });
 segTube('top', 'spine', 'chest', 'chest', 0.115, 0.125, 8, { capB: false });
-// Tie: a thin teal strip down the chest front.
+// Tie: a knot at the collar then a thin teal strip down the chest front.
+addBox('hair', 'chest', 0, W('chest')[1] + 0.065, -0.105, 0.03, 0.026, 0.016, { hxBot: 0.02 }); // knot
 addBox('hair', 'chest', 0, W('chest')[1] - 0.02, -0.108, 0.022, 0.11, 0.015);
+// Thin teal trim edge along the bottom of the collar yoke.
+tube(
+  'hair',
+  'chest',
+  [0, W('chest')[1] + 0.055, 0],
+  [0, W('chest')[1] + 0.045, 0],
+  0.078,
+  0.077,
+  8,
+  {
+    capA: false,
+    capB: false,
+  },
+);
 // Skirt: a flared 8-gon frustum (pleats read from the facets), navy with a teal
 // hem trim. Hem ~1.7x the waist so it reads as a skirt, not shorts.
 const hipY = W('hips')[1];
+tube('hair', 'hips', [0, hipY + 0.045, 0], [0, hipY + 0.02, 0], 0.117, 0.117, 8, {
+  capA: false,
+  capB: false,
+}); // teal waistband
 tube('navy', 'hips', [0, hipY + 0.02, 0], [0, hipY - 0.15, 0], 0.115, 0.2, 8, { capA: false });
 tube('hair', 'hips', [0, hipY - 0.15, 0], [0, hipY - 0.175, 0], 0.2, 0.205, 8, { capA: false }); // hem trim
 
@@ -374,12 +396,38 @@ for (const side of ['left', 'right']) {
   tube('navy', U, uArm, vadd(uArm, vscale(aDir, 0.045)), 0.056, 0.052, 6, { capB: false });
   tube('skin', U, uArm, lArm, 0.048, 0.044, 6); // bare upper arm
   tube('navy', L, lArm, hand, 0.05, 0.044, 6); // detached forearm sleeve
+  tube('hair', L, lArm, vadd(lArm, vscale(aDir, 0.02)), 0.052, 0.05, 6, {
+    capA: false,
+    capB: false,
+  }); // teal trim at the elbow
   tube('hair', L, vadd(hand, vscale(aDir, -0.03)), vadd(hand, vscale(aDir, 0.02)), 0.05, 0.048, 6, {
     capA: false,
     capB: false,
   }); // teal wrist cuff
   const out = side === 'left' ? -0.05 : 0.05;
   tube('skin', H, hand, vadd(hand, [out, 0, 0]), 0.045, 0.038, 6); // hand
+  // "01" decal on the bare LEFT upper arm (Miku's canonical marking).
+  if (side === 'left') {
+    const m = lerp(uArm, lArm, 0.42);
+    const z = -0.052,
+      hw = 0.05,
+      hh = 0.032;
+    addQuad(
+      'deco',
+      U,
+      [m[0] - hw, m[1] - hh, z],
+      [m[0] + hw, m[1] - hh, z],
+      [m[0] + hw, m[1] + hh, z],
+      [m[0] - hw, m[1] + hh, z],
+      [m[0], m[1], 0.2],
+      [
+        [1, 1],
+        [0, 1],
+        [0, 0],
+        [1, 0],
+      ],
+    );
+  }
 }
 
 // Legs: bare upper thigh (skin), thigh-high navy boots with a teal top band, and
@@ -391,11 +439,25 @@ for (const side of ['left', 'right']) {
   const hip = W(U),
     knee = W(L),
     foot = W(F);
-  const bootTop = lerp(hip, knee, 0.42); // thigh-high: boot starts mid-thigh
-  tube('skin', U, hip, bootTop, 0.078, 0.068, 6); // bare upper thigh
-  tube('hair', U, bootTop, lerp(hip, knee, 0.55), 0.072, 0.072, 6, { capA: false, capB: false }); // teal band
-  tube('boot', U, lerp(hip, knee, 0.55), knee, 0.07, 0.068, 6, { capA: false }); // boot (thigh part)
-  tube('boot', L, knee, foot, 0.068, 0.06, 6); // boot (shin)
+  // Boot top sits LOW so a clear band of bare thigh shows between the skirt hem
+  // and the teal boot band (zettai ryouiki) — the single most iconic Miku leg
+  // cue, and it breaks the long dark column. Thigh tapers wider→narrower.
+  const bootTop = lerp(hip, knee, 0.62);
+  tube('skin', U, hip, bootTop, 0.082, 0.062, 6); // bare thigh, tapering to the knee
+  tube('hair', U, bootTop, lerp(hip, knee, 0.72), 0.07, 0.07, 6, { capA: false, capB: false }); // teal band
+  tube('boot', U, lerp(hip, knee, 0.72), knee, 0.072, 0.066, 6, { capA: false }); // boot (thigh part)
+  tube('boot', L, knee, foot, 0.066, 0.058, 6); // boot (shin)
+  // Teal seam stripe down the front of the shin.
+  addBox(
+    'hair',
+    L,
+    knee[0],
+    (knee[1] + foot[1]) / 2,
+    -0.06,
+    0.009,
+    (Math.abs(knee[1] - foot[1]) / 2) * 0.9,
+    0.012,
+  );
   addBox('boot', F, foot[0], foot[1] - 0.05, -0.06, 0.07, 0.04, 0.12); // boot foot + toe
   addBox('boot', F, foot[0], foot[1] - 0.085, 0.03, 0.06, 0.025, 0.045); // raised heel
 }
@@ -460,6 +522,31 @@ function makeFaceTexture(size = 96) {
   // Mouth: a small flat line (not a dot).
   disc(0.5 * size, 0.8 * size, 0.07 * size, 0.014 * size, (x, y) => set(x, y, 168, 72, 84));
   return { px, size };
+}
+
+// "01" arm decal — Miku's canonical marking. Skin-coloured background (so the
+// decal quad blends into the bare upper arm) with magenta block digits.
+function make01Texture(w = 48, h = 32) {
+  const px = new Uint8Array(w * h * 4);
+  const s = [Math.round(SKIN[0] * 255), Math.round(SKIN[1] * 255), Math.round(SKIN[2] * 255)];
+  const m = [Math.round(MAG[0] * 255), Math.round(MAG[1] * 255), Math.round(MAG[2] * 255)];
+  const rect = (x0, y0, x1, y1, c) => {
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4;
+        px[i] = c[0];
+        px[i + 1] = c[1];
+        px[i + 2] = c[2];
+        px[i + 3] = 255;
+      }
+  };
+  rect(0, 0, w, h, s); // skin background
+  rect(6, 6, 20, 26, m); // "0" outer
+  rect(10, 10, 16, 22, s); // "0" hole
+  rect(29, 6, 34, 26, m); // "1" stem
+  rect(25, 22, 38, 26, m); // "1" foot
+  rect(25, 6, 30, 11, m); // "1" flag
+  return { px, w, h };
 }
 
 // Encode RGBA → PNG (zlib deflate).
@@ -589,12 +676,17 @@ function everyN(a, n, o) {
   return r;
 }
 
-// Face texture PNG.
+// Texture PNGs: [0] the face, [1] the "01" arm decal.
 const ft = makeFaceTexture();
-const png = encodePNG(ft.px, ft.size, ft.size);
-const imgView = addView(png, 1);
-bufferViews.push({ buffer: 0, byteOffset: imgView.off, byteLength: imgView.len });
-const imgViewIdx = bufferViews.length - 1;
+const facePng = encodePNG(ft.px, ft.size, ft.size);
+const faceView = addView(facePng, 1);
+bufferViews.push({ buffer: 0, byteOffset: faceView.off, byteLength: faceView.len });
+const faceViewIdx = bufferViews.length - 1;
+const dt = make01Texture();
+const decoPng = encodePNG(dt.px, dt.w, dt.h);
+const decoView = addView(decoPng, 1);
+bufferViews.push({ buffer: 0, byteOffset: decoView.off, byteLength: decoView.len });
+const decoViewIdx = bufferViews.length - 1;
 
 // Nodes: bones + one mesh node. The mesh node holds the skinned mesh.
 const nodes = BONE_NAMES.map((name) => {
@@ -621,7 +713,7 @@ const materials = MATS.map((m) => {
     doubleSided: true,
     alphaMode: 'OPAQUE',
   };
-  if (m.tex) mat.pbrMetallicRoughness.baseColorTexture = { index: 0 };
+  if (m.tex) mat.pbrMetallicRoughness.baseColorTexture = { index: m.texIndex ?? 0 };
   return mat;
 });
 
@@ -640,8 +732,14 @@ const gltf = {
     },
   ],
   materials,
-  images: [{ mimeType: 'image/png', bufferView: imgViewIdx }],
-  textures: [{ source: 0, sampler: 0 }],
+  images: [
+    { mimeType: 'image/png', bufferView: faceViewIdx },
+    { mimeType: 'image/png', bufferView: decoViewIdx },
+  ],
+  textures: [
+    { source: 0, sampler: 0 },
+    { source: 1, sampler: 0 },
+  ],
   samplers: [{ magFilter: 9728, minFilter: 9728, wrapS: 33071, wrapT: 33071 }], // NEAREST (PS1)
   buffers: [{ byteLength: binLen }],
   bufferViews,
