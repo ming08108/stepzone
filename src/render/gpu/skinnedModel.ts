@@ -233,6 +233,11 @@ fn fs(
   // fill was pre-clamp and washed out).
   let gradeTarget = select(envCol / em, vec3f(1.14, 0.99, 0.82), isFace);
   lit = lit * mix(vec3f(1.0), gradeTarget, select(0.3, 0.4, isFace));
+  // The face was over-exposed and clipped ALL channels to 1.0 at the framebuffer
+  // store — after the warm grade — which flattened it back to neutral grey. Scale
+  // the face below the clip so the warm ratio (R>B) survives to the screen. Still
+  // bright (~0.85), just no longer white-clipping.
+  lit = lit * select(1.0, 0.55, isFace);
   // Eye highlights: bypass all lighting and go emissive — two bright catchlights
   // that survive the dither and attract distance. This is the pixel that flips
   // "mannequin" to "she's performing for you".
