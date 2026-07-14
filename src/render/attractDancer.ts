@@ -1195,7 +1195,7 @@ export class AttractDancer {
       const hz = s3[hipI * 3 + 2];
       // Blend the mocap ankle toward the chart target by the per-foot weight.
       const w = clamp(this.footBlend[f], 0, 1);
-      const tx = s3[ftI * 3] + (this.footX[f] - s3[ftI * 3]) * w;
+      let tx = s3[ftI * 3] + (this.footX[f] - s3[ftI * 3]) * w;
       // The groove dipped the WHOLE skeleton (pelY += grooveY), including this
       // mocap ankle. Undo that dip on the foot's mocap reference so the feet stay
       // grounded while the hips sink — the knee then absorbs the bounce. Planted
@@ -1204,7 +1204,22 @@ export class AttractDancer {
       // body down off the front edge.
       const mFootY = s3[ftI * 3 + 1] - grooveY;
       const ty = mFootY + (this.footYv[f] - mFootY) * w;
-      const tz = s3[ftI * 3 + 2] + (this.footZ[f] - s3[ftI * 3 + 2]) * w;
+      let tz = s3[ftI * 3 + 2] + (this.footZ[f] - s3[ftI * 3 + 2]) * w;
+      // Keep a PLANTED foot ON the physical pad. This clip's stances are wider
+      // than the pad, so an extreme straddle/lunge would plant a foot past the
+      // edge, hanging at pad height over the lower floor (breaks the "on the pad"
+      // read). Pull a floor-height target back into the pad rect, weighted by how
+      // planted it is (`plant`≈1 near the floor, →0 as it lifts) so a genuine
+      // step-out/kick isn't truncated. The 4 step panels sit inside this rect, so
+      // chart footwork is untouched; only wide idle mocap stances get reined in.
+      const plant = clamp(1 - (FOOT_Y - L_SHOE * B - ty) / (0.22 * B), 0, 1);
+      if (plant > 0) {
+        const inset = 0.04 * B; // shoe half-length margin so the whole shoe stays on
+        const cxl = clamp(tx, CX - 0.36 * B + inset, CX + 0.36 * B - inset);
+        const czl = clamp(tz, -0.36 * B + inset, 0.27 * B - inset);
+        tx += (cxl - tx) * plant;
+        tz += (czl - tz) * plant;
+      }
       let dx = tx - hx;
       let dy = ty - hy;
       let dz = tz - hz;
