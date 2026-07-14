@@ -57,7 +57,7 @@ const MODEL_POOL: Record<string, DancerModel> = {
   // licensed copy in public/models/ to use it. Forced-only (never in the random
   // rotation), so it's inert for anyone without the file (loadModel falls back to
   // the procedural dancer if the fetch 404s).
-  Real: { url: '/models/Miku4.vrm' },
+  Real: { url: '/models/Miku4_low.vrm' },
 };
 
 /** Avatars in the random rotation (redistributable only — excludes `Real`). */

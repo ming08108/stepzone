@@ -176,7 +176,11 @@ fn fs(
   }
   if (alpha < draw.alphaCutoff) { discard; } // MASK cutout
 
-  let n = normalize(nrm);
+  // Guard against absent normals (some decimated/exported meshes drop NORMAL):
+  // normalize(0) is NaN, which renders the whole prim black. Fall back to a
+  // camera-facing normal so it flat-shades instead.
+  let nl = length(nrm);
+  let n = select(normalize(frame.camPos.xyz - wpos), nrm / nl, nl > 1e-4);
   let l = normalize(frame.lightDir.xyz);
   let viewDir = normalize(frame.camPos.xyz - wpos);
   // Toon shade: quantize the diffuse into a couple of soft bands so the model
