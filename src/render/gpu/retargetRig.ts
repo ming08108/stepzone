@@ -129,43 +129,15 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   // Upper + fore-arm share the elbow bend plane (shoulderR/elbowR/handR source,
   // leftUpperArm/leftLowerArm/leftHand model) so the forearm can't twist the
   // hand off the wrist and the elbow hinge stays in the right plane.
-  {
-    bone: 'leftUpperArm',
-    restChild: 'leftLowerArm',
-    from: 'shoulderR',
-    to: 'elbowR',
-    pole: ['shoulderR', 'elbowR', 'handR'],
-    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
-    poleSign: 1,
-  },
-  {
-    bone: 'leftLowerArm',
-    restChild: 'leftHand',
-    from: 'elbowR',
-    to: 'handR',
-    pole: ['shoulderR', 'elbowR', 'handR'],
-    poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
-    poleSign: 1,
-  },
+  // No bend-plane pole: with real full-body mocap the source arm is already in a
+  // valid configuration, so a plain minimal-arc aim reproduces it without the
+  // pole's sign flipping near folded/near-straight poses (which twisted the
+  // forearm on arms-up-near-head frames). The mocap keeps the hand on the wrist.
+  { bone: 'leftUpperArm', restChild: 'leftLowerArm', from: 'shoulderR', to: 'elbowR' },
+  { bone: 'leftLowerArm', restChild: 'leftHand', from: 'elbowR', to: 'handR' },
   { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderL', to: 'elbowL', damp: 0.3 },
-  {
-    bone: 'rightUpperArm',
-    restChild: 'rightLowerArm',
-    from: 'shoulderL',
-    to: 'elbowL',
-    pole: ['shoulderL', 'elbowL', 'handL'],
-    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
-    poleSign: 1,
-  },
-  {
-    bone: 'rightLowerArm',
-    restChild: 'rightHand',
-    from: 'elbowL',
-    to: 'handL',
-    pole: ['shoulderL', 'elbowL', 'handL'],
-    poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
-    poleSign: 1,
-  },
+  { bone: 'rightUpperArm', restChild: 'rightLowerArm', from: 'shoulderL', to: 'elbowL' },
+  { bone: 'rightLowerArm', restChild: 'rightHand', from: 'elbowL', to: 'handL' },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
   { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },
   { bone: 'leftFoot', restChild: 'leftFoot', from: 'footR', to: 'footR', hold: true },
