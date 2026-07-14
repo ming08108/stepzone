@@ -1549,9 +1549,9 @@ export class AttractDancer {
     const gb = this.pal.gradBot;
 
     // --- platform slab: dark rounded quad spanning the panels ---
-    const hw = 0.42 * B; // half width in world x
-    const zN = 0.34 * B; // near edge (+z, toward the viewer)
-    const zF = -0.42 * B; // far edge (−z)
+    const hw = 0.36 * B; // half width in world x
+    const zN = 0.27 * B; // near edge (+z, toward the viewer) — snug past the D arrow
+    const zF = -0.36 * B; // far edge (−z) — snug past the U arrow, so she stands ON it
     this.projFloor(CX - hw, zN, pp, 0); // front-left
     this.projFloor(CX + hw, zN, pp, 2); // front-right
     this.projFloor(CX + hw, zF, pp, 4); // back-right
