@@ -1104,15 +1104,19 @@ export class SkinnedModel {
    *  periodic blinks. Rebuilds the morphed face vertex buffers (base + Σ w·delta)
    *  in place — no per-frame allocation, no RNG (blinks key off `now` seconds so
    *  they don't feel metronomic). No-op on models without VRM blend shapes. */
-  applyExpression(now: number, beat: number): void {
+  applyExpression(now: number, beat: number, energy = 0.5): void {
     const valid = Number.isFinite(beat) && beat >= 0;
     const phase = valid ? beat - Math.floor(beat) : 0;
     const kick = valid ? Math.exp(-6 * phase) : 0;
+    const e = Number.isFinite(energy) ? Math.max(0, Math.min(1, energy)) : 0.5;
     const w = this.morphW;
-    w.joy = 0.4 + 0.16 * kick; // held smile, lifts on the beat
-    w.fun = 0.12; // a hint of "fun" softens the smile without baring teeth
-    // Open mouth: a soft "ah" right on the beat that decays over the first ~1/3.
-    w.a = valid ? 0.16 * Math.max(0, 1 - phase * 3) : 0;
+    // Smile and open-mouth track the chart ENERGY the body grooves to (busy stream
+    // → a bigger grin and more "ah"; calm section → softer) and lift on each beat.
+    w.joy = 0.32 + 0.14 * e + 0.15 * kick; // held smile, warmer when the music's busy
+    w.fun = 0.1 + 0.08 * e; // a hint of "fun" softens the smile without baring teeth
+    // Open mouth: a soft "ah" right on the beat, decaying over the first ~1/3, wider
+    // through intense sections.
+    w.a = valid ? (0.1 + 0.14 * e) * Math.max(0, 1 - phase * 3) : 0;
     // Blink: a quick close/reopen every ~3.4s (seconds, so it never locks to the
     // beat and read as robotic). A triangle spike over the last/first ~3.5% of the
     // cycle → ~0.12s closed. Deterministic; `now` may be any finite seconds value.

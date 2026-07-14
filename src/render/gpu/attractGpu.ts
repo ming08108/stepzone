@@ -642,7 +642,7 @@ export class AttractGpu {
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     this.padFrame = this.dancer.build(now, b); // solves skel3 + emits the floor pad
     model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
-    model.applyExpression(now, b); // beat-driven face: smile + open-mouth + blinks
+    model.applyExpression(now, b, this.dancer.chartEnergy); // face: smile/mouth track beat + chart energy
     // The dancer is the STAR of the attract scene, not a background element —
     // keep her vivid and full-bright (with a slight boost so she pops off the
     // dimmed tunnel) regardless of the field's bg dim. Dimming her down was what

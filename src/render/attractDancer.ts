@@ -617,6 +617,13 @@ export class AttractDancer {
     return this.skel3;
   }
 
+  /** Current chart-energy envelope (0..1, low-passed local note density) — the same
+   *  signal that scales the knee-bend groove. Lets the face track the music's
+   *  intensity too (a bigger grin/open mouth through a busy stream). */
+  get chartEnergy(): number {
+    return Number.isFinite(this.energyLP) ? this.energyLP : 0.4;
+  }
+
   /** Per-panel dance-pad flash intensity (0..1) at `beat`, written L,D,U,R into
    *  `out` — bright the instant a foot lands on that panel, fading over ~a beat.
    *  Lets the GPU background draw the pad arrows under ANY dancer (2D or 3D). */
