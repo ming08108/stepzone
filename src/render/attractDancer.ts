@@ -403,6 +403,8 @@ export class AttractDancer {
     solidCount: 0,
     additive: null as unknown as Float32Array<ArrayBuffer>,
     additiveCount: 0,
+    padSolidCount: 0, // leading verts of solid/additive that are the floor pad
+    padAddCount: 0,
   };
 
   // ---- scratch (owned, refilled per frame — never allocated in build) ----
@@ -628,6 +630,8 @@ export class AttractDancer {
     solidCount: number;
     additive: Float32Array<ArrayBuffer>;
     additiveCount: number;
+    padSolidCount: number;
+    padAddCount: number;
   } {
     if (!Number.isFinite(time)) time = 0;
     let dt = time - this.lastTime;
@@ -694,7 +698,11 @@ export class AttractDancer {
     // ---- 8. emit geometry ---------------------------------------------------
     this.solidPos = 0;
     this.addPos = 0;
-    this.emitPad(valid ? beat : NaN); // floor pad, behind/under the dancer
+    this.emitPad(valid ? beat : NaN); // floor pad, behind/under the dancer — FIRST,
+    // so its verts occupy [0, padSolidCount) and can be drawn on their own under
+    // the VRM avatar (whose render replaces the procedural body mesh but not the pad).
+    this.out.padSolidCount = (this.solidPos / 5) | 0;
+    this.out.padAddCount = (this.addPos / 5) | 0;
     this.emitBody();
     const bd = beat - this.hitBeat;
     const burstLife = valid && bd >= 0 && bd < 0.22 && raisesHand(this.hitCols) ? 1 - bd / 0.22 : 0;

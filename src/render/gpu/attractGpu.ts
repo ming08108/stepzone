@@ -465,6 +465,7 @@ export class AttractGpu {
   private readonly modelSampler: GPUSampler;
   private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
+  private padFrame: ReturnType<AttractDancer['build']> | null = null; // for the pad-under-avatar draw
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
   private readonly dancerUniform: GPUBuffer;
   private readonly dancerBind: GPUBindGroup;
@@ -631,7 +632,7 @@ export class AttractGpu {
     // dancer — see setConfig), so there's GPU headroom to run it at full
     // resolution and monitor refresh: no cap, no downscale.
     const b = Number.isFinite(beat) ? beat : now * 1.4;
-    this.dancer.build(now, b); // solves the 3D skeleton (skel3)
+    this.padFrame = this.dancer.build(now, b); // solves skel3 + emits the floor pad
     model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
     // The dancer is the STAR of the attract scene, not a background element —
     // keep her vivid and full-bright (with a slight boost so she pops off the
@@ -731,6 +732,32 @@ export class AttractGpu {
     // animation was retargeted onto it in renderModel() (offscreen); composite
     // it. Otherwise draw the procedural mesh (solid facets + additive edges).
     if (this.usingModel && this.model) {
+      // The 3D floor pad is emitted into the dancer's solid/additive buffers
+      // (leading padSolidCount/padAddCount verts) even in avatar mode; draw it
+      // BEHIND the composited avatar so she stands ON a visible dancepad.
+      const f = this.padFrame;
+      if (f && (f.padSolidCount > 0 || f.padAddCount > 0)) {
+        const dd = this.dancerData;
+        dd[0] = viewW;
+        dd[1] = viewH;
+        dd[2] = Math.max(0, Math.min(1, dim));
+        this.device.queue.writeBuffer(this.dancerUniform, 0, dd);
+        pass.setBindGroup(0, this.dancerBind);
+        if (f.padSolidCount > 0) {
+          this.solidBuf = this.ensureVB(this.solidBuf, f.solid);
+          this.device.queue.writeBuffer(this.solidBuf, 0, f.solid, 0, f.padSolidCount * 5);
+          pass.setPipeline(this.solidPipe);
+          pass.setVertexBuffer(0, this.solidBuf);
+          pass.draw(f.padSolidCount);
+        }
+        if (f.padAddCount > 0) {
+          this.addBuf = this.ensureVB(this.addBuf, f.additive);
+          this.device.queue.writeBuffer(this.addBuf, 0, f.additive, 0, f.padAddCount * 5);
+          pass.setPipeline(this.addPipe);
+          pass.setVertexBuffer(0, this.addBuf);
+          pass.draw(f.padAddCount);
+        }
+      }
       const bind = this.device.createBindGroup({
         layout: this.modelPipe.getBindGroupLayout(0),
         entries: [
