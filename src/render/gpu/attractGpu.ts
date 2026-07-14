@@ -159,6 +159,7 @@ struct U {
   accentA: vec4f, accentB: vec4f, accentC: vec4f, accentD: vec4f, white: vec4f,
   flags: vec4f,    // floorWire, sunHero, petals, variant
   cam: vec4f,      // panX, panY, zoomMul, _ (dynamic camera sway)
+  pad: vec4f,      // dance-pad arrow flash 0..1 per panel: L, D, U, R
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -191,6 +192,18 @@ fn rot2(p: vec2f, a: f32) -> vec2f {
   let c = cos(a);
   let s = sin(a);
   return vec2f(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
+// Filled arrowhead pointing +x, for the dance-pad panels. Returns ~1 inside the
+// triangle, 0 outside, with an anti-aliased edge. Input in ~unit cell space.
+fn arrowMask(q: vec2f) -> f32 {
+  let ax = 0.62;
+  let bx = -0.5;
+  let hw = 0.62;
+  let tx = clamp((q.x - bx) / (ax - bx), 0.0, 1.0);
+  let edge = hw * (1.0 - tx);
+  let d = min(edge - abs(q.y), min(q.x - bx, ax - q.x));
+  return smoothstep(0.0, 0.06, d);
 }
 
 fn hash21(p: vec2f) -> f32 {
@@ -316,6 +329,25 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let dc = abs(cf - round(cf));
     let colLine = (1.0 - smoothstep(0.5 * pxc, 1.5 * pxc, dc)) * step(abs(round(cf)), 7.0);
     col = col + u.accentB.rgb * (0.35 * colLine * min(1.0, t * 3.0));
+
+    // --- dance pad: four arrows on the floor (L, D, U, R), flashing on the
+    //     step that lands on each panel. Drawn here so the pad shows under EVERY
+    //     dancer (the 2D procedural one and every 3D avatar). Stationary in the
+    //     floor's (column cf, row rc) frame so it doesn't ride the treadmill. ---
+    let rc = t * 14.0;
+    let padRC = 10.2;                            // pad row depth (just at her feet)
+    var pcols = array<f32, 4>(-3.6, -1.2, 1.2, 3.6);
+    var pangs = array<f32, 4>(PI, PI * 0.5, -PI * 0.5, 0.0); // L,D(toward),U(away),R
+    for (var i = 0; i < 4; i = i + 1) {
+      let q = rot2(vec2f(cf - pcols[i], rc - padRC), -pangs[i]) / 1.75;
+      let m = arrowMask(q);
+      if (m > 0.001) {
+        let fl = u.pad[i];
+        // Neon arrow: teal outline at rest, ramping to hot white on the step.
+        let acol = mix(u.accentB.rgb, u.white.rgb, fl);
+        col = mix(col, acol, m * (0.32 + 0.85 * fl) * fog * inSpread);
+      }
+    }
   }
 
   // --- sparkles: hash-seeded twinkle field in the upper 2/3; 4-point stars,
@@ -415,7 +447,7 @@ export class AttractGpu {
   private readonly pipeline: GPURenderPipeline;
   private readonly uniform: GPUBuffer;
   private readonly bind: GPUBindGroup;
-  private readonly data = new Float32Array(48); // 12 vec4
+  private readonly data = new Float32Array(52); // 13 vec4
   private pal: GpuPalette = PALETTES[0];
 
   // Dancer mesh: CPU geometry (AttractDancer) drawn via two blend passes.
@@ -681,6 +713,10 @@ export class AttractGpu {
     d[45] = 0.02 * Math.sin(now * 0.13 + 0.5); // panY (tracks the crane)
     d[46] = 1 + 0.06 * Math.sin(now * 0.11) + 0.05 * kick; // zoom breathe + beat push
     d[47] = 0;
+    // Dance-pad arrow flash (L,D,U,R) — drawn on the shader floor so the pad
+    // shows under EVERY dancer, including the 3D avatars.
+    if (this.dancer) this.dancer.padFlashInto(b, this.data.subarray(48, 52));
+    else d.fill(0, 48, 52);
     this.device.queue.writeBuffer(this.uniform, 0, d);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bind);

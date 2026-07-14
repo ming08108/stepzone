@@ -1925,6 +1925,16 @@ export class AttractDancer {
     return this.skel3;
   }
 
+  /** Per-panel dance-pad flash intensity (0..1) at `beat`, written L,D,U,R into
+   *  `out` — bright the instant a foot lands on that panel, fading over ~a beat.
+   *  Lets the GPU background draw the pad arrows under ANY dancer (2D or 3D). */
+  padFlashInto(beat: number, out: Float32Array): void {
+    for (let p = 0; p < 4; p++) {
+      const db = Number.isFinite(beat) ? beat - this.padFlash[p] : 1e9;
+      out[p] = db >= 0 && db < 1.2 ? Math.exp(-3.2 * db) : 0;
+    }
+  }
+
   private rewind(): void {
     this.hitIdx = -1;
     this.schedIdx = -1;
