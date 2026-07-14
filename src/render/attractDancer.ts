@@ -406,14 +406,14 @@ const IDLE = (() => {
     [CH_HROLL]: -0.075,
     [CH_HPIT]: 0.07,
     [CH_HYAW]: 0.06,
-    [CH_LABD]: 0.3,
-    [CH_LFWD]: 0.32,
-    [CH_LELB]: 2.15,
-    [CH_LLOF]: 0.55,
-    [CH_RABD]: 0.4,
-    [CH_RFWD]: 0.45,
-    [CH_RELB]: 2.6,
-    [CH_RLOF]: 0.35,
+    [CH_LABD]: 0.14,
+    [CH_LFWD]: 0.05,
+    [CH_LELB]: 0.46,
+    [CH_LLOF]: 0.1,
+    [CH_RABD]: 0.22,
+    [CH_RFWD]: 0.12,
+    [CH_RELB]: 0.74,
+    [CH_RLOF]: 0.16,
   };
   // Rebound: riding up out of the hit, arms releasing.
   const k1: KeyOver = {
@@ -427,14 +427,14 @@ const IDLE = (() => {
     [CH_HROLL]: -0.03,
     [CH_HPIT]: -0.04,
     [CH_HYAW]: 0.03,
-    [CH_LABD]: 0.26,
-    [CH_LFWD]: 0.2,
-    [CH_LELB]: 2.0,
-    [CH_LLOF]: 0.5,
-    [CH_RABD]: 0.36,
-    [CH_RFWD]: 0.28,
-    [CH_RELB]: 2.3,
-    [CH_RLOF]: 0.42,
+    [CH_LABD]: 0.12,
+    [CH_LFWD]: 0.04,
+    [CH_LELB]: 0.4,
+    [CH_LLOF]: 0.08,
+    [CH_RABD]: 0.18,
+    [CH_RFWD]: 0.09,
+    [CH_RELB]: 0.58,
+    [CH_RLOF]: 0.13,
   };
   // The "and": tallest point, weight passing through center, fists level.
   const k2: KeyOver = {
@@ -442,14 +442,14 @@ const IDLE = (() => {
     [CH_SWAY]: 0,
     [CH_HPIT]: -0.07,
     [CH_HYAW]: -0.02,
-    [CH_LABD]: 0.32,
-    [CH_LFWD]: 0.3,
-    [CH_LELB]: 2.2,
-    [CH_LLOF]: 0.45,
-    [CH_RABD]: 0.32,
-    [CH_RFWD]: 0.3,
-    [CH_RELB]: 2.2,
-    [CH_RLOF]: 0.45,
+    [CH_LABD]: 0.15,
+    [CH_LFWD]: 0.06,
+    [CH_LELB]: 0.44,
+    [CH_LLOF]: 0.1,
+    [CH_RABD]: 0.15,
+    [CH_RFWD]: 0.06,
+    [CH_RELB]: 0.44,
+    [CH_RLOF]: 0.1,
   };
   // Falling INTO the next count on the left side (anticipation).
   const k3: KeyOver = {
@@ -463,14 +463,14 @@ const IDLE = (() => {
     [CH_HROLL]: 0.035,
     [CH_HPIT]: 0.02,
     [CH_HYAW]: -0.04,
-    [CH_LABD]: 0.42,
-    [CH_LFWD]: 0.36,
-    [CH_LELB]: 2.45,
-    [CH_LLOF]: 0.4,
-    [CH_RABD]: 0.28,
-    [CH_RFWD]: 0.24,
-    [CH_RELB]: 1.0,
-    [CH_RLOF]: 0.48,
+    [CH_LABD]: 0.22,
+    [CH_LFWD]: 0.11,
+    [CH_LELB]: 0.72,
+    [CH_LLOF]: 0.15,
+    [CH_RABD]: 0.14,
+    [CH_RFWD]: 0.05,
+    [CH_RELB]: 0.44,
+    [CH_RLOF]: 0.1,
   };
   const r0 = row(k0);
   const r1 = row(k1);
@@ -2613,15 +2613,12 @@ export class AttractDancer {
       const fw = clamp(ch[f === 0 ? CH_LFWD : CH_RFWD], -1.2, 1.2);
       let elb = clamp(ch[f === 0 ? CH_LELB : CH_RELB], -0.5, 2.6);
       // Soft elbow — the anti-mannequin rule: a human arm never locks dead
-      // straight, so blend in a residual bend that peaks (+0.42 rad) exactly
-      // where the channel would flatten the arm into a ruler and fades out
-      // quadratically by |elb|=0.8. Continuous everywhere (no snap when a
-      // blend sweeps through zero), and intentional bends pass untouched, so
-      // "straight" reaches render as a soft C-curve. Bumped up because a subtle
-      // bend vanishes on a smooth, thin VRoid arm and reads as a stretched
-      // needle — it needs a clearly visible flex to look like an arm.
-      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.8), 1);
-      elb += 0.42 * straight * straight;
+      // straight, so blend a small residual bend into a near-straight arm (fades
+      // out by |elb|=0.6). Kept modest: it exists only to avoid a hyperextended
+      // ruler on a full reach, NOT to hold a bend at rest — the resting arms get
+      // their natural soft bend from the pose itself.
+      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.6), 1);
+      elb += 0.22 * straight * straight;
       let lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
       // Bend DIRECTION on a raised arm: +elb continues the coronal arc, which
       // on a reach (upper arm at/above horizontal) carries the forearm UPWARD
