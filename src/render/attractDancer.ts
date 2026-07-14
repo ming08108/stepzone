@@ -1155,27 +1155,25 @@ export class AttractDancer {
       const sgn = a === 0 ? 1 : -1;
       // Groove orbit — she is never limp: elbows breathe into each count, the
       // whole arm rides the 2-beat weight LFO (out of phase L/R).
-      // Groove arms move at the ELBOW, not the shoulder. Keep the shoulder LOW
-      // and near-steady (arms hang at the sides) and make the elbow the primary
-      // oscillator: it flexes hard ON each count — the forearm folds up and IN
-      // toward the ribs (hand crosses inside the silhouette) — then extends back
-      // down on the "and". A shoulder-only lever windshield-wipers; an elbow pump
-      // reads as a real groove. The staggered spring chain (forearm halflife >
-      // elbow > shoulder) drags the hand a beat behind for follow-through.
+      // Relaxed low arms with a soft elbow, breathing on the beat. The ranges
+      // are kept MODERATE and close to the authored-clip range the VRM arm
+      // retarget's bend-plane pole was tuned for — a deep elbow flex at low
+      // abduction, or a big forward forearm fold, tilts the bend plane out of
+      // that range and the pole mis-rolls the forearm (arms read "twisted").
       const ebeat = sgn * lfo; // L/R arms pump a half-beat out of phase
-      let gAbd = 0.22 + 0.04 * bop;
-      let gFwd = 0.12 + ebeat * 0.05;
-      let gElb = 0.55 + 0.55 * bop + ebeat * 0.12; // deep beat-driven elbow flex
-      let gLof = 0.35 + 0.55 * bop; // forearm folds FORWARD as it flexes (hand → in front)
+      let gAbd = 0.28 + 0.06 * bop + ebeat * 0.04;
+      let gFwd = 0.16 + ebeat * 0.06;
+      let gElb = 0.55 + 0.28 * bop + ebeat * 0.08; // soft beat-driven elbow flex
+      let gLof = 0.24 + 0.14 * bop; // gentle forward forearm fold (pole-safe range)
       // Contralateral counterswing: the OPPOSITE leg's swing pumps this arm
-      // FORWARD/back (toward the camera) with a bent elbow, like a natural stride.
+      // forward/back (toward the camera) with a bent elbow, like a natural stride.
       const dl = 1 - a;
       if (this.footState[dl] === 1) {
         const span = Math.max(this.landBeatA[dl] - this.liftBeatA[dl], 1e-4);
         const s = halfSine(clamp((drv - this.liftBeatA[dl]) / span, 0, 1));
-        gFwd += s * 0.42;
-        gAbd += s * 0.08;
-        gElb += s * 0.3;
+        gFwd += s * 0.34;
+        gAbd += s * 0.12;
+        gElb += s * 0.2;
       }
       // Accent set-point blended in over the groove.
       if (this.accActive && (this.accArm === a || this.accArm === 2) && e > 1e-3) {
