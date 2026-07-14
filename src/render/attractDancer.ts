@@ -325,6 +325,9 @@ const L_UARM = 0.155,
   L_THIGH = 0.25,
   L_SHIN = 0.24,
   L_SHOE = 0.025;
+/** Forward lean of the neck axis (rad) off the torso up-vector — matches the
+ *  VRoid rest neck so the aim retarget doesn't crane/over-extend it. */
+const NECK_LEAN = 0.18;
 
 // Fixed key light (upper-left) for the flat facet shading.
 const LX = -0.62;
@@ -1546,10 +1549,22 @@ export class AttractDancer {
     s3[COLLAR * 3 + 1] = shY + uy * 0.06 * B;
     s3[COLLAR * 3 + 2] = shZ + uz * 0.06 * B;
 
+    // Neck axis: the torso up-vector tilted slightly FORWARD to match the VRoid
+    // bind posture. The retarget aims the neck/head bones along chest→neck→head;
+    // a dead-vertical chain straightens the model's natural cervical curve and
+    // lifts the skull, which reads as a craned, over-extended neck vs the bind
+    // T-pose. Leaning the neck axis forward keeps the head sitting on the
+    // shoulders with a short, natural neck.
+    const nl = NECK_LEAN;
+    const cnl = Math.cos(nl);
+    const snl = Math.sin(nl);
+    const nux = ux * cnl + fwdSX * snl;
+    const nuy = uy * cnl;
+    const nuz = uz * cnl + fwdSZ * snl;
     // Neck + head (head roll shifts the skull laterally, pitch nods it).
-    const nbX = shX + ux * L_NECK * B;
-    const nbY = shY + uy * L_NECK * B;
-    const nbZ = shZ + uz * L_NECK * B;
+    const nbX = shX + nux * L_NECK * B;
+    const nbY = shY + nuy * L_NECK * B;
+    const nbZ = shZ + nuz * L_NECK * B;
     s3[HEADB * 3] = nbX;
     s3[HEADB * 3 + 1] = nbY;
     s3[HEADB * 3 + 2] = nbZ;
@@ -1560,9 +1575,9 @@ export class AttractDancer {
     // gaze target — so it stays a 2D-face cue via faceTurn.)
     const r = R_HEAD * B;
     const nod = Math.sin(hpit) * r * 0.85;
-    const hX = nbX + ux * r * 0.9 + latSX * Math.sin(hroll) * r * 1.15 + fwdSX * nod;
-    const hY = nbY + uy * r * 0.9 + Math.sin(hpit) * r * 0.5;
-    const hZ = nbZ + uz * r * 0.9 + latSZ * Math.sin(hroll) * r * 1.15 + fwdSZ * nod;
+    const hX = nbX + nux * r * 0.9 + latSX * Math.sin(hroll) * r * 1.15 + fwdSX * nod;
+    const hY = nbY + nuy * r * 0.9 + Math.sin(hpit) * r * 0.5;
+    const hZ = nbZ + nuz * r * 0.9 + latSZ * Math.sin(hroll) * r * 1.15 + fwdSZ * nod;
     s3[HEAD * 3] = hX;
     s3[HEAD * 3 + 1] = hY;
     s3[HEAD * 3 + 2] = hZ;
