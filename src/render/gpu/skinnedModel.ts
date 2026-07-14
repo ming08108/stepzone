@@ -197,7 +197,9 @@ fn fs(
   // Face prims are spared the neon wash — the earlier pass crushed the eyes/skin
   // into the body's rose hue (a mannequin with no readable face). Lift the shade
   // floor, cut the tint/grade/rim on the face, and warm it with a camera fill.
-  let shade = select(0.84, 0.98, isFace) + band; // brighter base for arcade screens
+  let shade = select(0.84, 0.86, isFace) + band; // face floor kept just below the
+  // clip so the skin keeps a shading gradient (lifting to 0.98 clamped it flat grey);
+  // warmth comes from a POST-clamp warm grade below, not from brightness.
   // The neon world's colour, by facing: cyan on one side, magenta on the other.
   let envCol = mix(vec3f(0.35, 0.85, 1.15), vec3f(1.2, 0.42, 0.95), n.x * 0.5 + 0.5);
   // TINT the albedo toward that neon (multiplied) so even a white outfit goes
@@ -208,7 +210,7 @@ fn fs(
   let fill = envCol * (1.0 - ndl) * 0.18;
   let front = max(dot(n, viewDir), 0.0);
   var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.1
-    + albedo * front * select(0.0, 0.32, isFace);
+    + albedo * front * select(0.0, 0.14, isFace);
   // Hot rim — BLEND the silhouette toward saturated neon; strong on the body, cut
   // hard on the face (a neon rim across a nose reads as grime at this scale).
   let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
@@ -225,7 +227,12 @@ fn fs(
   // ceiling ate half of it, leaving a near-grey torso). Normalized by its max
   // channel so it only shifts hue, never darkens.
   let em = max(max(envCol.r, envCol.g), envCol.b);
-  lit = lit * mix(vec3f(1.0), envCol / em, select(0.3, 0.08, isFace));
+  // Body: grade toward the neon hue. Face: grade toward WARM skin (R up, B down)
+  // so the cheek reads warm (R−B ≈ +18) against the pink room instead of corpse-
+  // grey — applied POST-clamp so no exposure can neutralise it (the earlier warm
+  // fill was pre-clamp and washed out).
+  let gradeTarget = select(envCol / em, vec3f(1.14, 0.99, 0.82), isFace);
+  lit = lit * mix(vec3f(1.0), gradeTarget, select(0.3, 0.4, isFace));
   // Eye highlights: bypass all lighting and go emissive — two bright catchlights
   // that survive the dither and attract distance. This is the pixel that flips
   // "mannequin" to "she's performing for you".
