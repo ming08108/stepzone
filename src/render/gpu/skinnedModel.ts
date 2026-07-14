@@ -191,7 +191,8 @@ fn fs(
   // Keep the exposure MODEST so lit white cloth lands ~0.8, not clipped to 1.0 —
   // clipping forced R=G=B and erased the neon tint (bright-but-grey torso). The
   // colour comes from a STRONG multiply-tint, not from cranking brightness.
-  let shade = 0.72 + band;
+  let shade = 0.84 + band; // the post-clamp grade protects the hue, so she can be
+  // punchier without the torso washing back to grey — brighter for arcade screens.
   // The neon world's colour, by facing: cyan on one side, magenta on the other.
   let envCol = mix(vec3f(0.35, 0.85, 1.15), vec3f(1.2, 0.42, 0.95), n.x * 0.5 + 0.5);
   // TINT the albedo toward that neon (multiplied) so even a white outfit goes
