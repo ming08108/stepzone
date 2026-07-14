@@ -41,6 +41,7 @@ fn fs(v: VO) -> @location(0) vec4f {
 interface DancerModel {
   url: string;
   hair?: readonly [number, number, number];
+  texCap?: number; // cap texture size (retro/PS2 low-res look, kills aliasing)
 }
 
 /** The dancer avatars — redistributable VRoid CC-usage sample models (see
@@ -57,7 +58,7 @@ const MODEL_POOL: Record<string, DancerModel> = {
   // licensed copy in public/models/ to use it. Forced-only (never in the random
   // rotation), so it's inert for anyone without the file (loadModel falls back to
   // the procedural dancer if the fetch 404s).
-  Real: { url: '/models/Miku4_low.vrm' },
+  Real: { url: '/models/Miku4_low.vrm', texCap: 256 },
 };
 
 /** Avatars in the random rotation (redistributable only — excludes `Real`). */
@@ -530,7 +531,7 @@ export class AttractGpu {
     if (this.modelLoadStarted) return;
     this.modelLoadStarted = true;
     const pick = pickModel();
-    void SkinnedModel.load(this.device, this.format, pick.url, pick.hair)
+    void SkinnedModel.load(this.device, this.format, pick.url, pick.hair, pick.texCap)
       .then((m) => {
         this.model = m;
       })

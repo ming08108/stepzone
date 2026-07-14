@@ -546,6 +546,7 @@ export class SkinnedModel {
     format: GPUTextureFormat,
     url: string,
     recolorHair?: readonly [number, number, number],
+    texCap = 0,
   ): Promise<SkinnedModel> {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`SkinnedModel: fetch ${url} failed (${res.status})`);
@@ -657,7 +658,7 @@ export class SkinnedModel {
     };
 
     // Decode embedded images → sRGB GPU textures; build per-glTF samplers.
-    const { textures, defaultSampler, whiteTex } = await createTextures(device, model);
+    const { textures, defaultSampler, whiteTex } = await createTextures(device, model, texCap);
     const gpuSamplers = model.samplers.map((s) => device.createSampler(samplerDesc(s)));
 
     // Per-material base-color bind group (group 2). Untextured → 1×1 white.
@@ -1266,6 +1267,7 @@ function samplerDesc(s: GltfSampler): GPUSamplerDescriptor {
 async function createTextures(
   device: GPUDevice,
   model: GltfModel,
+  texCap = 0, // >0 caps the longest texture edge (retro/PS2 low-res look)
 ): Promise<{ textures: (GPUTexture | null)[]; defaultSampler: GPUSampler; whiteTex: GPUTexture }> {
   const defaultSampler = device.createSampler({
     magFilter: 'linear',
@@ -1287,9 +1289,17 @@ async function createTextures(
     model.images.map(async (img): Promise<GPUTexture | null> => {
       if (!img.bytes.length) return null;
       try {
-        const bmp = await createImageBitmap(
-          new Blob([img.bytes], { type: img.mimeType || 'image/png' }),
-        );
+        const blob = new Blob([img.bytes], { type: img.mimeType || 'image/png' });
+        let bmp = await createImageBitmap(blob);
+        // Downscale to the retro cap (bilinear) — kills the texture aliasing on
+        // decimated low-poly UVs and reads as an authentic low-res PS2 texture.
+        if (texCap > 0 && Math.max(bmp.width, bmp.height) > texCap) {
+          const s = texCap / Math.max(bmp.width, bmp.height);
+          const rw = Math.max(1, Math.round(bmp.width * s));
+          const rh = Math.max(1, Math.round(bmp.height * s));
+          bmp.close();
+          bmp = await createImageBitmap(blob, { resizeWidth: rw, resizeHeight: rh });
+        }
         const w = Math.max(1, bmp.width);
         const h = Math.max(1, bmp.height);
         const tex = device.createTexture({ size: [w, h], format: 'rgba8unorm-srgb', usage });
