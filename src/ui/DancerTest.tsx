@@ -27,7 +27,7 @@ const LOOKAHEAD = 0.28; // beats of wind-up before a keyed step lands
 // longer lead so the full gravity arc plays. (Attract-mode/chart jumps already
 // get this via the scheduler's wind-up window; only the manual test-jump was
 // truncated.)
-const JUMP_LOOKAHEAD = 1.2;
+const JUMP_LOOKAHEAD = 1.6;
 
 export function DancerTest({ onExit }: { onExit: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);

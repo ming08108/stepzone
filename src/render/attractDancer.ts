@@ -1,65 +1,54 @@
 /**
- * AttractDancer — the low-poly anime-girl dancer, rebuilt on the standard
- * game-animation pipeline instead of procedural pose rules. It is a pure-CPU
- * triangle-mesh generator for the GPU pipeline: build(time, beat) refills two
- * reused vertex buffers (x, y, r, g, b per vertex, triangle list, 960x540
- * design space, y down) — `solid` holds the opaque flat-shaded body facets,
- * `additive` holds the neon silhouette edges, rim-glow and hand-burst spikes.
+ * AttractDancer — the low-poly anime-girl dancer, driven by a physically
+ * grounded motion core. It is a pure-CPU triangle-mesh generator for the GPU
+ * pipeline: build(time, beat) refills two reused vertex buffers (x, y, r, g, b
+ * per vertex, triangle list, 960x540 design space, y down) — `solid` holds the
+ * opaque flat-shaded body facets, `additive` holds the neon silhouette edges,
+ * rim-glow and hand-burst spikes.
  *
- * ARCHITECTURE (how real games animate characters, applied here):
+ * MOTION MODEL (first principles, not authored angle curves):
  *
- *  1. SKELETON + FK — a 3D bone hierarchy (pelvis → torso → neck/head,
- *     shoulder line → arms; pelvis → hips → legs) whose joint positions are
- *     solved by forward kinematics from a channel pose. Bones live in a real
- *     3D space (x right, y down, z toward the viewer) and are projected to
- *     the 2D design space through a weak-perspective camera with a gentle
- *     downward tilt, so depth reads: near limbs get bigger and lower, the far
- *     Up panel sits higher and smaller, and body yaw turns the shoulder/hip
- *     lines through z instead of just sliding pixels sideways.
+ *  1. CENTRE OF MASS is the character. A weighted body carries momentum, so
+ *     every visible motion is the shadow of the CoM plus a family of CLOSED-FORM
+ *     springs — nothing is numerically integrated, so a 0.1s hitch or a tempo
+ *     warp can never blow the state up. Physics runs in SECONDS; the chart runs
+ *     in BEATS. A low-passed `bps` converts between them, so height/hang emerge
+ *     from tempo rather than being keyed.
  *
- *  2. AUTHORED ANIMATION CLIPS — the core. Motion quality comes from a small
- *     library of hand-keyframed dance-move clips (an animator's keyframes,
- *     not springs): an idle GROOVE loop, one STEP clip per panel (L/D/U/R,
- *     each selling the step with weight shift, counter-twist, arm line and
- *     head look), a two-foot JUMP (wind-up crouch → airborne → simultaneous
- *     two-foot landing ON the beat → squash and settle), and a FLOURISH for
- *     long gaps. Each clip is a set of full-body keyframes at phase times,
- *     sampled with non-uniform Catmull-Rom/Hermite interpolation (C1-smooth,
- *     eased endpoints, zero end tangents — arrives on-pose, no overshoot).
- *     Right-side steps are exact mirrors of left-side clips, generated once
- *     at load through a channel mirror table, like a game's mirrored-clip
- *     import.
+ *  2. LATERAL / DEPTH CoM is an UNDER-damped spring (it overshoots = the vault
+ *     read) chasing an anticipatory support-weight target: as a foot swings the
+ *     weight commits onto the standing leg, scaled by the step gap so fast
+ *     same-side steps become taps. VERTICAL CoM is a critically-damped bob into
+ *     each beat. A JUMP swaps both for an analytic ballistic parabola seeded
+ *     continuously from the spring state at takeoff; the fall speed is fed back
+ *     into the landing spring as its initial velocity, so the squash emerges.
  *
- *  3. CLIP SCHEDULER + CROSS-FADE BLENDING — a tiny animation state machine.
- *     The chart (StepParity beats + per-foot panel placement) schedules each
- *     upcoming note's clip so its authored IMPACT keyframe lands exactly on
- *     the note beat (clips are time-scaled to fit dense streams). Active
- *     clips run in a fixed player pool with smooth fade-in/out envelopes;
- *     the blended pose is the normalized weighted sum of the sampled clips,
- *     with the idle groove owning whatever weight remains — so she cross-
- *     fades step→step through fast streams and settles back into the groove
- *     between notes, never popping.
+ *  3. FEET are a tiny per-foot state machine (stance / swing). A swing is a
+ *     minimum-jerk horizontal glide + half-sine vertical lift over a beat
+ *     window that lands exactly on the note beat, on the exact StepParity panel
+ *     (crossovers included). Jumps swing both feet and tuck the knees in flight.
  *
- *  4. FOOT IK ON TOP — after sampling+blending, each foot is planted by an
- *     analytic two-bone IK solve (hip→knee→ankle, knee pole aimed forward so
- *     knees never flip) onto its exact StepParity panel target on the 3D
- *     floor plane — crossovers verbatim. Foot LOCKING: a planted foot is
- *     pinned to its committed plant position until a clip's swing channel
- *     moves it; the swing channel is authored with hold keys and clamped so
- *     the foot leaves late, travels under an authored lift arc, and lands
- *     exactly on the beat with zero slide. Jumps own BOTH feet: each lands
- *     simultaneously on its own solved panel (any combination — L+R straddle,
- *     U+D split, L+U…), weight centered between them.
+ *  4. LEGS keep an analytic two-bone IK (law of cosines, crossover-aware knee
+ *     pole, soft knee floor) onto the animated ankle; a HARD pelvis-reach clamp
+ *     drops the pelvis so the worst planted leg always stays reachable.
  *
- *  5. SECONDARY MOTION — twin-tails, ahoge and skirt hem stay on simple
- *     damped-spring smoothing (standard for cloth/hair), layered after the
- *     body solve; the BODY itself is entirely clip-driven.
+ *  5. TORSO leans into the CoM's lateral acceleration (≈atan(aₓ/G)) and pitches
+ *     with forward accel; the shoulder line counter-twists against pelvis yaw.
+ *     ARMS are a sparse accent vocabulary (scalar set-points chosen by the
+ *     scheduler) plus a staggered shoulder→elbow→forearm spring chain for
+ *     follow-through, driven primarily by the contralateral leg phase, with a
+ *     between-steps groove orbit so they never dangle. HEAD is a damped look +
+ *     beat nod + slight counter to the torso.
+ *
+ *  6. SECONDARY MOTION — twin-tails, ahoge and skirt hem — ride simple damped
+ *     springs layered after the body solve (standard cloth/hair smoothing).
  *
  * With no chart the scheduler synthesizes an 8-beat L/D/R/U(+jump) pattern;
- * with no beat (NaN/negative lead-in) she plays the idle groove on a slow
- * internal pulse. Everything is sampled from absolute beat/time (framerate-
- * independent), nothing allocates per frame, and every emitted triangle and
- * the perspective divide are guarded against non-finite values.
+ * with no beat (NaN/negative lead-in) the phase clock runs off `time`.
+ * Everything is deterministic (no Math.random / Date.now) and framerate-
+ * independent (closed-form springs, dt clamped ≤ 0.1s); nothing allocates per
+ * frame, and every emitted value is guarded against non-finite (skel3 also
+ * feeds the VRM aim-retarget — a single NaN would poison it).
  */
 
 // ---- design space (matches attractBackground.ts) ---------------------------
@@ -152,1398 +141,101 @@ const PALETTES: readonly Palette[] = [
   },
 ];
 
-// ---- animation channels ------------------------------------------------------
-// A pose is a flat vector of N_CH floats — the local transform channels of the
-// rig, exactly like an engine's per-bone float curves. Angles in radians,
-// offsets as fractions of BODY_H. Lateral sign convention: + is screen-right.
+// ---- physics tunables --------------------------------------------------------
+// Lengths in design px, time in SECONDS. The chart schedule is in beats; a
+// low-passed `bps` (this.bps) converts. These are the knobs to tune the feel.
 
-const CH_YAW = 0; // body yaw about the vertical axis (+ turns right side away)
-const CH_LEAN = 1; // torso roll (side lean)
-const CH_PITCH = 2; // torso pitch (+ bows toward the viewer)
-const CH_TWIST = 3; // shoulder line yaw relative to the pelvis
-const CH_SIDE = 4; // ribcage lateral shift (contrapposto S-curve)
-const CH_HYAW = 5; // head yaw (face turn)
-const CH_HPIT = 6; // head pitch (+ nods down)
-const CH_HROLL = 7; // head roll (ear-to-shoulder tilt)
-const CH_CROUCH = 8; // pelvis drop (+ down, − rises/airborne)
-const CH_SWAY = 9; // pelvis lateral shift (weight transfer)
-const CH_PELVZ = 10; // pelvis depth shift (+ toward viewer)
-const CH_LIST = 11; // pelvic list (+ = right hip hiked up)
-const CH_LABD = 12; // left arm: abduction from straight-down, + raises outward
-const CH_LFWD = 13; // left upper arm toward the viewer
-const CH_LELB = 14; // left elbow bend (continues the coronal arc)
-const CH_LLOF = 15; // left forearm extra toward the viewer
-const CH_RABD = 16; // right arm block, same layout
-const CH_RFWD = 17;
-const CH_RELB = 18;
-const CH_RLOF = 19;
-const CH_SWGL = 20; // left foot swing progress 0→1 (0 locked at plant, 1 landed)
-const CH_LIFTL = 21; // left foot lift arc (fraction of BODY_H)
-const CH_SWGR = 22; // right foot swing progress
-const CH_LIFTR = 23; // right foot lift arc
-const N_CH = 24;
+/** Gravity, px/s². Jump apex h = G·T²/8 emerges from the airtime T, so this
+ *  sets how a jump reads at a given tempo (bigger G ⇒ snappier, lower hang). */
+const G = 2000;
 
-// Mirror table (left↔right): channel source index + sign, applied to a sampled
-// pose. This is how the right-side step clips are generated from the left ones.
-const MIR_SRC = new Int32Array(N_CH);
-const MIR_SGN = new Float32Array(N_CH);
-{
-  for (let i = 0; i < N_CH; i++) {
-    MIR_SRC[i] = i;
-    MIR_SGN[i] = 1;
-  }
-  const NEG = [CH_YAW, CH_LEAN, CH_TWIST, CH_SIDE, CH_HYAW, CH_HROLL, CH_SWAY, CH_LIST];
-  for (const c of NEG) MIR_SGN[c] = -1;
-  const swap = (a: number, b: number): void => {
-    MIR_SRC[a] = b;
-    MIR_SRC[b] = a;
-  };
-  for (let k = 0; k < 4; k++) swap(CH_LABD + k, CH_RABD + k);
-  swap(CH_SWGL, CH_SWGR);
-  swap(CH_LIFTL, CH_LIFTR);
-}
+/** CoM lateral (x) "vault" spring: under-damped so the weight OVERSHOOTS the
+ *  support foot a few px each step — the read that sells the weight transfer. */
+const COM_OMEGA = 12; // rad/s
+const COM_ZETA = 0.62; // <1 ⇒ overshoot
+/** CoM depth (z) spring: softer, so U/D steps read as a pitch lean + hip list
+ *  rather than a hard slide toward/away from the camera. */
+const COM_OMEGA_Z = 10;
+const COM_ZETA_Z = 0.72;
 
-/** The relaxed base pose every keyframe is authored as overrides on. */
-const REST = new Float32Array(N_CH);
-{
-  REST[CH_CROUCH] = 0.032;
-  REST[CH_LABD] = 0.18;
-  REST[CH_LFWD] = 0.1;
-  REST[CH_LELB] = 0.22;
-  REST[CH_LLOF] = 0.45;
-  REST[CH_RABD] = 0.18;
-  REST[CH_RFWD] = 0.1;
-  REST[CH_RELB] = 0.22;
-  REST[CH_RLOF] = 0.45;
-}
+/** Critically-damped spring half-lives (s). Staggered down the arm so the
+ *  shoulder leads, the elbow trails and the forearm whips in last = a limp,
+ *  weighted follow-through instead of one rigid unit arriving at once. */
+const HL_BOB = 0.09; // vertical beat bob
+const HL_LEAN = 0.1;
+const HL_PITCH = 0.12;
+const HL_YAW = 0.14;
+const HL_TWIST = 0.12;
+const HL_SIDE = 0.14;
+const HL_LIST = 0.1;
+const HL_HEAD = 0.12; // head look / nod / roll
+const HL_ARM_SH = 0.09; // shoulder (abduction + swing)
+const HL_ARM_EL = 0.15; // elbow bend (trails the shoulder)
+const HL_ARM_FA = 0.26; // forearm fold (softest, whips in last — ~80ms drag)
+/** Hard minimum elbow flex (rad, ~25°): a human elbow never locks straight —
+ *  even a full reach keeps this much bend, which kills the ramrod-plank look. */
+const ELBOW_FLOOR = 0.44;
 
-// ---- clip data + authoring helpers -------------------------------------------
+/** Local tempo tracking: bps = lowpass(Δbeat/Δt), clamped to a sane band. */
+const BPS_LP = 0.12;
+const BPS_MIN = 0.5;
+const BPS_MAX = 8;
 
-interface Clip {
-  /** Key phases, ascending, first at 0. */
-  times: Float32Array;
-  /** nKeys * N_CH channel values. */
-  data: Float32Array;
-  n: number;
-  /** Nominal duration in beats. */
-  beats: number;
-  /** Phase where the note-hit lands (feet plant, pose accents). */
-  impact: number;
-  loop: boolean;
-}
+/** Foot-swing window (beats), clamped shorter by the gap to the next note so
+ *  fast streams stay crisp. A step lands exactly on its note beat. */
+const STEP_SWING_BEATS = 0.42;
+/** Jump budget (beats): a load crouch, then the airtime, landing on the beat.
+ *  Airtime drives apex height physically (h = G·T²/8), so it must be long enough
+ *  to read: ~1.1 beats ≈ 0.5s at 128 BPM → ~60px apex (vs a 0.5-beat twitch that
+ *  barely left the floor). Dense charts compress it via windupFor, so fast songs
+ *  naturally become quick low hops — correct. */
+const JUMP_LOAD_BEATS = 0.24;
+const JUMP_AIR_BEATS = 1.1;
 
-type KeyOver = Readonly<Record<number, number>>;
-
-/** Bake REST + overrides into one pose row. */
-function row(over: KeyOver): Float32Array {
-  const r = new Float32Array(REST);
-  for (const k in over) r[+k] = over[+k];
-  return r;
-}
-
-/** Mirror a baked pose row left↔right. */
-function mirrorRow(src: Float32Array): Float32Array {
-  const d = new Float32Array(N_CH);
-  for (let c = 0; c < N_CH; c++) d[c] = MIR_SGN[c] * src[MIR_SRC[c]];
-  return d;
-}
-
-function clipFromRows(
-  beats: number,
-  impact: number,
-  loop: boolean,
-  times: readonly number[],
-  rows: readonly Float32Array[],
-): Clip {
-  const n = times.length;
-  const data = new Float32Array(n * N_CH);
-  for (let i = 0; i < n; i++) data.set(rows[i], i * N_CH);
-  return { times: new Float32Array(times), data, n, beats, impact, loop };
-}
-
-function makeClip(
-  beats: number,
-  impact: number,
-  loop: boolean,
-  keys: readonly (readonly [number, KeyOver])[],
-): Clip {
-  return clipFromRows(
-    beats,
-    impact,
-    loop,
-    keys.map((k) => k[0]),
-    keys.map((k) => row(k[1])),
-  );
-}
-
-/** Whole-clip mirror (same timing, left↔right pose). */
-function mirrorClip(c: Clip): Clip {
-  const data = new Float32Array(c.n * N_CH);
-  for (let i = 0; i < c.n; i++) {
-    const o = i * N_CH;
-    for (let ch = 0; ch < N_CH; ch++) data[o + ch] = MIR_SGN[ch] * c.data[o + MIR_SRC[ch]];
-  }
-  return { times: c.times, data, n: c.n, beats: c.beats, impact: c.impact, loop: c.loop };
-}
-
-// ---- Catmull-Rom clip sampling -------------------------------------------------
-// Non-uniform Catmull-Rom evaluated as cubic Hermite per channel — the same
-// float-curve evaluation engines use for compressed animation tracks. Loops
-// wrap tangents across the seam; one-shots use zero end tangents so the clip
-// eases in from its first key and ARRIVES on its last pose with no overshoot.
-
-const MIR_TMP = new Float32Array(N_CH); // module scratch for mirrored sampling
-
-function sampleClip(c: Clip, phase: number, out: Float32Array, mirrored: boolean): void {
-  const n = c.n;
-  const T = c.times;
-  const D = c.data;
-  let p = Number.isFinite(phase) ? phase : 0;
-  if (c.loop) p -= Math.floor(p);
-  else p = clamp(p, 0, 1);
-
-  // Segment i: T[i] <= p < T[i+1] (loop: last segment wraps to T[0]+1).
-  let i = n - 1;
-  for (let k = 1; k < n; k++) {
-    if (T[k] > p) {
-      i = k - 1;
-      break;
-    }
-  }
-  if (!c.loop && i >= n - 1) i = n - 2;
-  if (i < 0) i = 0;
-
-  // Neighbor key times/rows: loops wrap across the seam (period 1), one-shots
-  // clamp to their end keys. Indices needed: i-1, i, i+1, i+2.
-  let tA: number;
-  let t0: number;
-  let t1: number;
-  let tD: number;
-  let rA: number;
-  let rB: number;
-  let rC: number;
-  let rD2: number;
-  if (c.loop) {
-    const iA = (((i - 1) % n) + n) % n;
-    const iC = (i + 1) % n;
-    const iD = (i + 2) % n;
-    tA = i - 1 < 0 ? T[iA] - 1 : T[iA];
-    t0 = T[i];
-    t1 = i + 1 >= n ? T[iC] + 1 : T[iC];
-    tD = i + 2 >= n ? T[iD] + 1 : T[iD];
-    rA = iA * N_CH;
-    rB = i * N_CH;
-    rC = iC * N_CH;
-    rD2 = iD * N_CH;
-  } else {
-    const iA = i - 1 < 0 ? 0 : i - 1;
-    const iC = i + 1 > n - 1 ? n - 1 : i + 1;
-    const iD = i + 2 > n - 1 ? n - 1 : i + 2;
-    tA = T[iA];
-    t0 = T[i];
-    t1 = T[iC];
-    tD = T[iD];
-    rA = iA * N_CH;
-    rB = i * N_CH;
-    rC = iC * N_CH;
-    rD2 = iD * N_CH;
-  }
-
-  const h = Math.max(t1 - t0, 1e-6);
-  const u = clamp((p - t0) / h, 0, 1);
-  const u2 = u * u;
-  const u3 = u2 * u;
-  const h00 = 2 * u3 - 3 * u2 + 1;
-  const h10 = u3 - 2 * u2 + u;
-  const h01 = -2 * u3 + 3 * u2;
-  const h11 = u3 - u2;
-
-  const dtB = t1 - tA;
-  const dtC = tD - t0;
-  // Zero end tangents for one-shots (ease both ends, no overshoot at ends).
-  const mB0 = !c.loop && i === 0;
-  const mC0 = !c.loop && i + 1 === n - 1;
-
-  const dst = mirrored ? MIR_TMP : out;
-  for (let ch = 0; ch < N_CH; ch++) {
-    const pB = D[rB + ch];
-    const pC = D[rC + ch];
-    const mB = mB0 || !(dtB > 1e-6) ? 0 : ((pC - D[rA + ch]) / dtB) * h;
-    const mC = mC0 || !(dtC > 1e-6) ? 0 : ((D[rD2 + ch] - pB) / dtC) * h;
-    const v = h00 * pB + h10 * mB + h01 * pC + h11 * mC;
-    dst[ch] = Number.isFinite(v) ? v : REST[ch];
-  }
-  if (mirrored) {
-    for (let ch = 0; ch < N_CH; ch++) out[ch] = MIR_SGN[ch] * MIR_TMP[MIR_SRC[ch]];
-  }
-}
-
-// ---- THE CLIP LIBRARY ----------------------------------------------------------
-// Hand-authored keyframes, written the way an animator blocks a dance move:
-// anticipation → coil over the support foot → the move LANDS on the impact
-// key (scheduled onto the note beat) → settle back toward the groove. Foot
-// swing channels use hold keys (0…0, then rise to 1 and hold) so feet stay
-// locked, leave late, and arrive exactly at 1 on impact.
-
-/** IDLE GROOVE — 2-beat loop, 8 keys (4 authored + exact mirrors so the loop
- *  never drifts). A real dancer's bounce: she drops INTO each count (crouch +
- *  head dip land together), rides back up through the "and", and rocks her
- *  weight right on count 1 / left on count 2 with the shoulders countering
- *  the hips. Fists ride UP in front of the chest (boxer/DDR-player groove,
- *  not arms-at-sides) and pump alternately — the accent-side fist punches
- *  high on its count. */
-const IDLE = (() => {
-  // ON the count: pulse DOWN, weight over the right foot, right fist high.
-  const k0: KeyOver = {
-    [CH_CROUCH]: 0.088,
-    [CH_SWAY]: 0.07,
-    [CH_LIST]: 0.03,
-    [CH_LEAN]: 0.065,
-    [CH_TWIST]: -0.21,
-    [CH_YAW]: 0.13,
-    [CH_SIDE]: -0.015,
-    [CH_PELVZ]: 0.014,
-    [CH_HROLL]: -0.075,
-    [CH_HPIT]: 0.07,
-    [CH_HYAW]: 0.06,
-    [CH_LABD]: 0.14,
-    [CH_LFWD]: 0.05,
-    [CH_LELB]: 0.46,
-    [CH_LLOF]: 0.1,
-    [CH_RABD]: 0.22,
-    [CH_RFWD]: 0.12,
-    [CH_RELB]: 0.74,
-    [CH_RLOF]: 0.16,
-  };
-  // Rebound: riding up out of the hit, arms releasing.
-  const k1: KeyOver = {
-    [CH_CROUCH]: 0.02,
-    [CH_SWAY]: 0.042,
-    [CH_LIST]: 0.014,
-    [CH_LEAN]: 0.04,
-    [CH_TWIST]: -0.1,
-    [CH_YAW]: 0.08,
-    [CH_SIDE]: -0.009,
-    [CH_HROLL]: -0.03,
-    [CH_HPIT]: -0.04,
-    [CH_HYAW]: 0.03,
-    [CH_LABD]: 0.12,
-    [CH_LFWD]: 0.04,
-    [CH_LELB]: 0.4,
-    [CH_LLOF]: 0.08,
-    [CH_RABD]: 0.18,
-    [CH_RFWD]: 0.09,
-    [CH_RELB]: 0.58,
-    [CH_RLOF]: 0.13,
-  };
-  // The "and": tallest point, weight passing through center, fists level.
-  const k2: KeyOver = {
-    [CH_CROUCH]: 0.006,
-    [CH_SWAY]: 0,
-    [CH_HPIT]: -0.07,
-    [CH_HYAW]: -0.02,
-    [CH_LABD]: 0.15,
-    [CH_LFWD]: 0.06,
-    [CH_LELB]: 0.44,
-    [CH_LLOF]: 0.1,
-    [CH_RABD]: 0.15,
-    [CH_RFWD]: 0.06,
-    [CH_RELB]: 0.44,
-    [CH_RLOF]: 0.1,
-  };
-  // Falling INTO the next count on the left side (anticipation).
-  const k3: KeyOver = {
-    [CH_CROUCH]: 0.052,
-    [CH_SWAY]: -0.042,
-    [CH_LIST]: -0.018,
-    [CH_LEAN]: -0.04,
-    [CH_TWIST]: 0.13,
-    [CH_YAW]: -0.08,
-    [CH_SIDE]: 0.009,
-    [CH_HROLL]: 0.035,
-    [CH_HPIT]: 0.02,
-    [CH_HYAW]: -0.04,
-    [CH_LABD]: 0.22,
-    [CH_LFWD]: 0.11,
-    [CH_LELB]: 0.72,
-    [CH_LLOF]: 0.15,
-    [CH_RABD]: 0.14,
-    [CH_RFWD]: 0.05,
-    [CH_RELB]: 0.44,
-    [CH_RLOF]: 0.1,
-  };
-  const r0 = row(k0);
-  const r1 = row(k1);
-  const r2 = row(k2);
-  const r3 = row(k3);
-  return clipFromRows(
-    2,
-    0,
-    true,
-    [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875],
-    [r0, r1, r2, r3, mirrorRow(r0), mirrorRow(r1), mirrorRow(r2), mirrorRow(r3)],
-  );
-})();
-
-/** STEP to the LEFT panel, canonical left foot. Eyes the panel early, coils
- *  DEEP over the right (support) foot with the left arm wrapped across the
- *  ribs, then whips open: left arm flung out along the step line (a touch of
- *  elbow so the hand reads), right fist pulled hard across, head and torso
- *  committed with a real side lean. The arm carries PAST the hit (follow-
- *  through key) before recoiling into the fists-up groove. */
-const STEP_L = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.03,
-      [CH_SWAY]: 0.022,
-      [CH_TWIST]: 0.07,
-      [CH_YAW]: 0.06,
-      [CH_HYAW]: -0.12,
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.3,
-      [CH_LELB]: 2.2,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.34,
-      [CH_RFWD]: 0.3,
-      [CH_RELB]: 2.2,
-      [CH_RLOF]: 0.45,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.062,
-      [CH_SWAY]: 0.062,
-      [CH_LIST]: 0.024,
-      [CH_LEAN]: 0.07,
-      [CH_TWIST]: 0.2,
-      [CH_YAW]: 0.16,
-      [CH_SIDE]: -0.016,
-      [CH_HYAW]: -0.24,
-      [CH_HROLL]: 0.05,
-      [CH_HPIT]: 0.03,
-      [CH_LABD]: 0.14,
-      [CH_LFWD]: 0.42,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.2,
-      [CH_RABD]: 0.55,
-      [CH_RFWD]: 0.16,
-      [CH_RELB]: 0.9,
-      [CH_RLOF]: 0.3,
-      [CH_LIFTL]: 0.035,
-    },
-  ],
-  [
-    0.45,
-    {
-      [CH_CROUCH]: 0.045,
-      [CH_SWAY]: 0.05,
-      [CH_LIST]: 0.015,
-      [CH_LEAN]: 0.02,
-      [CH_TWIST]: 0.04,
-      [CH_YAW]: 0.04,
-      [CH_HYAW]: -0.28,
-      [CH_LABD]: 1.0,
-      [CH_LFWD]: 0.18,
-      [CH_LELB]: 0.6,
-      [CH_LLOF]: 0.15,
-      [CH_RABD]: 0.4,
-      [CH_RFWD]: 0.22,
-      [CH_RELB]: 1.9,
-      [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.09,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: 0.052,
-      [CH_SWAY]: -0.015,
-      [CH_LIST]: -0.024,
-      [CH_LEAN]: -0.095,
-      [CH_TWIST]: -0.22,
-      [CH_YAW]: -0.16,
-      [CH_SIDE]: 0.018,
-      [CH_HYAW]: -0.3,
-      [CH_HROLL]: -0.1,
-      [CH_HPIT]: 0.04,
-      [CH_LABD]: 1.75,
-      [CH_LFWD]: 0.06,
-      [CH_LELB]: 0.48, // soft C-curve at full reach, never a ruler
-      [CH_LLOF]: 0.16,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: 0.42,
-      [CH_RELB]: 2.4,
-      [CH_RLOF]: 0.3,
-      [CH_SWGL]: 1,
-      [CH_LIFTL]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: -0.03,
-      [CH_LIST]: -0.018,
-      [CH_LEAN]: -0.075,
-      [CH_TWIST]: -0.16,
-      [CH_YAW]: -0.12,
-      [CH_HYAW]: -0.24,
-      [CH_HROLL]: -0.07,
-      [CH_LABD]: 1.9,
-      [CH_LFWD]: 0.04,
-      [CH_LELB]: 0.36, // keeps the curve through the follow-through
-      [CH_LLOF]: 0.12,
-      [CH_RABD]: 0.16,
-      [CH_RFWD]: 0.38,
-      [CH_RELB]: 2.5,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.033,
-      [CH_SWAY]: -0.03,
-      [CH_LIST]: -0.01,
-      [CH_LEAN]: -0.035,
-      [CH_TWIST]: -0.06,
-      [CH_YAW]: -0.06,
-      [CH_HYAW]: -0.12,
-      [CH_HROLL]: -0.03,
-      [CH_HPIT]: -0.03,
-      [CH_LABD]: 1.05,
-      [CH_LELB]: 0.7,
-      [CH_LLOF]: 0.25,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.3,
-      [CH_RELB]: 2.3,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.045,
-      [CH_SWAY]: -0.02,
-      [CH_LEAN]: -0.01,
-      [CH_YAW]: -0.03,
-      [CH_HYAW]: -0.03,
-      [CH_HPIT]: 0.02,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.5,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGL]: 1,
-    },
-  ],
+/** Arm accent vocabulary. Each row is a set-point [abduction, fwd, elbow,
+ *  forearm-fold] for the accent arm; the scheduler fires one by context and the
+ *  staggered spring chain turns it into a weighted, following gesture. Values
+ *  live inside the FK clamp ranges (abd -0.6..3.3, fwd -1.2..1.2, elb -0.5..2.6,
+ *  lof -1.2..1.6). Index 0 is the resting groove pose. */
+const ACC_REST = 0;
+const ACC_PUNCH = 1; // downbeat fist punch up in front
+const ACC_FLARE = 2; // jump: arms fling open into an X
+const ACC_SKY = 3; // overhead reach (Up panel)
+const ACC_SIDE = 4; // reach out along the step line (L/R)
+const ACC_CROSS = 5; // arm pulls across the chest (crossover)
+const ACC_DRIVE = 6; // punch down past the hip (Down stomp)
+const ACC_LEAD = 7; // flexed-elbow victory pump overhead
+const N_ACC = 8;
+// prettier-ignore
+// Arm accent set-points [abduction, forward, elbow-flex, forearm-fold], radians.
+// Every entry keeps a BENT elbow (≥~0.8) and caps abduction near horizontal for
+// the everyday poses — a locked, ramrod-straight side-arm reads robotic, so the
+// only near-overhead reaches (sky) are reserved for rare Up/jump accents. The
+// staggered spring chain turns these set-points into weighted follow-through.
+const ACCENTS = new Float32Array([
+  0.26, 0.14, 1.0, 0.35, // 0 rest — relaxed bent hang, hand near the hip
+  0.45, 0.38, 1.55, 0.28, // 1 punch — bent fist up in front
+  0.85, 0.12, 1.05, 0.22, // 2 flare — open, capped ~49° with a bent elbow
+  2.15, 0.14, 0.9, 0.16, // 3 sky — overhead reach, elbow bent (rare: Up / jump)
+  0.7, 0.22, 1.25, 0.2, // 4 side — reach along the step line, ELBOW BENT (no ramrod)
+  0.55, -0.35, 1.3, 0.12, // 5 cross-body — bent pull across the chest
+  0.24, -0.3, 0.9, 0.06, // 6 low drive — low bent pump past the hip
+  1.0, 0.2, 1.45, 0.18, // 7 lead pump — bent-elbow runner/victory pump
 ]);
 
-/** STEP to the RIGHT panel = exact mirror of STEP_L (canonical right foot). */
-const STEP_R = mirrorClip(STEP_L);
+// ---- physics helpers (pure, allocation-free) --------------------------------
 
-/** STEP to the UP (far) panel, canonical right foot. A tall reach: deep bow
- *  to coil with both arms swept behind her, then the chest opens and the arms
- *  whip into an ASYMMETRIC V overhead (lead arm higher — this is the row that
- *  fires the hand-burst), face thrown up, body stretching PAST the hit before
- *  melting back into the groove. */
-const STEP_U = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: -0.02,
-      [CH_PITCH]: 0.03,
-      [CH_HPIT]: 0.04,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.4,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.4,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.062,
-      [CH_SWAY]: -0.055,
-      [CH_LIST]: -0.022,
-      [CH_PITCH]: 0.1,
-      [CH_LEAN]: -0.035,
-      [CH_HPIT]: 0.12,
-      [CH_LABD]: 0.2,
-      [CH_LFWD]: -0.28,
-      [CH_LELB]: 0.4,
-      [CH_LLOF]: -0.05,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: -0.32,
-      [CH_RELB]: 0.35,
-      [CH_RLOF]: -0.05,
-      [CH_LIFTR]: 0.035,
-    },
-  ],
-  [
-    0.45,
-    {
-      [CH_CROUCH]: 0.025,
-      [CH_SWAY]: -0.04,
-      [CH_PITCH]: 0,
-      [CH_HPIT]: -0.05,
-      [CH_LABD]: 1.6,
-      [CH_LELB]: 0.35,
-      [CH_LLOF]: 0.05,
-      [CH_RABD]: 1.5,
-      [CH_RELB]: 0.3,
-      [CH_RLOF]: 0.05,
-      [CH_SWGR]: 0.55,
-      [CH_LIFTR]: 0.095,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: -0.018,
-      [CH_SWAY]: -0.018,
-      [CH_PITCH]: -0.09,
-      [CH_PELVZ]: -0.025,
-      [CH_TWIST]: -0.08,
-      [CH_LEAN]: 0.035,
-      [CH_HPIT]: -0.2,
-      [CH_HROLL]: 0.05,
-      [CH_LABD]: 2.95,
-      [CH_LFWD]: 0.08,
-      [CH_LELB]: 0.34, // overhead reach curves, doesn't lock
-      [CH_LLOF]: 0.12,
-      [CH_RABD]: 2.45,
-      [CH_RFWD]: 0.12,
-      [CH_RELB]: 0.44,
-      [CH_RLOF]: 0.14,
-      [CH_SWGR]: 1,
-      [CH_LIFTR]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: -0.002,
-      [CH_PITCH]: -0.06,
-      [CH_HPIT]: -0.16,
-      [CH_HROLL]: 0.03,
-      [CH_LABD]: 3.05,
-      [CH_LELB]: 0.3,
-      [CH_RABD]: 2.6,
-      [CH_RELB]: 0.4,
-      [CH_SWGR]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.03,
-      [CH_PITCH]: -0.02,
-      [CH_HPIT]: -0.06,
-      [CH_LABD]: 2.0,
-      [CH_LELB]: 0.35,
-      [CH_RABD]: 1.6,
-      [CH_RELB]: 0.5,
-      [CH_SWGR]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.042,
-      [CH_SWAY]: -0.02,
-      [CH_LABD]: 0.34,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGR]: 1,
-    },
-  ],
-]);
-
-/** STEP to the DOWN (near) panel, canonical left foot. A stomp toward the
- *  viewer: rises a touch first (anticipation UP before the down hit), then
- *  SITS deep over the near panel — fists yanked to the ribs, head slammed
- *  down with the hit — and whips the head back up on the rebound. */
-const STEP_D = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.018,
-      [CH_SWAY]: 0.026,
-      [CH_HPIT]: -0.05,
-      [CH_LABD]: 0.5,
-      [CH_LFWD]: 0.24,
-      [CH_LELB]: 1.0,
-      [CH_LLOF]: 0.35,
-      [CH_RABD]: 0.5,
-      [CH_RFWD]: 0.24,
-      [CH_RELB]: 1.0,
-      [CH_RLOF]: 0.35,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.02,
-      [CH_SWAY]: 0.058,
-      [CH_LIST]: 0.02,
-      [CH_YAW]: 0.09,
-      [CH_TWIST]: 0.12,
-      [CH_LEAN]: 0.05,
-      [CH_HPIT]: -0.06,
-      [CH_HYAW]: 0.06,
-      [CH_LABD]: 0.7,
-      [CH_LFWD]: 0.1,
-      [CH_LELB]: 0.7,
-      [CH_RABD]: 0.75,
-      [CH_RFWD]: 0.1,
-      [CH_RELB]: 0.7,
-      [CH_LIFTL]: 0.04,
-    },
-  ],
-  [
-    0.44,
-    {
-      [CH_CROUCH]: 0.055,
-      [CH_SWAY]: 0.045,
-      [CH_PITCH]: 0.07,
-      [CH_HPIT]: 0.06,
-      [CH_LABD]: 0.4,
-      [CH_LFWD]: 0.36,
-      [CH_LELB]: 2.0,
-      [CH_RABD]: 0.4,
-      [CH_RFWD]: 0.36,
-      [CH_RELB]: 2.0,
-      [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.08,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: 0.115,
-      [CH_SWAY]: 0.01,
-      [CH_PITCH]: 0.15,
-      [CH_PELVZ]: 0.025,
-      [CH_LEAN]: -0.04,
-      [CH_YAW]: -0.06,
-      [CH_TWIST]: -0.11,
-      [CH_HPIT]: 0.17,
-      [CH_HYAW]: -0.03,
-      [CH_LABD]: 0.15,
-      [CH_LFWD]: 0.35,
-      [CH_LELB]: 2.5,
-      [CH_LLOF]: 0.4,
-      [CH_RABD]: 0.15,
-      [CH_RFWD]: 0.35,
-      [CH_RELB]: 2.5,
-      [CH_RLOF]: 0.4,
-      [CH_SWGL]: 1,
-      [CH_LIFTL]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: 0.09,
-      [CH_PITCH]: 0.1,
-      [CH_HPIT]: 0.1,
-      [CH_LABD]: 0.12,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.6,
-      [CH_RABD]: 0.12,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.6,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.045,
-      [CH_PITCH]: 0.03,
-      [CH_HPIT]: -0.06,
-      [CH_LABD]: 0.28,
-      [CH_LFWD]: 0.3,
-      [CH_LELB]: 2.25,
-      [CH_RABD]: 0.28,
-      [CH_RFWD]: 0.3,
-      [CH_RELB]: 2.25,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.038,
-      [CH_PITCH]: 0.005,
-      [CH_HPIT]: -0.01,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.5,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGL]: 1,
-    },
-  ],
-]);
-
-/** JUMP — a first-class two-foot move (any panel pair: L+R straddle, U+D
- *  split, L+U…): deep wind-up crouch with arms swept back → BOTH feet leave
- *  the floor, body rises, arms fling into an open X at the apex → both feet
- *  land simultaneously ON the beat with a landing squash → rebound settle.
- *  Weight stays CENTERED (sway/list zero) so she lands between her panels. */
-// A real gravity jump: load → explosive takeoff → a HANG at the apex (the crouch
-// values on either side of it are symmetric, so the Hermite peaks flat = float)
-// → a fast fall → a deep landing squash that absorbs the weight → a rebound
-// overshoot before settling. Takeoff→apex and apex→touchdown are equal spans, so
-// up-time == down-time like real ballistics.
-const JUMP = makeClip(1.7, 0.65, false, [
-  [0, { [CH_CROUCH]: 0.04, [CH_HPIT]: 0.02 }],
-  [
-    0.22,
-    {
-      [CH_CROUCH]: 0.17, // deep load — coil the legs (anticipation)
-      [CH_PITCH]: 0.12,
-      [CH_HPIT]: 0.1,
-      [CH_LABD]: 0.22,
-      [CH_LFWD]: -0.4,
-      [CH_LELB]: 0.35,
-      [CH_RABD]: 0.22,
-      [CH_RFWD]: -0.4,
-      [CH_RELB]: 0.35,
-    },
-  ],
-  [
-    0.37,
-    {
-      [CH_CROUCH]: -0.05, // TAKEOFF — legs snap straight, feet just leaving
-      [CH_PITCH]: -0.04,
-      [CH_HPIT]: -0.06,
-      [CH_LABD]: 1.1,
-      [CH_LELB]: 0.32,
-      [CH_RABD]: 1.1,
-      [CH_RELB]: 0.32,
-      [CH_SWGL]: 0.3,
-      [CH_SWGR]: 0.3,
-      [CH_LIFTL]: 0.09,
-      [CH_LIFTR]: 0.09,
-    },
-  ],
-  [
-    0.51,
-    {
-      [CH_CROUCH]: -0.26, // APEX — whole body airborne, hangs here (symmetric neighbours → flat peak)
-      [CH_PITCH]: -0.06,
-      [CH_HPIT]: -0.13,
-      [CH_LABD]: 2.5,
-      [CH_LELB]: 0.34,
-      [CH_LLOF]: 0.1,
-      [CH_RABD]: 2.5,
-      [CH_RELB]: 0.34,
-      [CH_RLOF]: 0.1,
-      [CH_SWGL]: 0.6,
-      [CH_SWGR]: 0.6,
-      [CH_LIFTL]: 0.3, // feet tuck slightly higher than the pelvis rise
-      [CH_LIFTR]: 0.3,
-    },
-  ],
-  [
-    0.64,
-    {
-      [CH_CROUCH]: -0.05, // FALLING — mirror of takeoff, accelerating down
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 1.6,
-      [CH_LELB]: 0.42,
-      [CH_RABD]: 1.6,
-      [CH_RELB]: 0.42,
-      [CH_SWGL]: 0.92,
-      [CH_SWGR]: 0.92,
-      [CH_LIFTL]: 0.08,
-      [CH_LIFTR]: 0.08,
-    },
-  ],
-  [
-    0.71,
-    {
-      [CH_CROUCH]: 0.18, // LANDING squash — feet planted, knees eat the impact
-      [CH_PITCH]: 0.1,
-      [CH_HPIT]: 0.06,
-      [CH_LABD]: 0.7,
-      [CH_LELB]: 0.6,
-      [CH_RABD]: 0.7,
-      [CH_RELB]: 0.6,
-      [CH_SWGL]: 1,
-      [CH_SWGR]: 1,
-      [CH_LIFTL]: 0,
-      [CH_LIFTR]: 0,
-    },
-  ],
-  [
-    0.84,
-    {
-      [CH_CROUCH]: -0.01, // REBOUND — spring back up past neutral (follow-through)
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.34,
-      [CH_LFWD]: 0.1,
-      [CH_LELB]: 0.5,
-      [CH_RABD]: 0.34,
-      [CH_RFWD]: 0.1,
-      [CH_RELB]: 0.5,
-      [CH_SWGL]: 1,
-      [CH_SWGR]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.04, // settle back into the groove's low hang
-      [CH_LABD]: 0.2,
-      [CH_LFWD]: 0.08,
-      [CH_LELB]: 0.5,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: 0.08,
-      [CH_RELB]: 0.5,
-      [CH_SWGL]: 1,
-      [CH_SWGR]: 1,
-    },
-  ],
-]);
-
-/** FLOURISH — a 2-beat body-roll wave for long gaps: yaw sweeps left→right
- *  with a counter-twist while one arm winds up and releases overhead. Feet
- *  never move (no swing channels), so plants stay locked. */
-const FLOURISH = makeClip(2, 0, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_YAW]: -0.06,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-    },
-  ],
-  [
-    0.22,
-    {
-      [CH_YAW]: -0.2,
-      [CH_TWIST]: 0.22,
-      [CH_LEAN]: 0.06,
-      [CH_CROUCH]: 0.03,
-      [CH_HYAW]: -0.15,
-      [CH_HROLL]: 0.06,
-      [CH_LABD]: 0.9,
-      [CH_LFWD]: 0.3,
-      [CH_LELB]: 1.25,
-      [CH_LLOF]: 0.2,
-      [CH_RABD]: 0.35,
-      [CH_RELB]: 0.7,
-    },
-  ],
-  [
-    0.48,
-    {
-      [CH_YAW]: 0.02,
-      [CH_TWIST]: -0.06,
-      [CH_PITCH]: 0.09,
-      [CH_CROUCH]: 0.06,
-      [CH_SIDE]: 0.012,
-      [CH_HROLL]: 0.1,
-      [CH_HPIT]: 0.06,
-      [CH_LABD]: 1.9,
-      [CH_LELB]: 0.6,
-      [CH_LLOF]: 0.15,
-      [CH_RABD]: 0.7,
-      [CH_RFWD]: 0.25,
-      [CH_RELB]: 1.0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_YAW]: 0.2,
-      [CH_TWIST]: -0.22,
-      [CH_LEAN]: -0.06,
-      [CH_PITCH]: -0.04,
-      [CH_CROUCH]: 0.02,
-      [CH_HYAW]: 0.2,
-      [CH_HROLL]: -0.07,
-      [CH_LABD]: 2.45,
-      [CH_LELB]: 0.36,
-      [CH_RABD]: 0.5,
-      [CH_RELB]: 0.6,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_YAW]: 0.03,
-      [CH_CROUCH]: 0.04,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-    },
-  ],
-]);
-
-// ---- B-VARIANT STEP CLIPS -------------------------------------------------------
-// A second styling for every panel, alternated with the A clips step by step so
-// runs of the same arrow don't loop one gesture. Same timing contract as the A
-// clips (beats/impact/foot channels identical — the scheduler treats them
-// interchangeably); only the upper-body choreography differs.
-
-/** STEP_L variant — hip-led rock-back with the LEFT fist pumped overhead
- *  (flexed elbow) while the right arm punches down-back. Reads "victory hit"
- *  where the A clip reads "reach along the arrow". Canonical left foot. */
-const STEP_L_B = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.032,
-      [CH_SWAY]: 0.02,
-      [CH_TWIST]: 0.05,
-      [CH_HYAW]: -0.1,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.28,
-      [CH_LELB]: 2.2,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.28,
-      [CH_RELB]: 2.2,
-      [CH_RLOF]: 0.45,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.06,
-      [CH_SWAY]: 0.06,
-      [CH_LIST]: 0.022,
-      [CH_LEAN]: 0.06,
-      [CH_TWIST]: 0.18,
-      [CH_YAW]: 0.14,
-      [CH_HYAW]: -0.2,
-      [CH_HPIT]: 0.05,
-      [CH_LABD]: 0.2,
-      [CH_LFWD]: -0.15,
-      [CH_LELB]: 0.5,
-      [CH_LLOF]: 0.1,
-      [CH_RABD]: 0.25,
-      [CH_RFWD]: -0.2,
-      [CH_RELB]: 0.45,
-      [CH_RLOF]: 0.1,
-      [CH_LIFTL]: 0.035,
-    },
-  ],
-  [
-    0.45,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: 0.045,
-      [CH_TWIST]: 0.02,
-      [CH_HYAW]: -0.26,
-      [CH_LABD]: 1.3,
-      [CH_LFWD]: 0.1,
-      [CH_LELB]: -0.1,
-      [CH_LLOF]: 0.1,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0,
-      [CH_RELB]: 0.7,
-      [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.085,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: 0.05,
-      [CH_SWAY]: -0.014,
-      [CH_LIST]: -0.022,
-      [CH_LEAN]: -0.1,
-      [CH_TWIST]: -0.26,
-      [CH_YAW]: -0.18,
-      [CH_SIDE]: 0.016,
-      [CH_HYAW]: -0.26,
-      [CH_HROLL]: -0.09,
-      [CH_HPIT]: -0.06,
-      [CH_LABD]: 2.25,
-      [CH_LFWD]: 0.12,
-      [CH_LELB]: -0.5,
-      [CH_LLOF]: 0.15,
-      [CH_RABD]: 0.12,
-      [CH_RFWD]: -0.28,
-      [CH_RELB]: 0.35,
-      [CH_RLOF]: 0,
-      [CH_SWGL]: 1,
-      [CH_LIFTL]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: -0.028,
-      [CH_LIST]: -0.016,
-      [CH_LEAN]: -0.085,
-      [CH_TWIST]: -0.2,
-      [CH_YAW]: -0.14,
-      [CH_HYAW]: -0.2,
-      [CH_HROLL]: -0.06,
-      [CH_HPIT]: -0.09,
-      [CH_LABD]: 2.35,
-      [CH_LELB]: -0.42,
-      [CH_RABD]: 0.1,
-      [CH_RFWD]: -0.3,
-      [CH_RELB]: 0.4,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.032,
-      [CH_SWAY]: -0.028,
-      [CH_LEAN]: -0.04,
-      [CH_TWIST]: -0.1,
-      [CH_YAW]: -0.07,
-      [CH_HYAW]: -0.1,
-      [CH_HPIT]: -0.04,
-      [CH_LABD]: 1.4,
-      [CH_LELB]: 0.5,
-      [CH_LLOF]: 0.25,
-      [CH_RABD]: 0.24,
-      [CH_RFWD]: 0.1,
-      [CH_RELB]: 0.8,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.044,
-      [CH_SWAY]: -0.02,
-      [CH_YAW]: -0.03,
-      [CH_HYAW]: -0.03,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.5,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGL]: 1,
-    },
-  ],
-]);
-
-/** STEP_D variant — both fists PUNCH down past the hips on the stomp
- *  (shoulders shrugged into it), then the head whips back up. Canonical
- *  left foot. */
-const STEP_D_B = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.02,
-      [CH_SWAY]: 0.024,
-      [CH_HPIT]: -0.04,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.02,
-      [CH_SWAY]: 0.055,
-      [CH_LIST]: 0.02,
-      [CH_LEAN]: 0.045,
-      [CH_TWIST]: 0.1,
-      [CH_HPIT]: -0.08,
-      [CH_LABD]: 0.55,
-      [CH_LFWD]: 0.35,
-      [CH_LELB]: 2.4,
-      [CH_RABD]: 0.55,
-      [CH_RFWD]: 0.35,
-      [CH_RELB]: 2.4,
-      [CH_LIFTL]: 0.04,
-    },
-  ],
-  [
-    0.44,
-    {
-      [CH_CROUCH]: 0.05,
-      [CH_SWAY]: 0.04,
-      [CH_PITCH]: 0.06,
-      [CH_HPIT]: 0,
-      [CH_LABD]: 0.35,
-      [CH_LFWD]: 0.2,
-      [CH_LELB]: 1.0,
-      [CH_RABD]: 0.35,
-      [CH_RFWD]: 0.2,
-      [CH_RELB]: 1.0,
-      [CH_SWGL]: 0.55,
-      [CH_LIFTL]: 0.08,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: 0.12,
-      [CH_SWAY]: 0.008,
-      [CH_PITCH]: 0.13,
-      [CH_PELVZ]: 0.02,
-      [CH_TWIST]: 0.06,
-      [CH_HPIT]: 0.13,
-      [CH_LABD]: 0.22,
-      [CH_LFWD]: -0.34,
-      [CH_LELB]: 0.18,
-      [CH_LLOF]: -0.05,
-      [CH_RABD]: 0.22,
-      [CH_RFWD]: -0.34,
-      [CH_RELB]: 0.18,
-      [CH_RLOF]: -0.05,
-      [CH_SWGL]: 1,
-      [CH_LIFTL]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: 0.095,
-      [CH_PITCH]: 0.09,
-      [CH_HPIT]: 0.02,
-      [CH_LABD]: 0.2,
-      [CH_LFWD]: -0.38,
-      [CH_LELB]: 0.15,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: -0.38,
-      [CH_RELB]: 0.15,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.05,
-      [CH_PITCH]: 0,
-      [CH_HPIT]: -0.09,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.24,
-      [CH_LELB]: 2.2,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.24,
-      [CH_RELB]: 2.2,
-      [CH_SWGL]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.038,
-      [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.5,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGL]: 1,
-    },
-  ],
-]);
-
-/** STEP_U variant — a single skyward reach: LEFT arm shoots straight up while
- *  the right fist stays cocked at the hip, chest open, chin thrown up. The
- *  asymmetry keeps back-to-back Up arrows from strobing the same V pose.
- *  Canonical right foot. */
-const STEP_U_B = makeClip(1.5, 0.6, false, [
-  [
-    0,
-    {
-      [CH_CROUCH]: 0.04,
-      [CH_SWAY]: -0.02,
-      [CH_PITCH]: 0.03,
-      [CH_HPIT]: 0.04,
-      [CH_LABD]: 0.3,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.4,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.4,
-    },
-  ],
-  [
-    0.3,
-    {
-      [CH_CROUCH]: 0.06,
-      [CH_SWAY]: -0.055,
-      [CH_LIST]: -0.02,
-      [CH_PITCH]: 0.09,
-      [CH_LEAN]: -0.03,
-      [CH_HPIT]: 0.11,
-      [CH_LABD]: 0.18,
-      [CH_LFWD]: -0.3,
-      [CH_LELB]: 0.35,
-      [CH_LLOF]: -0.05,
-      [CH_RABD]: 0.2,
-      [CH_RFWD]: -0.26,
-      [CH_RELB]: 0.4,
-      [CH_RLOF]: 0,
-      [CH_LIFTR]: 0.035,
-    },
-  ],
-  [
-    0.45,
-    {
-      [CH_CROUCH]: 0.02,
-      [CH_SWAY]: -0.04,
-      [CH_PITCH]: 0,
-      [CH_HPIT]: -0.04,
-      [CH_LABD]: 0.9,
-      [CH_LELB]: 0.3,
-      [CH_RABD]: 1.4,
-      [CH_RELB]: 0.3,
-      [CH_SWGR]: 0.55,
-      [CH_LIFTR]: 0.09,
-    },
-  ],
-  [
-    0.6,
-    {
-      [CH_CROUCH]: -0.015,
-      [CH_SWAY]: -0.02,
-      [CH_PITCH]: -0.08,
-      [CH_PELVZ]: -0.02,
-      [CH_TWIST]: 0.14,
-      [CH_LEAN]: 0.06,
-      [CH_HPIT]: -0.18,
-      [CH_HYAW]: 0.08,
-      [CH_HROLL]: 0.06,
-      [CH_LABD]: 3.1,
-      [CH_LFWD]: 0.12,
-      [CH_LELB]: 0.32, // the skyward reach is a curve, not a flagpole
-      [CH_LLOF]: 0.12,
-      [CH_RABD]: 0.15,
-      [CH_RFWD]: -0.18,
-      [CH_RELB]: 0.9,
-      [CH_RLOF]: 0.2,
-      [CH_SWGR]: 1,
-      [CH_LIFTR]: 0,
-    },
-  ],
-  [
-    0.72,
-    {
-      [CH_CROUCH]: -0.005,
-      [CH_PITCH]: -0.06,
-      [CH_TWIST]: 0.1,
-      [CH_LEAN]: 0.05,
-      [CH_HPIT]: -0.14,
-      [CH_LABD]: 3.2,
-      [CH_LELB]: 0.28,
-      [CH_RABD]: 0.15,
-      [CH_RFWD]: -0.15,
-      [CH_RELB]: 0.95,
-      [CH_SWGR]: 1,
-    },
-  ],
-  [
-    0.85,
-    {
-      [CH_CROUCH]: 0.03,
-      [CH_PITCH]: -0.02,
-      [CH_HPIT]: -0.05,
-      [CH_LABD]: 2.0,
-      [CH_LELB]: 0.4,
-      [CH_RABD]: 0.3,
-      [CH_RELB]: 1.0,
-      [CH_SWGR]: 1,
-    },
-  ],
-  [
-    1,
-    {
-      [CH_CROUCH]: 0.042,
-      [CH_SWAY]: -0.02,
-      [CH_LABD]: 0.34,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.3,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
-      [CH_SWGR]: 1,
-    },
-  ],
-]);
-
-/** Right-side B variant = exact mirror of the left one. */
-const STEP_R_B = mirrorClip(STEP_L_B);
-
-/** The clip registry. Indices are stable (players store an index). */
-const CLIPS: readonly Clip[] = [
-  IDLE,
-  STEP_L,
-  STEP_D,
-  STEP_U,
-  STEP_R,
-  JUMP,
-  FLOURISH,
-  STEP_L_B,
-  STEP_D_B,
-  STEP_U_B,
-  STEP_R_B,
-];
-const CLIP_JUMP = 5;
-const CLIP_FLOURISH = 6;
-/** Panel (0=L,1=D,2=U,3=R) → step clip index, per styling variant. Both
- *  variants share beats/impact, so the scheduler can pick either freely. */
-const PANEL_CLIP: readonly number[] = [1, 2, 3, 4];
-const PANEL_CLIP_B: readonly number[] = [7, 8, 9, 10];
-/** Canonical stepping foot per clip (-1 = none/both). */
-const CLIP_FOOT: readonly number[] = [-1, 0, 0, 1, 1, -1, -1, 0, 0, 1, 1];
+/** Minimum-jerk easing on [0,1]: zero velocity AND acceleration at both ends —
+ *  the natural shape of a reach/step, no slide-in or overshoot. */
+function minJerk(t: number): number {
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  return u * u * u * (10 + u * (-15 + 6 * u));
+}
+/** Half-sine on [0,1] for a swing/lift clearance arc (0 → 1 → 0). */
+function halfSine(t: number): number {
+  const u = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.sin(Math.PI * u);
+}
 
 // ---- chart step type -----------------------------------------------------------
 
@@ -1649,6 +341,24 @@ const PERSP_F = 3.4 * BODY_H;
 const TILT = 0.22;
 const Z_MAX = PERSP_F * 0.45;
 
+// ---- CoM rest geometry (derived from the proportions) -----------------------
+
+/** Rest CoM height (px, y DOWN): the pelvis when standing on both feet. */
+const REST_COM_Y = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * BODY_H * 0.985;
+/** Rest hip→ankle vertical span — feet hang this far below the pelvis; a jump
+ *  keeps that (feet rise WITH the body) and the tuck subtracts from it. */
+const HANG0 = FOOT_Y - L_SHOE * BODY_H - REST_COM_Y;
+/** Beat-bob depth (px): the CoM sinks this much INTO each count. */
+const BOB_AMP = 0.03 * BODY_H;
+/** Pre-takeoff load crouch depth (px). */
+const JUMP_LOAD = 0.11 * BODY_H;
+/** Base foot swing clearance + in-flight knee tuck (fractions of BODY_H). The
+ *  swing clearance gives a visible passing pose (foot lifts + knee flexes) so a
+ *  step reads as lift-and-plant, not a slide; the tuck pulls the feet up under
+ *  the body at the jump apex so knees bend in the air. */
+const SWING_LIFT = 0.07;
+const JUMP_TUCK = 0.28;
+
 // ---- footwork constants -------------------------------------------------------
 
 /** Half stance width (fraction of BODY_H). */
@@ -1656,49 +366,6 @@ const STANCE = 0.085;
 /** Chart-less synthesized pattern, one row per beat (bit0=L,1=D,2=U,3=R;
  *  9 = L+R jump so the two-foot move shows up in attract mode too). */
 const SYNTH: readonly number[] = [1, 2, 8, 4, 1, 8, 2, 9];
-
-/** Player pool size (idle is implicit, not a player). */
-const N_PLAYERS = 6;
-/** Cross-fade envelope, in clip-phase units. */
-const FADE_IN = 0.18;
-const FADE_OUT = 0.25;
-
-/** Channels run through the post-blend follow-through springs: the head and
- *  both arms — the parts that whip fastest between clip poses and sell
- *  secondary motion when they carry a little past the target. */
-const SMOOTH_CH: readonly number[] = [
-  CH_HYAW,
-  CH_HPIT,
-  CH_HROLL,
-  CH_LABD,
-  CH_LFWD,
-  CH_LELB,
-  CH_LLOF,
-  CH_RABD,
-  CH_RFWD,
-  CH_RELB,
-  CH_RLOF,
-];
-
-/** Per-channel spring tuning, parallel to SMOOTH_CH. The arm chain is
- *  deliberately STAGGERED down the limb — the shoulder channels (ABD/FWD) are
- *  stiff and settle first, the elbow is softer and trails them, and the
- *  forearm offset (LOF) is softest of all — so on every pose change the upper
- *  arm leads, the forearm whips in after it and settles with a small
- *  overshoot (lead-and-lag / follow-through) instead of the whole arm
- *  arriving at once as one rigid unit. */
-// prettier-ignore
-const SPRING_ZETA = new Float32Array([
-  0.6, 0.6, 0.6,        // head yaw/pitch/roll (unchanged feel)
-  0.7, 0.7, 0.5, 0.42,  // L: abd, fwd, elbow, forearm
-  0.7, 0.7, 0.5, 0.42,  // R: abd, fwd, elbow, forearm
-]);
-// prettier-ignore
-const SPRING_OMEGA = new Float32Array([
-  26, 26, 26,
-  28, 28, 18, 14,
-  28, 28, 18, 14,
-]);
 
 // ---- dance pad ----------------------------------------------------------------
 // A 4-panel + laid FLAT on the floor plane (world y = FOOT_Y), each panel
@@ -1755,45 +422,103 @@ export class AttractDancer {
   private readonly skel = new Float32Array(JOINTS * 2); // projected 2D joints
   private readonly skel3 = new Float64Array(JOINTS * 3); // 3D joints (x,y,z)
   private readonly jscale = new Float32Array(JOINTS); // per-joint perspective scale
-  private readonly poseAcc = new Float32Array(N_CH); // blended pose
-  private readonly poseTmp = new Float32Array(N_CH); // per-clip sample
+  private readonly sp2 = new Float64Array(2); // spring stepper out: [x, v]
 
-  // ---- timing ----
+  // ---- timing / tempo ----
   private lastTime = NaN;
   private prevBeat = NaN;
+  private bps = 2; // low-passed beats-per-second
 
-  // ---- clip scheduler (the animation state machine) ----
-  private readonly plActive = new Uint8Array(N_PLAYERS);
-  private readonly plClip = new Int32Array(N_PLAYERS);
-  private readonly plMirror = new Uint8Array(N_PLAYERS);
-  private readonly plCross = new Float32Array(N_PLAYERS); // crossover twist bias sign
-  private readonly plStart = new Float64Array(N_PLAYERS);
-  private readonly plDur = new Float64Array(N_PLAYERS); // beats, time-scaled
+  // ---- centre of mass (the weight). Design px, y DOWN so gravity is +y. ----
+  private comX = CX;
+  private comY = REST_COM_Y;
+  private comZ = 0;
+  private comVX = 0;
+  private comVY = 0;
+  private comVZ = 0;
+  private goalX = CX; // this frame's support-weight target (lateral, depth)
+  private goalZ = 0;
+  private wbias = 0; // signed lateral weight bias in [-1,1] (+ = screen-right)
 
-  // ---- chart cursors ----
-  private hitIdx = -1; // last step whose beat has passed (burst accents)
-  private schedIdx = -1; // last step whose clip has been scheduled
-  private synthHit = -1e9; // chart-less mode bookkeeping
-  private synthSched = -1e9;
-  private lastFlourish = -1e9;
-  private lastFoot = 1; // which foot stepped last (alternation for U/D)
-  private stepAlt = 0; // A/B styling alternator (toggles every single-foot step)
+  // ---- jump (ballistic regime) ----
+  private airborne = false;
+  private jpPending = false; // scheduled, not yet taken off
+  private jpTakeoff = -1e9; // beats
+  private jpLand = -1e9;
+  private jpJl = 0; // panel each foot lands on
+  private jpJr = 3;
+  private jT = 0.3; // airtime (s), set at takeoff
+  private jY0 = REST_COM_Y; // takeoff CoM state (continuous seed)
+  private jVY0 = 0;
+  private jX0 = CX;
+  private jZ0 = 0;
+  private jVX0 = 0;
+  private jVZ0 = 0;
 
-  // ---- feet (3D plants + active swing ownership; 0 = left, 1 = right) ----
+  // ---- torso / head pose springs (each a critically-damped scalar) ----
+  private sLean = 0;
+  private sLeanV = 0;
+  private sPitch = 0;
+  private sPitchV = 0;
+  private sYaw = 0; // pelvis yaw
+  private sYawV = 0;
+  private sTwist = 0; // shoulder yaw vs pelvis
+  private sTwistV = 0;
+  private sSide = 0; // ribcage side-shift (contrapposto)
+  private sSideV = 0;
+  private sList = 0; // pelvic list (support hip hikes)
+  private sListV = 0;
+  private sHyaw = 0;
+  private sHyawV = 0;
+  private sHpit = 0;
+  private sHpitV = 0;
+  private sHroll = 0;
+  private sHrollV = 0;
+  private faceLook = 0; // decaying gaze target toward the last step panel
+
+  // ---- arms: staggered shoulder→elbow→forearm spring chain, per foot side ----
+  private readonly armAbd = new Float64Array(2);
+  private readonly armAbdV = new Float64Array(2);
+  private readonly armFwd = new Float64Array(2);
+  private readonly armFwdV = new Float64Array(2);
+  private readonly armElb = new Float64Array(2);
+  private readonly armElbV = new Float64Array(2);
+  private readonly armLof = new Float64Array(2);
+  private readonly armLofV = new Float64Array(2);
+
+  // ---- one live arm accent (latest wins) ----
+  private accActive = false;
+  private accArm = 2; // 0 = left, 1 = right, 2 = both
+  private accIdx = ACC_REST;
+  private accBeat = -1e9; // impact beat
+  private accWindup = 0.3; // rise time (beats) before impact
+
+  // ---- feet (0 = screen-left, 1 = screen-right) ----
+  private readonly footState = new Uint8Array(2); // 0 stance, 1 swing
   private readonly plantX = new Float64Array(2); // committed plant (x, z)
   private readonly plantZ = new Float64Array(2);
   private readonly fromX = new Float64Array(2); // swing origin
   private readonly fromZ = new Float64Array(2);
   private readonly toX = new Float64Array(2); // swing target (the panel)
   private readonly toZ = new Float64Array(2);
-  private readonly footOwner = new Int32Array(2); // player slot, -1 = locked
+  private readonly liftBeatA = new Float64Array(2); // swing beat window
+  private readonly landBeatA = new Float64Array(2);
+  private readonly liftHA = new Float64Array(2); // swing clearance / tuck (px)
   private readonly footX = new Float64Array(2); // this frame's 3D ankle
   private readonly footYv = new Float64Array(2);
   private readonly footZ = new Float64Array(2);
-  private readonly footSwg = new Float64Array(2); // per-frame owner samples
-  private readonly footLift = new Float64Array(2);
   private readonly pt = new Float64Array(2); // panelTarget out (x, z)
   private readonly padPts = new Float64Array(16); // projected arrow outline (x,y)*8
+  private curGapSec = 1; // gap of the active step (scales the weight transfer)
+  private lastFoot = 1; // which foot stepped last (U/D alternation)
+  private stepAlt = 0; // accent styling alternator
+  private stepCount = 0; // total single steps committed (accent-firing gate)
+
+  // ---- chart cursors ----
+  private hitIdx = -1; // last step whose beat has passed (burst accents)
+  private schedIdx = -1; // last step whose swing has been commanded
+  private synthHit = -1e9; // chart-less mode bookkeeping
+  private synthSched = -1e9;
 
   // ---- accents fired by note hits (bursts + glow only, not body pose) ----
   private hitBeat = -1e9;
@@ -1808,13 +533,6 @@ export class AttractDancer {
   //      noise and flickers, so they only flip past a hysteresis band. ----
   private armFarLeft = true;
   private legFarLeft = true;
-
-  // ---- head+arm follow-through smoothing (post-blend, slightly UNDER-damped
-  //      springs so the hands and head carry a little past each clip pose and
-  //      settle — real follow-through, not just easing; SMOOTH_CH lists the
-  //      channels; NaN ⇒ snap) ----
-  private readonly armX = new Float32Array(SMOOTH_CH.length).fill(NaN);
-  private readonly armV = new Float32Array(SMOOTH_CH.length);
 
   // ---- hair / cloth secondary state (NaN = uninitialized, snaps to rest) ----
   private tailLX = NaN;
@@ -1894,21 +612,7 @@ export class AttractDancer {
       this.jit[i] = h - Math.floor(h) - 0.5;
     }
 
-    // Feet start locked in a neutral stance on the floor plane.
-    for (let f = 0; f < 2; f++) {
-      const x = CX + (f === 0 ? -1 : 1) * STANCE * BODY_H;
-      this.plantX[f] = x;
-      this.plantZ[f] = 0;
-      this.fromX[f] = x;
-      this.fromZ[f] = 0;
-      this.toX[f] = x;
-      this.toZ[f] = 0;
-      this.footOwner[f] = -1;
-      this.footX[f] = x;
-      this.footYv[f] = FOOT_Y - L_SHOE * BODY_H;
-      this.footZ[f] = 0;
-    }
-
+    this.resetPhysics();
     this.out.solid = this.solidBuf;
     this.out.additive = this.addBuf;
   }
@@ -1946,28 +650,156 @@ export class AttractDancer {
     }
   }
 
+  /** Reset the whole physics state to a neutral two-foot stance (seek/rewind,
+   *  and construction). Springs settle, CoM parks over the feet, feet plant. */
+  private resetPhysics(): void {
+    const B = BODY_H;
+    this.bps = 2;
+    this.airborne = false;
+    this.jpPending = false;
+    this.jpTakeoff = -1e9;
+    this.jpLand = -1e9;
+    this.jpJl = 0;
+    this.jpJr = 3;
+    this.jT = 0.3;
+    this.jY0 = REST_COM_Y;
+    this.jVY0 = 0;
+    this.jX0 = CX;
+    this.jZ0 = 0;
+    this.jVX0 = 0;
+    this.jVZ0 = 0;
+    this.comX = CX;
+    this.comY = REST_COM_Y;
+    this.comZ = 0;
+    this.comVX = 0;
+    this.comVY = 0;
+    this.comVZ = 0;
+    this.goalX = CX;
+    this.goalZ = 0;
+    this.wbias = 0;
+    this.curGapSec = 1;
+    this.faceLook = 0;
+    this.sLean = this.sLeanV = 0;
+    this.sPitch = this.sPitchV = 0;
+    this.sYaw = this.sYawV = 0;
+    this.sTwist = this.sTwistV = 0;
+    this.sSide = this.sSideV = 0;
+    this.sList = this.sListV = 0;
+    this.sHyaw = this.sHyawV = 0;
+    this.sHpit = this.sHpitV = 0;
+    this.sHroll = this.sHrollV = 0;
+    this.accActive = false;
+    this.accArm = 2;
+    this.accIdx = ACC_REST;
+    this.accBeat = -1e9;
+    this.accWindup = 0.3;
+    for (let f = 0; f < 2; f++) {
+      this.armAbd[f] = 0.3;
+      this.armAbdV[f] = 0;
+      this.armFwd[f] = 0.1;
+      this.armFwdV[f] = 0;
+      this.armElb[f] = 0.55;
+      this.armElbV[f] = 0;
+      this.armLof[f] = 0.35;
+      this.armLofV[f] = 0;
+      const x = CX + (f === 0 ? -1 : 1) * STANCE * B;
+      this.plantX[f] = x;
+      this.plantZ[f] = 0;
+      this.fromX[f] = x;
+      this.fromZ[f] = 0;
+      this.toX[f] = x;
+      this.toZ[f] = 0;
+      this.footState[f] = 0;
+      this.liftBeatA[f] = -1e9;
+      this.landBeatA[f] = -1e9;
+      this.liftHA[f] = 0;
+      this.footX[f] = x;
+      this.footZ[f] = 0;
+      this.footYv[f] = FOOT_Y - L_SHOE * B;
+    }
+    this.faceTurn = 0;
+  }
+
   private rewind(): void {
     this.hitIdx = -1;
     this.schedIdx = -1;
     this.synthHit = -1e9;
     this.synthSched = -1e9;
-    this.lastFlourish = -1e9;
     this.hitBeat = -1e9;
     this.padFlash.fill(-1e9);
     this.stepAlt = 0;
+    this.stepCount = 0;
+    this.lastFoot = 1;
     this.armFarLeft = true;
     this.legFarLeft = true;
-    this.plActive.fill(0);
-    // Lock the feet where they stand (plants stay finite and committed).
-    for (let f = 0; f < 2; f++) {
-      if (!Number.isFinite(this.plantX[f]) || !Number.isFinite(this.plantZ[f])) {
-        this.plantX[f] = CX + (f === 0 ? -1 : 1) * STANCE * BODY_H;
-        this.plantZ[f] = 0;
-      }
-      this.footOwner[f] = -1;
-      this.toX[f] = this.plantX[f];
-      this.toZ[f] = this.plantZ[f];
+    this.resetPhysics();
+  }
+
+  // ---- closed-form spring steppers (stable at ANY dt) ------------------------
+
+  /** Holden exact critically-damped spring. Steps (x, v) toward (goal, goalV)
+   *  over dt with the given half-life; writes [x', v'] into sp2. No overshoot,
+   *  unconditionally stable, framerate-independent. NaN ⇒ snap to goal. */
+  private critStep(
+    x: number,
+    v: number,
+    goal: number,
+    goalV: number,
+    halflife: number,
+    dt: number,
+  ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(v)) {
+      x = goal;
+      v = 0;
     }
+    const d = (4 * 0.6931471805599453) / (halflife + 1e-5); // 4 ln2 / halflife
+    const c = goal + (4 * goalV) / d;
+    const y = d * 0.5;
+    const j0 = x - c;
+    const j1 = v + j0 * y;
+    const e = Math.exp(-y * dt);
+    let nx = e * (j0 + j1 * dt) + c;
+    let nv = e * (v - j1 * y * dt);
+    if (!Number.isFinite(nx)) {
+      nx = goal;
+      nv = 0;
+    }
+    if (!Number.isFinite(nv)) nv = 0;
+    this.sp2[0] = nx;
+    this.sp2[1] = nv;
+  }
+
+  /** Exact UNDER-damped spring (ζ<1) toward a stationary goal — the CoM vault
+   *  wants a little overshoot. Closed-form (sin/cos of the damped frequency),
+   *  stable at any dt; writes [x', v'] into sp2. NaN ⇒ snap. */
+  private underStep(
+    x: number,
+    v: number,
+    goal: number,
+    omega: number,
+    zeta: number,
+    dt: number,
+  ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(v)) {
+      x = goal;
+      v = 0;
+    }
+    const z = clamp(zeta, 0.05, 0.999);
+    const wd = omega * Math.sqrt(1 - z * z);
+    const e = Math.exp(-z * omega * dt);
+    const cw = Math.cos(wd * dt);
+    const sw = Math.sin(wd * dt);
+    const dsp = x - goal;
+    const bC = (v + z * omega * dsp) / wd;
+    let nx = goal + e * (dsp * cw + bC * sw);
+    let nv = e * (v * cw - (z * omega * bC + wd * dsp) * sw);
+    if (!Number.isFinite(nx)) {
+      nx = goal;
+      nv = 0;
+    }
+    if (!Number.isFinite(nv)) nv = 0;
+    this.sp2[0] = nx;
+    this.sp2[1] = nv;
   }
 
   /** Build this frame's mesh into REUSED internal buffers; returns current
@@ -1992,235 +824,51 @@ export class AttractDancer {
 
     const valid = Number.isFinite(beat) && beat >= 0;
     const chart = valid && this.steps.length > 0;
-    if (valid && Number.isFinite(this.prevBeat) && beat < this.prevBeat - 0.5) this.rewind();
+
+    // Tempo: track bps = lowpass(Δbeat/Δt). A big beat LEAP (backward seek or
+    // forward warp) resyncs everything to a neutral stance.
+    if (valid && Number.isFinite(this.prevBeat)) {
+      const db = beat - this.prevBeat;
+      if (db < -0.5 || db > 4) this.rewind();
+      else if (dt > 1e-5) {
+        const inst = db / dt;
+        if (Number.isFinite(inst)) this.bps += (inst - this.bps) * BPS_LP;
+      }
+    }
+    this.bps = clamp(Number.isFinite(this.bps) ? this.bps : 2, BPS_MIN, BPS_MAX);
     this.prevBeat = valid ? beat : NaN;
 
-    const B = BODY_H;
-    const phase = valid ? beat - Math.floor(beat) : (time * 1.4) % 1;
+    // Phase clock: musical beat when valid, else a slow internal pulse off time
+    // (lead-in), so the groove/bob never freezes with no chart.
+    const clock = valid ? beat : time * 1.4;
+    const drv = valid ? beat : clock; // physics beat driver
+    const phase = clock - Math.floor(clock);
     const kick = valid ? Math.exp(-6 * phase) : 0;
+    const bop = 0.5 + 0.5 * Math.cos(phase * Math.PI * 2); // 1 ON the count
+    const lfo = Math.sin(clock * Math.PI); // 2-beat side-to-side cycle
 
-    // ---- 1. the scheduler: fire hit accents, schedule upcoming clips -------
+    // ---- 1. scheduler: fire hit accents, command footsteps / jumps ----------
     if (chart) this.scheduleChart(beat);
     else if (valid) this.scheduleSynth(beat);
-    // Flourish in long gaps (chart or synth), aligned to the groove.
-    if (valid && beat - this.lastFlourish >= 6) {
-      const nextGap = this.nextNoteGap(beat, chart);
-      if (nextGap > 3.2 && !this.anyStepActive()) {
-        this.spawnPlayer(CLIP_FLOURISH, false, 0, beat, CLIPS[CLIP_FLOURISH].beats);
-        this.lastFlourish = beat;
-      }
-    }
 
-    // ---- 2. sample + cross-fade blend the active clips ----------------------
-    // Pose = normalized Σ wᵢ·clipᵢ(phaseᵢ); the idle groove owns the remaining
-    // weight, so she always settles back into the groove between notes.
-    const acc = this.poseAcc;
-    const tmp = this.poseTmp;
-    acc.fill(0);
-    this.footSwg[0] = -1; // -1 ⇒ no owner sampled this frame (foot locked)
-    this.footSwg[1] = -1;
-    this.footLift[0] = 0;
-    this.footLift[1] = 0;
-    let wsum = 0;
-    for (let s = 0; s < N_PLAYERS; s++) {
-      if (!this.plActive[s]) continue;
-      const clip = CLIPS[this.plClip[s]];
-      const ph = valid ? (beat - this.plStart[s]) / this.plDur[s] : 1.01;
-      if (!(ph < 1.0005)) {
-        this.freeSlot(s);
-        continue;
-      }
-      if (ph < 0) continue; // not started yet (scheduled ahead)
-      const w = smooth01(ph / FADE_IN) * (1 - smooth01((ph - (1 - FADE_OUT)) / FADE_OUT));
-      const ownsFoot = this.footOwner[0] === s || this.footOwner[1] === s;
-      if (!(w > 1e-4) && !ownsFoot) continue;
-      sampleClip(clip, ph, tmp, this.plMirror[s] !== 0);
-      // Crossover additive layer: the mirrored clip already carries the
-      // correct support-side weight for the stepping foot; on top of it the
-      // body twists and the head looks toward the crossed panel.
-      const cross = this.plCross[s];
-      if (cross !== 0) {
-        tmp[CH_HYAW] = -tmp[CH_HYAW];
-        tmp[CH_HROLL] = -tmp[CH_HROLL];
-        tmp[CH_TWIST] += cross * 0.3;
-        tmp[CH_YAW] += cross * 0.22;
-      }
-      if (w > 1e-4) {
-        for (let ch = CH_YAW; ch <= CH_RLOF; ch++) acc[ch] += w * tmp[ch];
-        wsum += w;
-      }
-      // Foot channels come from the OWNING player only (weight 1, sampled
-      // even while its cross-fade weight is ~0): the swing is a deterministic
-      // contract with the plant, not a blend — this is the foot-lock
-      // guarantee. Past the impact key the land is forced exact.
-      for (let f = 0; f < 2; f++) {
-        if (this.footOwner[f] !== s) continue;
-        const landed = ph >= clip.impact;
-        const swg = tmp[f === 0 ? CH_SWGL : CH_SWGR];
-        const lift = tmp[f === 0 ? CH_LIFTL : CH_LIFTR];
-        this.footSwg[f] = landed ? 1 : clamp(swg, 0, 1);
-        this.footLift[f] = landed ? 0 : Math.max(0, lift);
-      }
-    }
-    {
-      const idleW = Math.max(0, 1 - wsum);
-      if (idleW > 1e-4) {
-        const ib = valid ? beat : time * 1.05; // lead-in: slow internal pulse
-        sampleClip(IDLE, (ib % 2) / 2, tmp, false);
-        for (let ch = CH_YAW; ch <= CH_RLOF; ch++) acc[ch] += idleW * tmp[ch];
-        wsum += idleW;
-      }
-      const inv = wsum > 1e-6 ? 1 / wsum : 1;
-      for (let ch = CH_YAW; ch <= CH_RLOF; ch++) {
-        const v = acc[ch] * inv;
-        acc[ch] = Number.isFinite(v) ? v : REST[ch];
-      }
-    }
+    // ---- 2. jump regime transitions (takeoff / land) ------------------------
+    if (this.jpPending && !this.airborne && drv >= this.jpTakeoff) this.takeoff();
+    if (this.airborne && drv >= this.jpLand) this.land();
 
-    // ---- 2a. groove overlay: a small beat-locked pulse LAYERED over the
-    //         blend so she is never still — she drops into each count (crouch
-    //         + head dip + a nudge toward the camera, peaking exactly ON the
-    //         beat) while the hips/shoulders ride a 2-beat weight cycle.
-    //         Deliberately subtle: the clips carry the dance, this carries
-    //         the heartbeat (and it never touches the foot channels). ------
-    {
-      const gb = valid ? beat : time * 1.05; // lead-in: same pulse as idle
-      const gph = gb - Math.floor(gb);
-      const bop = 0.5 + 0.5 * Math.cos(gph * Math.PI * 2); // 1 ON the count
-      const lfo = Math.sin(gb * Math.PI); // 2-beat side-to-side cycle
-      acc[CH_CROUCH] += 0.028 * bop - 0.009; // heavier drop into each count
-      acc[CH_HPIT] += 0.05 * bop - 0.02;
-      acc[CH_PELVZ] += 0.006 * bop;
-      acc[CH_SWAY] += lfo * 0.016; // fuller side-to-side weight transfer
-      acc[CH_LIST] += lfo * 0.012;
-      acc[CH_LEAN] += lfo * 0.028;
-      acc[CH_TWIST] -= lfo * 0.06; // shoulders counter-rotate harder against the hips
-      acc[CH_HROLL] -= lfo * 0.028;
-      // Arm breathing: elbows squeeze a touch INTO each count and release
-      // through the "and" (slightly out of phase left/right off the weight
-      // cycle), the whole arm floating on the same pulse — so elbow flexion
-      // is always moving across the beat instead of parking at a clip's fixed
-      // angle. Runs BEFORE the follow-through springs, which round it off.
-      acc[CH_LELB] += 0.1 * bop - 0.04 + lfo * 0.03;
-      acc[CH_RELB] += 0.1 * bop - 0.04 - lfo * 0.03;
-      acc[CH_LABD] += 0.022 * bop - 0.008;
-      acc[CH_RABD] += 0.022 * bop - 0.008;
-      acc[CH_LFWD] += 0.03 * bop - 0.012;
-      acc[CH_RFWD] += 0.03 * bop - 0.012;
-    }
+    // ---- 3. CoM: closed-form springs (grounded) or ballistic (airborne) -----
+    this.stepCoM(drv, valid, dt, bop);
 
-    // ---- 2b. follow-through: slightly under-damped springs on the head and
-    //         arm channels. Cross-fades and clip changes hand these channels
-    //         fast-moving targets; the spring makes them WHIP toward the pose,
-    //         carry ~9% past it, and settle (secondary action / follow-
-    //         through) instead of snapping. Closed-form underdamped solution,
-    //         framerate-independent and NaN-guarded. ----------------------
-    {
-      for (let k = 0; k < SMOOTH_CH.length; k++) {
-        const zeta = SPRING_ZETA[k]; // <1 ⇒ a small overshoot, per channel
-        const omega = SPRING_OMEGA[k]; // rad/s — stiff shoulders, soft wrists
-        const wd = omega * Math.sqrt(1 - zeta * zeta);
-        const e = Math.exp(-zeta * omega * dt);
-        const cw = Math.cos(wd * dt);
-        const sw = Math.sin(wd * dt);
-        const chI = SMOOTH_CH[k];
-        const target = acc[chI];
-        let x = this.armX[k];
-        let vel = this.armV[k];
-        if (!Number.isFinite(x) || !Number.isFinite(vel)) {
-          x = target;
-          vel = 0;
-        }
-        const dsp = x - target;
-        const bC = (vel + zeta * omega * dsp) / wd;
-        const nx = target + e * (dsp * cw + bC * sw);
-        const nv = e * (vel * cw - (zeta * omega * bC + wd * dsp) * sw);
-        this.armX[k] = Number.isFinite(nx) ? nx : target;
-        this.armV[k] = Number.isFinite(nv) ? nv : 0;
-        acc[chI] = this.armX[k];
-      }
-    }
+    // ---- 4. feet: locked plants + minJerk/halfSine swings -------------------
+    this.stepFeet(drv, valid, dt);
 
-    // ---- 2c. torso follows the reach: couple a little lean/pitch to the
-    //         SPRUNG arm heights, so a big reach pulls the shoulder line and
-    //         chest with it (and trails it, since the source is post-spring)
-    //         instead of the arm hinging off a statically pinned socket.
-    //         Tiny by design — the clips author the real body line, this just
-    //         keeps the socket alive through transitions. -------------------
-    {
-      const la = acc[CH_LABD];
-      const ra = acc[CH_RABD];
-      // Asymmetric reach ⇒ lean toward the high arm (left arm high ⇒ lean
-      // screen-left, matching the clips' authored sign convention).
-      acc[CH_LEAN] += (ra - la) * 0.02;
-      // Both arms high (overhead V / skyward) ⇒ the chest opens back.
-      const rise = Math.max(0, (la + ra) * 0.5 - 1.1);
-      acc[CH_PITCH] -= rise * 0.035;
-    }
+    // ---- 5. torso / head / arm goal springs ---------------------------------
+    this.stepPose(dt, bop);
+    this.stepArms(drv, dt, bop, lfo);
 
-    // ---- 2c. weight transfer: commit the CoM over the SUPPORT (planted) foot
-    //          while the other foot swings, so a step reads as a shift of
-    //          weight — the hips/torso lead onto the standing leg and release
-    //          back to centre as the swinging foot commits to its new plant.
-    //          Without this the transitions look weightless: a foot floats out
-    //          to its panel while the body stays squared and centred. The lean
-    //          peaks MID-swing (sin arc, 0→1→0) and is gone by the plant, so it
-    //          layers cleanly over the groove and never lingers. Two-foot JUMPs
-    //          swing both feet symmetrically ⇒ the L/R biases cancel ⇒ centred,
-    //          exactly as a straddle landing should be. ----------------------
-    {
-      let wsx = 0; // signed lateral weight bias: + = toward screen-right foot
-      for (let f = 0; f < 2; f++) {
-        if (this.footOwner[f] < 0) continue;
-        const sw = this.footSwg[f];
-        if (!(sw >= 0 && sw < 1)) continue; // f is mid-swing (1 = landed)
-        const commit = Math.sin(Math.PI * clamp(sw, 0, 1)); // 0→1→0 across the swing
-        wsx += (f === 0 ? 1 : -1) * commit; // f0 (screen-left) swings ⇒ lean right
-      }
-      wsx = clamp(wsx, -1, 1);
-      acc[CH_SWAY] += wsx * 0.05; // hips slide over the support foot
-      acc[CH_LIST] += wsx * 0.045; // support hip hikes to carry the weight
-      acc[CH_LEAN] += wsx * 0.03; // torso leans into the standing leg
-    }
-
-    // ---- 3. foot kinematics: locked plants + owned swings -------------------
-    for (let f = 0; f < 2; f++) {
-      let x: number;
-      let z: number;
-      let lift = 0;
-      const s = this.footSwg[f];
-      if (this.footOwner[f] >= 0 && s >= 0) {
-        x = this.fromX[f] + (this.toX[f] - this.fromX[f]) * s;
-        z = this.fromZ[f] + (this.toZ[f] - this.fromZ[f]) * s;
-        lift = this.footLift[f] * B;
-      } else {
-        x = this.plantX[f];
-        z = this.plantZ[f];
-      }
-      if (!valid) {
-        // Lead-in: ease plants back to the neutral stance (feet only).
-        const k = 1 - Math.exp(-dt * 4);
-        const sx0 = CX + (f === 0 ? -1 : 1) * STANCE * B;
-        this.plantX[f] += (sx0 - this.plantX[f]) * k;
-        this.plantZ[f] += (0 - this.plantZ[f]) * k;
-        x = this.plantX[f];
-        z = this.plantZ[f];
-        lift = 0;
-      }
-      if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(lift)) {
-        x = CX + (f === 0 ? -1 : 1) * STANCE * B;
-        z = 0;
-        lift = 0;
-      }
-      this.footX[f] = x;
-      this.footZ[f] = z;
-      this.footYv[f] = FOOT_Y - L_SHOE * B - lift;
-    }
-
-    // ---- 4. solve the 3D skeleton (FK + two-bone leg IK), project ----------
+    // ---- 6. solve the 3D skeleton (FK + two-bone leg IK), project -----------
     this.solve3D(time, s30);
 
-    // ---- 5. paint params -----------------------------------------------------
+    // ---- 7. paint params -----------------------------------------------------
     // Neon is an accent, not the read: the colored solid fills lead, the
     // additive edges just rim the silhouette (they pulse a little on the beat).
     const pa = this.pal.accentA;
@@ -2238,7 +886,7 @@ export class AttractDancer {
     this.glowB = pa[2] * gI;
     this.glowS = 1.045 + 0.02 * kick;
 
-    // ---- 6. emit geometry ---------------------------------------------------
+    // ---- 8. emit geometry ---------------------------------------------------
     this.solidPos = 0;
     this.addPos = 0;
     this.emitPad(valid ? beat : NaN); // floor pad, behind/under the dancer
@@ -2246,28 +894,311 @@ export class AttractDancer {
     const bd = beat - this.hitBeat;
     const burstLife = valid && bd >= 0 && bd < 0.22 && raisesHand(this.hitCols) ? 1 - bd / 0.22 : 0;
     if (burstLife > 0) this.emitBurst(burstLife, bitCount(this.hitCols) >= 2);
-
     this.out.solidCount = (this.solidPos / 5) | 0;
     this.out.additiveCount = (this.addPos / 5) | 0;
     return this.out;
   }
 
-  // ---- scheduler internals ----------------------------------------------------
+  // ---- centre of mass --------------------------------------------------------
 
-  private anyStepActive(): boolean {
-    for (let s = 0; s < N_PLAYERS; s++) {
-      if (this.plActive[s] && this.plClip[s] !== CLIP_FLOURISH) return true;
+  /** Grounded: lateral/depth = under-damped springs toward the anticipatory
+   *  support-weight target; vertical = a critically-damped bob into each beat
+   *  (+ a pre-jump load crouch). Airborne: an analytic parabola seeded from the
+   *  spring state at takeoff, so position AND velocity stay continuous. */
+  private stepCoM(drv: number, valid: boolean, dt: number, bop: number): void {
+    const B = BODY_H;
+    if (this.airborne) {
+      const span = Math.max(this.jpLand - this.jpTakeoff, 1e-4);
+      const frac = clamp((drv - this.jpTakeoff) / span, 0, 1);
+      const tau = frac * this.jT; // seconds into the flight
+      this.comY = this.jY0 + this.jVY0 * tau + 0.5 * G * tau * tau;
+      this.comX = this.jX0 + this.jVX0 * tau;
+      this.comZ = this.jZ0 + this.jVZ0 * tau;
+      this.comVY = this.jVY0 + G * tau;
+      this.comVX = this.jVX0;
+      this.comVZ = this.jVZ0;
+    } else {
+      this.weightTarget(drv);
+      this.underStep(this.comX, this.comVX, this.goalX, COM_OMEGA, COM_ZETA, dt);
+      this.comX = this.sp2[0];
+      this.comVX = this.sp2[1];
+      this.underStep(this.comZ, this.comVZ, this.goalZ, COM_OMEGA_Z, COM_ZETA_Z, dt);
+      this.comZ = this.sp2[0];
+      this.comVZ = this.sp2[1];
+      // Vertical bob toward a phase goal (sink ON the count), + a load crouch
+      // during the pre-takeoff windup of a pending jump.
+      let goalY = REST_COM_Y + BOB_AMP * bop;
+      if (this.jpPending && drv < this.jpTakeoff) {
+        const w = this.jpTakeoff - JUMP_LOAD_BEATS;
+        goalY += JUMP_LOAD * smooth01((drv - w) / Math.max(JUMP_LOAD_BEATS, 1e-3));
+      }
+      this.critStep(this.comY, this.comVY, goalY, 0, HL_BOB, dt);
+      this.comY = this.sp2[0];
+      this.comVY = this.sp2[1];
     }
-    return false;
+    if (!valid) {
+      // Lead-in: ease the CoM back toward the neutral centre.
+      const k = 1 - Math.exp(-dt * 4);
+      this.comX += (CX - this.comX) * k;
+      this.comZ += (0 - this.comZ) * k;
+    }
+    if (!Number.isFinite(this.comX)) {
+      this.comX = CX;
+      this.comVX = 0;
+    }
+    if (!Number.isFinite(this.comY)) {
+      this.comY = REST_COM_Y;
+      this.comVY = 0;
+    }
+    if (!Number.isFinite(this.comZ)) {
+      this.comZ = 0;
+      this.comVZ = 0;
+    }
+    // Signed lateral weight bias for the torso list / contrapposto.
+    this.wbias = clamp((this.comX - CX) / (0.14 * B), -1, 1);
   }
 
-  private nextNoteGap(beat: number, chart: boolean): number {
-    if (chart) {
-      const i = this.schedIdx + 1;
-      return i < this.steps.length ? this.steps[i].beat - beat : 1e9;
+  /** The anticipatory support-weight target: a convex blend of the feet, with a
+   *  swinging foot UNLOADED (weight on the standing leg) and anticipating its
+   *  landing spot. The deviation from the plain midpoint is scaled by the step
+   *  gap, so fast same-side steps barely shift the weight (taps). */
+  private weightTarget(drv: number): void {
+    let sumw = 0;
+    let tx = 0;
+    let tz = 0;
+    let mx = 0;
+    let mz = 0;
+    for (let f = 0; f < 2; f++) {
+      let px: number;
+      let pz: number;
+      let load: number;
+      if (this.footState[f] === 1) {
+        const span = Math.max(this.landBeatA[f] - this.liftBeatA[f], 1e-4);
+        const tau = clamp((drv - this.liftBeatA[f]) / span, 0, 1);
+        px = this.toX[f]; // anticipate the landing spot
+        pz = this.toZ[f];
+        load = 0.1 + 0.9 * smooth01((tau - 0.7) / 0.3); // nearly weightless, reloads late
+      } else {
+        px = this.plantX[f];
+        pz = this.plantZ[f];
+        load = 1;
+      }
+      tx += load * px;
+      tz += load * pz;
+      sumw += load;
+      mx += px;
+      mz += pz;
     }
-    return this.synthSched > beat ? this.synthSched - beat : Math.floor(beat) + 1 - beat;
+    mx *= 0.5;
+    mz *= 0.5;
+    const rawX = sumw > 1e-6 ? tx / sumw : mx;
+    const rawZ = sumw > 1e-6 ? tz / sumw : mz;
+    // Commit HARD over the support foot (overshoot the load-weighted centroid by
+    // ~30%) so the hips visibly stack over the standing leg — a real contrapposto,
+    // not a hover at the midpoint. Scaled by gap so fast same-side steps stay taps.
+    const wShift = clamp(this.curGapSec / 0.4, 0.3, 1) * 1.3;
+    let gx = mx + (rawX - mx) * wShift;
+    let gz = mz + (rawZ - mz) * wShift;
+    if (!Number.isFinite(gx)) gx = CX;
+    if (!Number.isFinite(gz)) gz = 0;
+    this.goalX = gx;
+    this.goalZ = gz;
   }
+
+  // ---- feet ------------------------------------------------------------------
+
+  /** Advance each foot: hold plant, or run a minJerk horizontal glide + a
+   *  half-sine vertical lift over its beat window, landing exactly on the note
+   *  beat. Airborne feet rise with the CoM and tuck (knees bend in flight). */
+  private stepFeet(drv: number, valid: boolean, dt: number): void {
+    const B = BODY_H;
+    for (let f = 0; f < 2; f++) {
+      let x: number;
+      let z: number;
+      let y: number;
+      if (!valid) {
+        // Lead-in: ease plants back to the neutral stance (feet only).
+        const k = 1 - Math.exp(-dt * 4);
+        const sx0 = CX + (f === 0 ? -1 : 1) * STANCE * B;
+        this.plantX[f] += (sx0 - this.plantX[f]) * k;
+        this.plantZ[f] += (0 - this.plantZ[f]) * k;
+        this.footState[f] = 0;
+        x = this.plantX[f];
+        z = this.plantZ[f];
+        y = FOOT_Y - L_SHOE * B;
+      } else if (this.footState[f] === 1) {
+        const span = Math.max(this.landBeatA[f] - this.liftBeatA[f], 1e-4);
+        let tau = (drv - this.liftBeatA[f]) / span;
+        if (tau >= 1) {
+          // Land: commit the plant, drop back to stance.
+          this.plantX[f] = this.toX[f];
+          this.plantZ[f] = this.toZ[f];
+          this.footState[f] = 0;
+          x = this.plantX[f];
+          z = this.plantZ[f];
+          y = this.airborne ? this.comY + HANG0 : FOOT_Y - L_SHOE * B;
+        } else {
+          tau = tau < 0 ? 0 : tau;
+          const mj = minJerk(tau);
+          x = this.fromX[f] + (this.toX[f] - this.fromX[f]) * mj;
+          z = this.fromZ[f] + (this.toZ[f] - this.fromZ[f]) * mj;
+          if (this.airborne) {
+            // Feet hang HANG0 below the (rising) CoM, tucked by the lift arc.
+            y = this.comY + HANG0 - this.liftHA[f] * halfSine(tau);
+          } else {
+            y = FOOT_Y - L_SHOE * B - this.liftHA[f] * halfSine(tau);
+          }
+        }
+      } else {
+        x = this.plantX[f];
+        z = this.plantZ[f];
+        y = this.airborne ? this.comY + HANG0 : FOOT_Y - L_SHOE * B;
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(y)) {
+        x = CX + (f === 0 ? -1 : 1) * STANCE * B;
+        z = 0;
+        y = FOOT_Y - L_SHOE * B;
+      }
+      this.footX[f] = x;
+      this.footZ[f] = z;
+      this.footYv[f] = y;
+    }
+  }
+
+  // ---- torso / head pose -----------------------------------------------------
+
+  /** Lean into the CoM's lateral acceleration (≈atan(aₓ/G) — the exact physics
+   *  of ground reaction through the CoM), pitch with forward accel + a beat dip,
+   *  yaw the hips into the travel and counter-twist the shoulders, list onto the
+   *  support hip. Head: damped look + beat nod + counter-roll. All critically
+   *  damped so they trail the CoM with weight, never snap. */
+  private stepPose(dt: number, bop: number): void {
+    // Analytic spring accelerations (goalV = 0): a = -ω²·disp - 2ζω·v.
+    const ax =
+      -COM_OMEGA * COM_OMEGA * (this.comX - this.goalX) - 2 * COM_ZETA * COM_OMEGA * this.comVX;
+    const az =
+      -COM_OMEGA_Z * COM_OMEGA_Z * (this.comZ - this.goalZ) -
+      2 * COM_ZETA_Z * COM_OMEGA_Z * this.comVZ;
+
+    const leanGoal = this.airborne ? 0 : clamp(Math.atan2(ax, G) * 0.55, -0.34, 0.34);
+    const pitchGoal = clamp(
+      (this.airborne ? 0 : Math.atan2(az, G) * 0.5) + 0.03 * bop - 0.012,
+      -0.28,
+      0.4,
+    );
+    const yawGoal = this.airborne ? 0 : clamp(this.comVX * 0.0016, -0.28, 0.28);
+    // Held contrapposto from the weight bias (posture, not the transient
+    // accel-lean): support hip hikes / free hip drops, ribcage counters into an
+    // S-curve, shoulders counter-twist. Bigger gains so weight COMMITMENT reads.
+    const twistGoal = clamp(-this.sYaw * 0.6 - this.wbias * 0.16, -0.5, 0.5);
+    const sideGoal = clamp(-this.wbias * 0.024, -0.09, 0.09);
+    const listGoal = clamp(this.wbias * 0.09, -0.12, 0.12);
+
+    // Gaze decays back to centre between steps.
+    this.faceLook *= Math.pow(0.5, dt / 0.4);
+    const hyawGoal = clamp(this.faceLook - this.sYaw * 0.3, -0.5, 0.5);
+    const hpitGoal = clamp(0.05 * bop - 0.02 + (this.airborne ? -0.08 : 0), -0.4, 0.4);
+    const hrollGoal = clamp(-this.sLean * 0.5, -0.4, 0.4);
+
+    this.critStep(this.sLean, this.sLeanV, leanGoal, 0, HL_LEAN, dt);
+    this.sLean = this.sp2[0];
+    this.sLeanV = this.sp2[1];
+    this.critStep(this.sPitch, this.sPitchV, pitchGoal, 0, HL_PITCH, dt);
+    this.sPitch = this.sp2[0];
+    this.sPitchV = this.sp2[1];
+    this.critStep(this.sYaw, this.sYawV, yawGoal, 0, HL_YAW, dt);
+    this.sYaw = this.sp2[0];
+    this.sYawV = this.sp2[1];
+    this.critStep(this.sTwist, this.sTwistV, twistGoal, 0, HL_TWIST, dt);
+    this.sTwist = this.sp2[0];
+    this.sTwistV = this.sp2[1];
+    this.critStep(this.sSide, this.sSideV, sideGoal, 0, HL_SIDE, dt);
+    this.sSide = this.sp2[0];
+    this.sSideV = this.sp2[1];
+    this.critStep(this.sList, this.sListV, listGoal, 0, HL_LIST, dt);
+    this.sList = this.sp2[0];
+    this.sListV = this.sp2[1];
+    this.critStep(this.sHyaw, this.sHyawV, hyawGoal, 0, HL_HEAD, dt);
+    this.sHyaw = this.sp2[0];
+    this.sHyawV = this.sp2[1];
+    this.critStep(this.sHpit, this.sHpitV, hpitGoal, 0, HL_HEAD, dt);
+    this.sHpit = this.sp2[0];
+    this.sHpitV = this.sp2[1];
+    this.critStep(this.sHroll, this.sHrollV, hrollGoal, 0, HL_HEAD, dt);
+    this.sHroll = this.sp2[0];
+    this.sHrollV = this.sp2[1];
+  }
+
+  // ---- arms ------------------------------------------------------------------
+
+  /** Per-arm goal = a between-steps groove orbit + a contralateral leg-phase
+   *  counterswing (arm f swings with the OPPOSITE leg's swing) + the live accent
+   *  set-point (blended by an envelope). A staggered shoulder→elbow→forearm
+   *  spring chain then produces the weighted follow-through. */
+  private stepArms(drv: number, dt: number, bop: number, lfo: number): void {
+    // Accent envelope: rise to impact, then decay (follow-through lives in the
+    // springs, not here).
+    let e = 0;
+    if (this.accActive) {
+      if (drv < this.accBeat) {
+        e = smooth01((drv - (this.accBeat - this.accWindup)) / Math.max(this.accWindup, 1e-3));
+      } else {
+        const dd = drv - this.accBeat;
+        e = Math.exp(-2.6 * dd);
+        if (dd > 1.6) this.accActive = false;
+      }
+    }
+    for (let a = 0; a < 2; a++) {
+      const sgn = a === 0 ? 1 : -1;
+      // Groove orbit — she is never limp: elbows breathe into each count, the
+      // whole arm rides the 2-beat weight LFO (out of phase L/R).
+      // Groove arms move at the ELBOW, not the shoulder. Keep the shoulder LOW
+      // and near-steady (arms hang at the sides) and make the elbow the primary
+      // oscillator: it flexes hard ON each count — the forearm folds up and IN
+      // toward the ribs (hand crosses inside the silhouette) — then extends back
+      // down on the "and". A shoulder-only lever windshield-wipers; an elbow pump
+      // reads as a real groove. The staggered spring chain (forearm halflife >
+      // elbow > shoulder) drags the hand a beat behind for follow-through.
+      const ebeat = sgn * lfo; // L/R arms pump a half-beat out of phase
+      let gAbd = 0.22 + 0.04 * bop;
+      let gFwd = 0.12 + ebeat * 0.05;
+      let gElb = 0.55 + 0.55 * bop + ebeat * 0.12; // deep beat-driven elbow flex
+      let gLof = 0.35 + 0.55 * bop; // forearm folds FORWARD as it flexes (hand → in front)
+      // Contralateral counterswing: the OPPOSITE leg's swing pumps this arm
+      // FORWARD/back (toward the camera) with a bent elbow, like a natural stride.
+      const dl = 1 - a;
+      if (this.footState[dl] === 1) {
+        const span = Math.max(this.landBeatA[dl] - this.liftBeatA[dl], 1e-4);
+        const s = halfSine(clamp((drv - this.liftBeatA[dl]) / span, 0, 1));
+        gFwd += s * 0.42;
+        gAbd += s * 0.08;
+        gElb += s * 0.3;
+      }
+      // Accent set-point blended in over the groove.
+      if (this.accActive && (this.accArm === a || this.accArm === 2) && e > 1e-3) {
+        const o = this.accIdx * 4;
+        gAbd = lerp(gAbd, ACCENTS[o], e);
+        gFwd = lerp(gFwd, ACCENTS[o + 1], e);
+        gElb = lerp(gElb, ACCENTS[o + 2], e);
+        gLof = lerp(gLof, ACCENTS[o + 3], e);
+      }
+      // Staggered spring chain: shoulder stiff, elbow softer, forearm softest.
+      this.critStep(this.armAbd[a], this.armAbdV[a], gAbd, 0, HL_ARM_SH, dt);
+      this.armAbd[a] = this.sp2[0];
+      this.armAbdV[a] = this.sp2[1];
+      this.critStep(this.armFwd[a], this.armFwdV[a], gFwd, 0, HL_ARM_SH, dt);
+      this.armFwd[a] = this.sp2[0];
+      this.armFwdV[a] = this.sp2[1];
+      this.critStep(this.armElb[a], this.armElbV[a], gElb, 0, HL_ARM_EL, dt);
+      this.armElb[a] = this.sp2[0];
+      this.armElbV[a] = this.sp2[1];
+      this.critStep(this.armLof[a], this.armLofV[a], gLof, 0, HL_ARM_FA, dt);
+      this.armLof[a] = this.sp2[0];
+      this.armLofV[a] = this.sp2[1];
+    }
+  }
+
+  // ---- scheduler -------------------------------------------------------------
 
   /** Record a flash on every pad panel this row steps on (parity feet first,
    *  else the lit column bits) at `beat` — the instant the foot plants. */
@@ -2289,7 +1220,7 @@ export class AttractDancer {
   }
 
   /** Advance the chart cursors: burst accents on rows that just hit, and
-   *  clip scheduling so each move's IMPACT keyframe lands on its note beat. */
+   *  command each move's footstep so it lands exactly on its note beat. */
   private scheduleChart(beat: number): void {
     const steps = this.steps;
     let guard = 0;
@@ -2298,8 +1229,6 @@ export class AttractDancer {
       if (++guard <= 32) {
         this.hitBeat = steps[this.hitIdx].beat;
         this.hitCols = steps[this.hitIdx].cols;
-        // Light the pad panels this row lands on, exactly on the note beat
-        // (= the moment the foot plants), so the pad pulses with the chart.
         this.flashPanels(steps[this.hitIdx], steps[this.hitIdx].beat);
       }
     }
@@ -2313,7 +1242,7 @@ export class AttractDancer {
       }
       const gap = i > 0 ? st.beat - steps[i - 1].beat : 2;
       if (st.beat - beat > this.windupFor(st, gap)) break; // not yet in window
-      this.spawnStep(st, gap);
+      this.commitStep(st, gap, beat);
       this.schedIdx = i;
     }
   }
@@ -2333,19 +1262,16 @@ export class AttractDancer {
       const st: Step = { beat: nb, cols };
       if (nb - beat <= this.windupFor(st, 1)) {
         this.synthSched = nb;
-        this.spawnStep(st, 1);
+        this.commitStep(st, 1, beat);
       }
     }
   }
 
-  /** Beats of wind-up (clip start → impact) a row's clip needs, after the
-   *  time-scaling that compresses moves to fit dense streams. */
+  /** Beats of wind-up a row needs before its note beat (swing window, or the
+   *  jump load + airtime), clamped shorter by the gap so streams stay crisp. */
   private windupFor(st: Step, gap: number): number {
-    const jump = this.isJump(st);
-    const clip = CLIPS[jump ? CLIP_JUMP : PANEL_CLIP[this.panelOf(st)]];
-    const nominal = clip.impact * clip.beats;
-    const ts = clamp((gap * 0.92) / nominal, 0.3, 1);
-    return nominal * ts;
+    if (this.isJump(st)) return Math.min(JUMP_LOAD_BEATS + JUMP_AIR_BEATS, gap * 0.9);
+    return clamp(Math.min(STEP_SWING_BEATS, gap * 0.85), 0.1, STEP_SWING_BEATS);
   }
 
   private isJump(st: Step): boolean {
@@ -2367,18 +1293,20 @@ export class AttractDancer {
     return st.cols & 4 ? 2 : 1;
   }
 
-  /** Schedule the clip for one note row. JUMPS are first-class: any row where
-   *  both feet step (parity lCol AND rCol, or a 2+ column mask) fires the
-   *  JUMP clip owning BOTH feet, each foot targeted at its own panel. */
-  private spawnStep(st: Step, gap: number): void {
+  /** Command one note row. Jumps are first-class (both feet + a ballistic
+   *  parabola); single steps swing one foot to its panel. Also fires the arm
+   *  accent and the gaze/weight-transfer context for the physics core. */
+  private commitStep(st: Step, gap: number, beat: number): void {
     const lp = st.lCol !== undefined && Number.isFinite(st.lCol) ? Math.trunc(st.lCol) : -1;
     const rp = st.rCol !== undefined && Number.isFinite(st.rCol) ? Math.trunc(st.rCol) : -1;
     const lSteps = lp >= 0 && lp <= 3;
     const rSteps = rp >= 0 && rp <= 3;
+    const w = this.windupFor(st, gap);
+    this.curGapSec = clamp(gap / this.bps, 0.05, 4);
 
     if (this.isJump(st)) {
-      // Two-foot jump. Panels from parity when present; otherwise split the
-      // lit columns leftmost→left foot, rightmost→right foot.
+      // Panels from parity when present; otherwise split the lit columns
+      // leftmost→left foot, rightmost→right foot.
       let jl = lSteps ? lp : -1;
       let jr = rSteps ? rp : -1;
       if (jl < 0 || jr < 0) {
@@ -2392,12 +1320,15 @@ export class AttractDancer {
         }
         if (jl < 0) return; // empty row — nothing to do
       }
-      const clip = CLIPS[CLIP_JUMP];
-      const ts = clamp((gap * 0.92) / (clip.impact * clip.beats), 0.3, 1);
-      const dur = clip.beats * ts;
-      const slot = this.spawnPlayer(CLIP_JUMP, false, 0, st.beat - clip.impact * dur, dur);
-      this.assignFoot(0, jl, slot);
-      this.assignFoot(1, jr, slot);
+      this.jpJl = jl;
+      this.jpJr = jr;
+      this.jpLand = st.beat;
+      const load = Math.min(JUMP_LOAD_BEATS, w * 0.4);
+      this.jpTakeoff = st.beat - Math.min(JUMP_AIR_BEATS, w - load);
+      this.jpPending = true;
+      const up = jl === 2 || jr === 2;
+      this.setAccent(2, up ? ACC_SKY : ACC_FLARE, st.beat, JUMP_AIR_BEATS);
+      this.faceLook = 0;
       this.lastFoot = 1;
       return;
     }
@@ -2415,67 +1346,46 @@ export class AttractDancer {
       else if (panel === 3) foot = 1;
       else foot = 1 - this.lastFoot;
     }
-    // Alternate the two stylings per step so repeated arrows don't loop one
-    // gesture (deterministic: the toggle resets with the chart cursors).
-    const clipIdx = (this.stepAlt === 0 ? PANEL_CLIP : PANEL_CLIP_B)[panel];
-    this.stepAlt ^= 1;
-    const clip = CLIPS[clipIdx];
-    const mirrored = foot !== CLIP_FOOT[clipIdx];
-    // Crossover: the foot targets the opposite side's panel — flag the
-    // additive cross layer (twist through, weight to the true support).
     const cross = (foot === 0 && panel === 3) || (foot === 1 && panel === 0);
-    const ts = clamp((gap * 0.92) / (clip.impact * clip.beats), 0.3, 1);
-    const dur = clip.beats * ts;
-    const slot = this.spawnPlayer(
-      clipIdx,
-      mirrored,
-      cross ? (foot === 0 ? 1 : -1) : 0,
-      st.beat - clip.impact * dur,
-      dur,
-    );
-    this.assignFoot(foot, panel, slot);
+    this.assignFoot(foot, panel, beat, st.beat);
+
+    // Arm accent: reach with the panel-side arm (crossover ⇒ opposite), Up/Down
+    // drive both. Alternate two stylings so repeats don't loop one gesture.
+    let arm = panel === 0 ? 0 : panel === 3 ? 1 : 2;
+    if (cross) arm = foot === 0 ? 1 : 0;
+    // Fire a big arm accent only SOME steps — a crossover (distinctive) always,
+    // otherwise every other step. Between accents the arms ride the groove orbit
+    // + contralateral counterswing, so they stay alive without a pose on every
+    // beat (an accent on every beat reads as one repeated fling).
+    if (cross || this.stepCount % 2 === 0) {
+      const idx = this.accentIdx(panel, cross);
+      this.setAccent(arm, idx, st.beat, w);
+    }
+    this.faceLook = clamp((this.pt[0] - CX) / (0.3 * BODY_H), -1, 1) * 0.22;
+    this.stepAlt ^= 1;
+    this.stepCount++;
     this.lastFoot = foot;
   }
 
-  /** Claim a player slot (recycling the nearest-done one if the pool is full)
-   *  and start the clip on it. Returns the slot index. */
-  private spawnPlayer(
-    clipIdx: number,
-    mirrored: boolean,
-    cross: number,
-    startBeat: number,
-    durBeats: number,
-  ): number {
-    let slot = -1;
-    let bestEnd = Infinity;
-    for (let s = 0; s < N_PLAYERS; s++) {
-      if (!this.plActive[s]) {
-        slot = s;
-        break;
-      }
-    }
-    if (slot < 0) {
-      for (let s = 0; s < N_PLAYERS; s++) {
-        const end = this.plStart[s] + this.plDur[s];
-        if (end < bestEnd) {
-          bestEnd = end;
-          slot = s;
-        }
-      }
-      this.freeSlot(slot); // commits any feet the evicted player owned
-    }
-    this.plActive[slot] = 1;
-    this.plClip[slot] = clipIdx;
-    this.plMirror[slot] = mirrored ? 1 : 0;
-    this.plCross[slot] = cross;
-    this.plStart[slot] = startBeat;
-    this.plDur[slot] = Math.max(durBeats, 1e-3);
-    return slot;
+  /** Pick an accent set-point by step context (alternates via stepAlt). */
+  private accentIdx(panel: number, cross: boolean): number {
+    if (cross) return ACC_CROSS;
+    if (panel === 2) return this.stepAlt ? ACC_SKY : ACC_LEAD; // Up
+    if (panel === 1) return this.stepAlt ? ACC_DRIVE : ACC_PUNCH; // Down
+    return this.stepAlt ? ACC_SIDE : ACC_PUNCH; // Left / Right
   }
 
-  /** Hand a foot's swing to a player: origin = wherever the foot is NOW
-   *  (mid-swing supersede included), target = its panel spot on the floor. */
-  private assignFoot(foot: number, panel: number, slot: number): void {
+  private setAccent(arm: number, idx: number, beat: number, windup: number): void {
+    this.accActive = true;
+    this.accArm = arm;
+    this.accIdx = clamp(idx, 0, N_ACC - 1) | 0;
+    this.accBeat = beat;
+    this.accWindup = Math.max(windup, 0.08);
+  }
+
+  /** Start a foot swinging: origin = wherever the foot is NOW (mid-swing
+   *  supersede included), target = its panel spot, landing ON the note beat. */
+  private assignFoot(foot: number, panel: number, liftBeat: number, landBeat: number): void {
     this.panelTarget(panel, foot);
     let x0 = this.footX[foot];
     let z0 = this.footZ[foot];
@@ -2487,20 +1397,48 @@ export class AttractDancer {
     this.fromZ[foot] = z0;
     this.toX[foot] = this.pt[0];
     this.toZ[foot] = this.pt[1];
-    this.footOwner[foot] = slot;
+    this.footState[foot] = 1;
+    this.liftBeatA[foot] = liftBeat;
+    this.landBeatA[foot] = landBeat;
+    const dist = Math.hypot(this.pt[0] - x0, this.pt[1] - z0);
+    this.liftHA[foot] = clamp(SWING_LIFT * BODY_H + 0.14 * dist, 0.045 * BODY_H, 0.15 * BODY_H);
   }
 
-  /** Retire a player; feet it still owns commit their plant at the target
-   *  (the landed panel) and lock there. */
-  private freeSlot(slot: number): void {
+  /** Enter the airborne regime: both feet swing to their panels + tuck, and the
+   *  CoM is seeded with a ballistic parabola whose apex emerges from the airtime
+   *  (vy = G·T/2). Position AND velocity are carried over from the spring. */
+  private takeoff(): void {
+    const B = BODY_H;
+    this.assignFoot(0, this.jpJl, this.jpTakeoff, this.jpLand);
+    this.assignFoot(1, this.jpJr, this.jpTakeoff, this.jpLand);
+    this.liftHA[0] = JUMP_TUCK * B;
+    this.liftHA[1] = JUMP_TUCK * B;
+    this.airborne = true;
+    this.jpPending = false;
+    this.jT = Math.max((this.jpLand - this.jpTakeoff) / this.bps, 0.05);
+    this.jY0 = this.comY;
+    this.jVY0 = (-G * this.jT) / 2; // upward (y DOWN)
+    this.jX0 = this.comX;
+    this.jZ0 = this.comZ;
+    this.jVX0 = this.comVX;
+    this.jVZ0 = this.comVZ;
+  }
+
+  /** Leave the airborne regime: commit both plants and feed the impact velocity
+   *  (G·T/2 downward) into the vertical spring as its initial velocity, so the
+   *  landing squash depth EMERGES from the fall speed (C1 by construction). */
+  private land(): void {
+    this.airborne = false;
     for (let f = 0; f < 2; f++) {
-      if (this.footOwner[f] === slot) {
-        this.plantX[f] = this.toX[f];
-        this.plantZ[f] = this.toZ[f];
-        this.footOwner[f] = -1;
-      }
+      this.plantX[f] = this.toX[f];
+      this.plantZ[f] = this.toZ[f];
+      this.footState[f] = 0;
     }
-    this.plActive[slot] = 0;
+    this.comY = this.jY0;
+    this.comVY = (G * this.jT) / 2; // downward impact → squash
+    this.comVX = this.jVX0;
+    this.comVZ = this.jVZ0;
+    this.curGapSec = 1; // settle centred between the panels
   }
 
   /** 3D floor spot for a panel (0=L,1=D,2=U,3=R), per foot. The pad lies flat
@@ -2529,49 +1467,59 @@ export class AttractDancer {
 
   private readonly sp4 = new Float64Array(4); // springTail out: px, py, vx, vy
 
-  /** FK the torso/head/arms from the blended pose channels, two-bone-IK the
-   *  legs onto the animated ankle targets, project everything through the
-   *  weak-perspective camera, then run the secondary hair/cloth springs on
-   *  the projected joints. */
+  /** FK the torso/head/arms from the pose springs, two-bone-IK the legs onto
+   *  the animated ankle targets, project everything through the weak-perspective
+   *  camera, then run the secondary hair/cloth springs on the projected joints.
+   *  The pose scalars are already framerate-independent spring states; this just
+   *  turns them into joint positions and pixels. */
   private solve3D(time: number, s30: number): void {
     const B = BODY_H;
-    const ch = this.poseAcc;
     const s3 = this.skel3;
 
-    // Clamped channels (a blend of sane clips is sane, but never trust math).
-    const yaw = clamp(ch[CH_YAW], -0.7, 0.7);
-    const lean = clamp(ch[CH_LEAN], -0.5, 0.5);
-    const pitch = clamp(ch[CH_PITCH], -0.5, 0.6);
-    const twist = clamp(ch[CH_TWIST], -0.8, 0.8);
-    const side = clamp(ch[CH_SIDE], -0.08, 0.08);
-    const hyaw = clamp(ch[CH_HYAW], -0.8, 0.8);
-    const hpit = clamp(ch[CH_HPIT], -0.6, 0.6);
-    const hroll = clamp(ch[CH_HROLL], -0.6, 0.6);
-    // Negative = airborne (whole body rises). The floor for the crouch is deep
-    // enough for a real jump apex; the groove/steps only ever reach ~-0.02, so
-    // the extra headroom is JUMP-only and never destabilises the walk clips.
-    const crouch = clamp(ch[CH_CROUCH], -0.3, 0.2);
-    const sway = clamp(ch[CH_SWAY], -0.2, 0.2);
-    const pelvz = clamp(ch[CH_PELVZ], -0.12, 0.12);
-    const list = clamp(ch[CH_LIST], -0.08, 0.08);
+    // Clamped pose scalars (a spring is stable, but never trust math into IK).
+    const yaw = clamp(this.sYaw, -0.7, 0.7);
+    const lean = clamp(this.sLean, -0.5, 0.5);
+    const pitch = clamp(this.sPitch, -0.5, 0.6);
+    const twist = clamp(this.sTwist, -0.8, 0.8);
+    const side = clamp(this.sSide, -0.08, 0.08);
+    const hyaw = clamp(this.sHyaw, -0.8, 0.8);
+    const hpit = clamp(this.sHpit, -0.6, 0.6);
+    const hroll = clamp(this.sHroll, -0.6, 0.6);
+    const list = clamp(this.sList, -0.08, 0.08);
 
-    // Pelvis: authored sway + a pelvis-adjustment bias toward the feet
-    // midpoint (the standard foot-IK pelvis correction — the clip doesn't
-    // know which panels the feet actually landed on, the rig does).
-    const midFx = (this.footX[0] + this.footX[1]) * 0.5 - CX;
-    const midFz = (this.footZ[0] + this.footZ[1]) * 0.5;
-    const pelX = CX + sway * B + clamp(midFx * 0.55, -0.22 * B, 0.22 * B);
-    const pelZ = pelvz * B + clamp(midFz * 0.45, -0.15 * B, 0.15 * B);
-    const pelY = FOOT_Y - (L_THIGH + L_SHIN + L_SHOE) * B * 0.985 + crouch * B;
-    s3[PEL * 3] = pelX;
-    s3[PEL * 3 + 1] = pelY;
-    s3[PEL * 3 + 2] = pelZ;
-
-    // Body axes. Pelvis frame from yaw; shoulder frame adds the twist.
+    // Pelvis frame from yaw (the hip lateral axis; it yaws with the CoM travel).
     const latX = Math.cos(yaw);
     const latZ = -Math.sin(yaw);
     const fwdX = Math.sin(yaw);
     const fwdZ = Math.cos(yaw);
+
+    // Pelvis = CoM, with a HARD reach clamp (not a spring, no ZMP): drop the
+    // pelvis so the WORST planted leg stays inside its reach — the CoM is in the
+    // support hull by construction, so overshoot-out is free, but a leg must
+    // never over-extend and rubber-band.
+    let pelX = this.comX;
+    let pelY = this.comY;
+    let pelZ = this.comZ;
+    if (!this.airborne) {
+      const maxR = (L_THIGH + L_SHIN) * B * 0.98;
+      for (let f = 0; f < 2; f++) {
+        if (this.footState[f] !== 0) continue; // planted legs only
+        const hxx = pelX + (f === 0 ? -1 : 1) * latX * W_HIP * B;
+        const hzz = pelZ + (f === 0 ? -1 : 1) * latZ * W_HIP * B;
+        const dh = Math.hypot(this.footX[f] - hxx, this.footZ[f] - hzz);
+        const vs = Math.sqrt(Math.max(0, maxR * maxR - dh * dh));
+        const need = this.footYv[f] - vs; // hip must be at least this far down
+        if (Number.isFinite(need) && need > pelY) pelY = need;
+      }
+    }
+    if (!Number.isFinite(pelX)) pelX = CX;
+    if (!Number.isFinite(pelY)) pelY = REST_COM_Y;
+    if (!Number.isFinite(pelZ)) pelZ = 0;
+    s3[PEL * 3] = pelX;
+    s3[PEL * 3 + 1] = pelY;
+    s3[PEL * 3 + 2] = pelZ;
+
+    // Shoulder frame adds the twist (shoulders counter-rotate vs the pelvis).
     const yawS = clamp(yaw + twist, -1.1, 1.1);
     const latSX = Math.cos(yawS);
     const latSZ = -Math.sin(yawS);
@@ -2621,8 +1569,11 @@ export class AttractDancer {
     this.faceTurn = clamp(Math.sin(hyaw + yawS * 0.35) * r * 0.5, -r, r);
 
     // Shoulder sockets: on the twisted shoulder line, counter-tilted against
-    // the pelvic list (weight-bearing hip up ⇒ same-side shoulder down).
-    const shTilt = list * B * 0.55;
+    // the pelvic list (weight-bearing hip up ⇒ same-side shoulder down). Kept
+    // SMALL — the spine absorbs most of the list, so the shoulders barely tilt;
+    // a big coupling raised one shoulder up to the neck base and read as a hunch
+    // (and it drives the VRM chest's shoulder-plane pole, tilting the neck too).
+    const shTilt = list * B * 0.22;
     s3[SHL * 3] = shX - latSX * W_SHOULDER * B;
     s3[SHL * 3 + 1] = shY - shTilt;
     s3[SHL * 3 + 2] = shZ - latSZ * W_SHOULDER * B;
@@ -2630,8 +1581,8 @@ export class AttractDancer {
     s3[SHR * 3 + 1] = shY + shTilt;
     s3[SHR * 3 + 2] = shZ + latSZ * W_SHOULDER * B;
 
-    // Waist corners (torso-plate geometry rides the blended frame so body
-    // yaw foreshortens the plates through z).
+    // Waist corners (torso-plate geometry rides the frame so body yaw
+    // foreshortens the plates through z).
     const waistW = 0.05 * B;
     const latWX = (latX + latSX) * 0.5;
     const latWZ = (latZ + latSZ) * 0.5;
@@ -2653,14 +1604,16 @@ export class AttractDancer {
     s3[HIPR * 3 + 1] = pelY - list * B;
     s3[HIPR * 3 + 2] = pelZ + latZ * W_HIP * B;
 
-    // Arms: FK. Upper arm = down rotated outward by abduction in the coronal
-    // plane, then toward the viewer by the fwd channel; the forearm continues
-    // the arc (elbow bend) with its own forward component.
+    // Arms: FK from the spring-driven angles. Upper arm = down rotated outward
+    // by abduction in the coronal plane, then toward the viewer by the fwd
+    // channel; the forearm continues the arc (elbow bend) with its own forward
+    // component. This produces an anatomically sensible elbow bend PLANE, which
+    // is what the VRM aim-retarget reads (shoulder→elbow→hand + its normal).
     for (let f = 0; f < 2; f++) {
       const sgn = f === 0 ? -1 : 1;
-      const abd = clamp(ch[f === 0 ? CH_LABD : CH_RABD], -0.6, 3.3);
-      const fw = clamp(ch[f === 0 ? CH_LFWD : CH_RFWD], -1.2, 1.2);
-      let elb = clamp(ch[f === 0 ? CH_LELB : CH_RELB], -0.5, 2.6);
+      const abd = clamp(this.armAbd[f], -0.6, 3.3);
+      const fw = clamp(this.armFwd[f], -1.2, 1.2);
+      let elb = clamp(this.armElb[f], -0.5, 2.6);
       // Soft elbow — the anti-mannequin rule: a human arm never locks dead
       // straight, so blend a small residual bend into a near-straight arm (fades
       // out by |elb|=0.6). Kept modest: it exists only to avoid a hyperextended
@@ -2668,7 +1621,7 @@ export class AttractDancer {
       // their natural soft bend from the pose itself.
       const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.6), 1);
       elb += 0.22 * straight * straight;
-      let lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
+      let lof = clamp(this.armLof[f], -1.2, 1.6);
       // Bend DIRECTION on a raised arm: +elb continues the coronal arc, which
       // on a reach (upper arm at/above horizontal) carries the forearm UPWARD
       // past the humerus line. An elbow only flexes one way — that upward bow
@@ -2678,7 +1631,7 @@ export class AttractDancer {
       // droop below the upper-arm line plus a forward (toward-viewer) fold.
       // Big authored curls (|elb| ≳ 1.2: fists, pumps) and inward flexes
       // (elb < 0) pass untouched, and the redirect fades smoothly on both the
-      // bend and the elevation axes, so cross-fades never pop.
+      // bend and the elevation axes, so accent changes never pop.
       if (elb > 0) {
         const elev = smooth01((abd - 0.85) * (1 / 0.95)); // 0 low arm → 1 raised
         const soft = smooth01(1 - elb * (1 / 1.2)); // 1 near-straight → 0 big curl
@@ -2686,6 +1639,10 @@ export class AttractDancer {
         lof += w * 0.7 * elb; // forward fold (f2 is clamped below)
         elb -= w * 1.9 * elb; // >1× ⇒ net droop below the humerus line
       }
+      // Hard elbow floor: never let the forearm line up with the upper arm
+      // (the locked-plank silhouette). Preserve the bend's sign (a droop stays a
+      // droop) but guarantee at least ELBOW_FLOOR of visible flex.
+      if (elb > -ELBOW_FLOOR && elb < ELBOW_FLOOR) elb = elb < 0 ? -ELBOW_FLOOR : ELBOW_FLOOR;
       const soI = f === 0 ? SHL : SHR;
       const elI = f === 0 ? ELL : ELR;
       const haI = f === 0 ? HAL : HAR;
