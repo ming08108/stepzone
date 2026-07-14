@@ -136,6 +136,7 @@ export const VRM_CHAINS: readonly BoneChain[] = [
     to: 'elbowR',
     pole: ['shoulderR', 'elbowR', 'handR'],
     poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+    poleSign: -1,
   },
   {
     bone: 'leftLowerArm',
@@ -144,6 +145,7 @@ export const VRM_CHAINS: readonly BoneChain[] = [
     to: 'handR',
     pole: ['shoulderR', 'elbowR', 'handR'],
     poleModel: ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+    poleSign: -1,
   },
   { bone: 'rightShoulder', restChild: 'rightUpperArm', from: 'shoulderL', to: 'elbowL', damp: 0.3 },
   {
@@ -153,6 +155,7 @@ export const VRM_CHAINS: readonly BoneChain[] = [
     to: 'elbowL',
     pole: ['shoulderL', 'elbowL', 'handL'],
     poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+    poleSign: -1,
   },
   {
     bone: 'rightLowerArm',
@@ -161,6 +164,7 @@ export const VRM_CHAINS: readonly BoneChain[] = [
     to: 'handL',
     pole: ['shoulderL', 'elbowL', 'handL'],
     poleModel: ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+    poleSign: -1,
   },
   { bone: 'leftUpperLeg', restChild: 'leftLowerLeg', from: 'hipR', to: 'kneeR', narrowX: 0.55 },
   { bone: 'leftLowerLeg', restChild: 'leftFoot', from: 'kneeR', to: 'footR', narrowX: 0.55 },

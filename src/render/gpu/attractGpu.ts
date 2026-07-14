@@ -335,11 +335,15 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     //     dancer (the 2D procedural one and every 3D avatar). Stationary in the
     //     floor's (column cf, row rc) frame so it doesn't ride the treadmill. ---
     let rc = t * 14.0;
-    let padRC = 10.2;                            // pad row depth (just at her feet)
-    var pcols = array<f32, 4>(-3.6, -1.2, 1.2, 3.6);
-    var pangs = array<f32, 4>(PI, PI * 0.5, -PI * 0.5, 0.0); // L,D(toward),U(away),R
+    let padRC = 9.6;                             // centre of the pad, at her feet
+    // The four panels in a DDR '+' cross, where the feet actually land: Left and
+    // Right out to the sides, Down toward the viewer, Up away — each arrow points
+    // its own direction. (cf, rc) = (column, depth) floor coords per panel.
+    var pcf = array<f32, 4>(-3.4, 0.0, 0.0, 3.4);        // L, D, U, R
+    var prc = array<f32, 4>(0.0, 2.6, -2.6, 0.0);        // D nearer, U farther
+    var pangs = array<f32, 4>(PI, PI * 0.5, -PI * 0.5, 0.0);
     for (var i = 0; i < 4; i = i + 1) {
-      let q = rot2(vec2f(cf - pcols[i], rc - padRC), -pangs[i]) / 1.75;
+      let q = rot2(vec2f(cf - pcf[i], rc - padRC - prc[i]), -pangs[i]) / 1.7;
       let m = arrowMask(q);
       if (m > 0.001) {
         let fl = u.pad[i];
