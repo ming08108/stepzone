@@ -395,9 +395,9 @@ function sampleClip(c: Clip, phase: number, out: Float32Array, mirrored: boolean
 const IDLE = (() => {
   // ON the count: pulse DOWN, weight over the right foot, right fist high.
   const k0: KeyOver = {
-    [CH_CROUCH]: 0.06,
-    [CH_SWAY]: 0.05,
-    [CH_LIST]: 0.022,
+    [CH_CROUCH]: 0.088,
+    [CH_SWAY]: 0.07,
+    [CH_LIST]: 0.03,
     [CH_LEAN]: 0.065,
     [CH_TWIST]: -0.17,
     [CH_YAW]: 0.13,
@@ -453,9 +453,9 @@ const IDLE = (() => {
   };
   // Falling INTO the next count on the left side (anticipation).
   const k3: KeyOver = {
-    [CH_CROUCH]: 0.035,
-    [CH_SWAY]: -0.028,
-    [CH_LIST]: -0.012,
+    [CH_CROUCH]: 0.052,
+    [CH_SWAY]: -0.042,
+    [CH_LIST]: -0.018,
     [CH_LEAN]: -0.04,
     [CH_TWIST]: 0.1,
     [CH_YAW]: -0.08,
@@ -917,7 +917,7 @@ const JUMP = makeClip(1.7, 0.65, false, [
   [
     0.28,
     {
-      [CH_CROUCH]: 0.105,
+      [CH_CROUCH]: 0.145, // deeper wind-up crouch — load the legs
       [CH_PITCH]: 0.11,
       [CH_HPIT]: 0.1,
       [CH_LABD]: 0.25,
@@ -933,7 +933,7 @@ const JUMP = makeClip(1.7, 0.65, false, [
   [
     0.42,
     {
-      [CH_CROUCH]: -0.03,
+      [CH_CROUCH]: -0.075, // pushing off — pelvis rising
       [CH_PITCH]: -0.02,
       [CH_HPIT]: -0.05,
       [CH_LABD]: 1.2,
@@ -944,14 +944,14 @@ const JUMP = makeClip(1.7, 0.65, false, [
       [CH_RELB]: 0.3,
       [CH_SWGL]: 0.35,
       [CH_SWGR]: 0.35,
-      [CH_LIFTL]: 0.06,
-      [CH_LIFTR]: 0.06,
+      [CH_LIFTL]: 0.12,
+      [CH_LIFTR]: 0.12,
     },
   ],
   [
     0.53,
     {
-      [CH_CROUCH]: -0.08,
+      [CH_CROUCH]: -0.135, // APEX — fully airborne, legs tucked under
       [CH_PITCH]: -0.06,
       [CH_HPIT]: -0.13,
       [CH_LABD]: 2.55,
@@ -962,14 +962,14 @@ const JUMP = makeClip(1.7, 0.65, false, [
       [CH_RLOF]: 0.1,
       [CH_SWGL]: 0.7,
       [CH_SWGR]: 0.7,
-      [CH_LIFTL]: 0.095,
-      [CH_LIFTR]: 0.095,
+      [CH_LIFTL]: 0.185,
+      [CH_LIFTR]: 0.185,
     },
   ],
   [
     0.65,
     {
-      [CH_CROUCH]: 0.09,
+      [CH_CROUCH]: 0.15, // LANDING squash — absorb the impact deep
       [CH_PITCH]: 0.09,
       [CH_HPIT]: 0.05,
       [CH_LABD]: 1.5,
@@ -2067,12 +2067,12 @@ export class AttractDancer {
       const gph = gb - Math.floor(gb);
       const bop = 0.5 + 0.5 * Math.cos(gph * Math.PI * 2); // 1 ON the count
       const lfo = Math.sin(gb * Math.PI); // 2-beat side-to-side cycle
-      acc[CH_CROUCH] += 0.014 * bop - 0.005;
+      acc[CH_CROUCH] += 0.028 * bop - 0.009; // heavier drop into each count
       acc[CH_HPIT] += 0.05 * bop - 0.02;
       acc[CH_PELVZ] += 0.006 * bop;
-      acc[CH_SWAY] += lfo * 0.008;
-      acc[CH_LIST] += lfo * 0.006;
-      acc[CH_LEAN] += lfo * 0.02;
+      acc[CH_SWAY] += lfo * 0.016; // fuller side-to-side weight transfer
+      acc[CH_LIST] += lfo * 0.012;
+      acc[CH_LEAN] += lfo * 0.028;
       acc[CH_TWIST] -= lfo * 0.045;
       acc[CH_HROLL] -= lfo * 0.028;
       // Arm breathing: elbows squeeze a touch INTO each count and release
