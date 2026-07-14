@@ -2613,13 +2613,15 @@ export class AttractDancer {
       const fw = clamp(ch[f === 0 ? CH_LFWD : CH_RFWD], -1.2, 1.2);
       let elb = clamp(ch[f === 0 ? CH_LELB : CH_RELB], -0.5, 2.6);
       // Soft elbow — the anti-mannequin rule: a human arm never locks dead
-      // straight, so blend in a residual bend that peaks (+0.26 rad) exactly
+      // straight, so blend in a residual bend that peaks (+0.42 rad) exactly
       // where the channel would flatten the arm into a ruler and fades out
-      // quadratically by |elb|=0.68. Continuous everywhere (no snap when a
+      // quadratically by |elb|=0.8. Continuous everywhere (no snap when a
       // blend sweeps through zero), and intentional bends pass untouched, so
-      // "straight" reaches render as a soft C-curve.
-      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.68), 1);
-      elb += 0.26 * straight * straight;
+      // "straight" reaches render as a soft C-curve. Bumped up because a subtle
+      // bend vanishes on a smooth, thin VRoid arm and reads as a stretched
+      // needle — it needs a clearly visible flex to look like an arm.
+      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.8), 1);
+      elb += 0.42 * straight * straight;
       let lof = clamp(ch[f === 0 ? CH_LLOF : CH_RLOF], -1.2, 1.6);
       // Bend DIRECTION on a raised arm: +elb continues the coronal arc, which
       // on a reach (upper arm at/above horizontal) carries the forearm UPWARD
@@ -2695,8 +2697,10 @@ export class AttractDancer {
       const ny = dy / d;
       const nz = dz / d;
       // Soft knees: never lock the chain fully straight (keeps a natural bend
-      // and kills the rubber-band pop at full reach).
-      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.972);
+      // and kills the rubber-band pop at full reach). Clamp well below full
+      // reach — a barely-bent knee vanishes on a smooth tights-clad VRoid leg
+      // and reads as a stretched straight column, so keep a visible flex.
+      const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.94);
       const ca = clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1);
       const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
       // Knee pole: bows the knee OUTWARD over the foot — a real, visible bend

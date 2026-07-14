@@ -593,6 +593,16 @@ export class SkinnedModel {
         rotY(sgn * THUMB[k]);
         applyLocalRot(node);
       }
+      // Enlarge the hand ~18%: VRoid hands are small and, at a fully extended
+      // arm, taper the sleeve into a thin white "needle". A bigger hand reads as
+      // a hand from a distance and terminates the arm line cleanly.
+      const handNode = resolve(`${side}Hand`, `J_Bip_${jb}_Hand`);
+      if (handNode >= 0) {
+        rot.fill(0);
+        rot[0] = rot[5] = rot[10] = 1.18;
+        rot[15] = 1;
+        applyLocalRot(handNode);
+      }
     }
   }
 
