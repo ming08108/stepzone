@@ -912,70 +912,86 @@ const STEP_D = makeClip(1.5, 0.6, false, [
  *  the floor, body rises, arms fling into an open X at the apex → both feet
  *  land simultaneously ON the beat with a landing squash → rebound settle.
  *  Weight stays CENTERED (sway/list zero) so she lands between her panels. */
+// A real gravity jump: load → explosive takeoff → a HANG at the apex (the crouch
+// values on either side of it are symmetric, so the Hermite peaks flat = float)
+// → a fast fall → a deep landing squash that absorbs the weight → a rebound
+// overshoot before settling. Takeoff→apex and apex→touchdown are equal spans, so
+// up-time == down-time like real ballistics.
 const JUMP = makeClip(1.7, 0.65, false, [
-  [0, { [CH_CROUCH]: 0.035, [CH_HPIT]: 0.02 }],
+  [0, { [CH_CROUCH]: 0.04, [CH_HPIT]: 0.02 }],
   [
-    0.28,
+    0.22,
     {
-      [CH_CROUCH]: 0.145, // deeper wind-up crouch — load the legs
-      [CH_PITCH]: 0.11,
+      [CH_CROUCH]: 0.17, // deep load — coil the legs (anticipation)
+      [CH_PITCH]: 0.12,
       [CH_HPIT]: 0.1,
-      [CH_LABD]: 0.25,
-      [CH_LFWD]: -0.35,
+      [CH_LABD]: 0.22,
+      [CH_LFWD]: -0.4,
       [CH_LELB]: 0.35,
-      [CH_LLOF]: -0.05,
-      [CH_RABD]: 0.25,
-      [CH_RFWD]: -0.35,
+      [CH_RABD]: 0.22,
+      [CH_RFWD]: -0.4,
       [CH_RELB]: 0.35,
-      [CH_RLOF]: -0.05,
     },
   ],
   [
-    0.42,
+    0.37,
     {
-      [CH_CROUCH]: -0.075, // pushing off — pelvis rising
-      [CH_PITCH]: -0.02,
-      [CH_HPIT]: -0.05,
-      [CH_LABD]: 1.2,
-      [CH_LFWD]: 0.05,
-      [CH_LELB]: 0.3,
-      [CH_RABD]: 1.2,
-      [CH_RFWD]: 0.05,
-      [CH_RELB]: 0.3,
-      [CH_SWGL]: 0.35,
-      [CH_SWGR]: 0.35,
-      [CH_LIFTL]: 0.12,
-      [CH_LIFTR]: 0.12,
+      [CH_CROUCH]: -0.05, // TAKEOFF — legs snap straight, feet just leaving
+      [CH_PITCH]: -0.04,
+      [CH_HPIT]: -0.06,
+      [CH_LABD]: 1.1,
+      [CH_LELB]: 0.32,
+      [CH_RABD]: 1.1,
+      [CH_RELB]: 0.32,
+      [CH_SWGL]: 0.3,
+      [CH_SWGR]: 0.3,
+      [CH_LIFTL]: 0.09,
+      [CH_LIFTR]: 0.09,
     },
   ],
   [
-    0.53,
+    0.51,
     {
-      [CH_CROUCH]: -0.135, // APEX — fully airborne, legs tucked under
+      [CH_CROUCH]: -0.26, // APEX — whole body airborne, hangs here (symmetric neighbours → flat peak)
       [CH_PITCH]: -0.06,
       [CH_HPIT]: -0.13,
-      [CH_LABD]: 2.55,
+      [CH_LABD]: 2.5,
       [CH_LELB]: 0.34,
       [CH_LLOF]: 0.1,
-      [CH_RABD]: 2.55,
+      [CH_RABD]: 2.5,
       [CH_RELB]: 0.34,
       [CH_RLOF]: 0.1,
-      [CH_SWGL]: 0.7,
-      [CH_SWGR]: 0.7,
-      [CH_LIFTL]: 0.185,
-      [CH_LIFTR]: 0.185,
+      [CH_SWGL]: 0.6,
+      [CH_SWGR]: 0.6,
+      [CH_LIFTL]: 0.3, // feet tuck slightly higher than the pelvis rise
+      [CH_LIFTR]: 0.3,
     },
   ],
   [
-    0.65,
+    0.64,
     {
-      [CH_CROUCH]: 0.15, // LANDING squash — absorb the impact deep
-      [CH_PITCH]: 0.09,
-      [CH_HPIT]: 0.05,
-      [CH_LABD]: 1.5,
-      [CH_LELB]: 0.5,
-      [CH_RABD]: 1.5,
-      [CH_RELB]: 0.5,
+      [CH_CROUCH]: -0.05, // FALLING — mirror of takeoff, accelerating down
+      [CH_HPIT]: -0.02,
+      [CH_LABD]: 1.6,
+      [CH_LELB]: 0.42,
+      [CH_RABD]: 1.6,
+      [CH_RELB]: 0.42,
+      [CH_SWGL]: 0.92,
+      [CH_SWGR]: 0.92,
+      [CH_LIFTL]: 0.08,
+      [CH_LIFTR]: 0.08,
+    },
+  ],
+  [
+    0.71,
+    {
+      [CH_CROUCH]: 0.18, // LANDING squash — feet planted, knees eat the impact
+      [CH_PITCH]: 0.1,
+      [CH_HPIT]: 0.06,
+      [CH_LABD]: 0.7,
+      [CH_LELB]: 0.6,
+      [CH_RABD]: 0.7,
+      [CH_RELB]: 0.6,
       [CH_SWGL]: 1,
       [CH_SWGR]: 1,
       [CH_LIFTL]: 0,
@@ -983,19 +999,16 @@ const JUMP = makeClip(1.7, 0.65, false, [
     },
   ],
   [
-    0.82,
+    0.84,
     {
-      [CH_CROUCH]: 0.042,
-      [CH_PITCH]: 0.02,
+      [CH_CROUCH]: -0.01, // REBOUND — spring back up past neutral (follow-through)
       [CH_HPIT]: -0.02,
-      [CH_LABD]: 0.4,
-      [CH_LFWD]: 0.28,
-      [CH_LELB]: 2.0,
-      [CH_LLOF]: 0.4,
-      [CH_RABD]: 0.4,
-      [CH_RFWD]: 0.28,
-      [CH_RELB]: 2.0,
-      [CH_RLOF]: 0.4,
+      [CH_LABD]: 0.34,
+      [CH_LFWD]: 0.1,
+      [CH_LELB]: 0.5,
+      [CH_RABD]: 0.34,
+      [CH_RFWD]: 0.1,
+      [CH_RELB]: 0.5,
       [CH_SWGL]: 1,
       [CH_SWGR]: 1,
     },
@@ -1003,15 +1016,13 @@ const JUMP = makeClip(1.7, 0.65, false, [
   [
     1,
     {
-      [CH_CROUCH]: 0.038,
-      [CH_LABD]: 0.32,
-      [CH_LFWD]: 0.32,
-      [CH_LELB]: 2.3,
-      [CH_LLOF]: 0.45,
-      [CH_RABD]: 0.32,
-      [CH_RFWD]: 0.32,
-      [CH_RELB]: 2.3,
-      [CH_RLOF]: 0.45,
+      [CH_CROUCH]: 0.04, // settle back into the groove's low hang
+      [CH_LABD]: 0.2,
+      [CH_LFWD]: 0.08,
+      [CH_LELB]: 0.5,
+      [CH_RABD]: 0.2,
+      [CH_RFWD]: 0.08,
+      [CH_RELB]: 0.5,
       [CH_SWGL]: 1,
       [CH_SWGR]: 1,
     },
@@ -2147,6 +2158,31 @@ export class AttractDancer {
       acc[CH_PITCH] -= rise * 0.035;
     }
 
+    // ---- 2c. weight transfer: commit the CoM over the SUPPORT (planted) foot
+    //          while the other foot swings, so a step reads as a shift of
+    //          weight — the hips/torso lead onto the standing leg and release
+    //          back to centre as the swinging foot commits to its new plant.
+    //          Without this the transitions look weightless: a foot floats out
+    //          to its panel while the body stays squared and centred. The lean
+    //          peaks MID-swing (sin arc, 0→1→0) and is gone by the plant, so it
+    //          layers cleanly over the groove and never lingers. Two-foot JUMPs
+    //          swing both feet symmetrically ⇒ the L/R biases cancel ⇒ centred,
+    //          exactly as a straddle landing should be. ----------------------
+    {
+      let wsx = 0; // signed lateral weight bias: + = toward screen-right foot
+      for (let f = 0; f < 2; f++) {
+        if (this.footOwner[f] < 0) continue;
+        const sw = this.footSwg[f];
+        if (!(sw >= 0 && sw < 1)) continue; // f is mid-swing (1 = landed)
+        const commit = Math.sin(Math.PI * clamp(sw, 0, 1)); // 0→1→0 across the swing
+        wsx += (f === 0 ? 1 : -1) * commit; // f0 (screen-left) swings ⇒ lean right
+      }
+      wsx = clamp(wsx, -1, 1);
+      acc[CH_SWAY] += wsx * 0.05; // hips slide over the support foot
+      acc[CH_LIST] += wsx * 0.045; // support hip hikes to carry the weight
+      acc[CH_LEAN] += wsx * 0.03; // torso leans into the standing leg
+    }
+
     // ---- 3. foot kinematics: locked plants + owned swings -------------------
     for (let f = 0; f < 2; f++) {
       let x: number;
@@ -2511,7 +2547,10 @@ export class AttractDancer {
     const hyaw = clamp(ch[CH_HYAW], -0.8, 0.8);
     const hpit = clamp(ch[CH_HPIT], -0.6, 0.6);
     const hroll = clamp(ch[CH_HROLL], -0.6, 0.6);
-    const crouch = clamp(ch[CH_CROUCH], -0.14, 0.2);
+    // Negative = airborne (whole body rises). The floor for the crouch is deep
+    // enough for a real jump apex; the groove/steps only ever reach ~-0.02, so
+    // the extra headroom is JUMP-only and never destabilises the walk clips.
+    const crouch = clamp(ch[CH_CROUCH], -0.3, 0.2);
     const sway = clamp(ch[CH_SWAY], -0.2, 0.2);
     const pelvz = clamp(ch[CH_PELVZ], -0.12, 0.12);
     const list = clamp(ch[CH_LIST], -0.08, 0.08);

@@ -19,6 +19,15 @@ import type { Feedback } from '../render/types';
 
 const BPM = 128;
 const LOOKAHEAD = 0.28; // beats of wind-up before a keyed step lands
+// A jump needs its whole pre-impact arc (anticipation crouch → takeoff → rise)
+// to actually render: the clip's impact (landing) keyframe is ~0.65 of the way
+// in, so it wants ~1.1 beats of lead. With the short step lookahead the
+// scheduler places the clip start in the PAST and skips straight to the apex —
+// no wind-up, no takeoff, so the hop reads weightless. Give jumps their own,
+// longer lead so the full gravity arc plays. (Attract-mode/chart jumps already
+// get this via the scheduler's wind-up window; only the manual test-jump was
+// truncated.)
+const JUMP_LOOKAHEAD = 1.2;
 
 export function DancerTest({ onExit }: { onExit: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -64,9 +73,11 @@ export function DancerTest({ onExit }: { onExit: () => void }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') return onExit();
       if (!gpuField) return;
-      const at = beatAt(performance.now()) + LOOKAHEAD;
+      const now = beatAt(performance.now());
+      const at = now + LOOKAHEAD;
       if (e.key === ' ') {
-        gpuField.pushAttractStep(at, (1 << 0) | (1 << 3), 0, 3); // jump: both feet
+        // full pre-impact lead so the wind-up + takeoff actually render
+        gpuField.pushAttractStep(now + JUMP_LOOKAHEAD, (1 << 0) | (1 << 3), 0, 3); // jump: both feet
         e.preventDefault();
       } else if (e.key === 'v' || e.key === 'V') {
         variant = (variant + 1) % 4;
