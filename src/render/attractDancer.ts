@@ -2703,15 +2703,14 @@ export class AttractDancer {
       const dc = clamp(d, Math.abs(l1 - l2) + 1, (l1 + l2) * 0.94);
       const ca = clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1);
       const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
-      // Knee pole: bows the knee OUTWARD over the foot — a real, visible bend
-      // in the screen plane (natural for a straddle) — with only a modest
-      // forward lift for 3D volume. A forward-DOMINANT pole put the whole bend
-      // into depth, which foreshortened the shin and read as a stiff, snapped,
-      // detached lower leg. Outward-dominant + small forward keeps the thigh
-      // and shin one continuous, believable limb and never inverts.
-      let px = sgn * latX * 0.92 + fwdX * 0.34;
+      // Knee pole: point the knees mostly FORWARD (over the toes) with only a
+      // little outward splay. A strongly outward pole bowed the knees way past
+      // the feet into a bow-legged "( )" — worse once the knees bend more — so
+      // forward-dominant keeps a natural athletic track; a bit of outward still
+      // gives 3D volume and never inverts the joint.
+      let px = sgn * latX * 0.4 + fwdX * 0.78;
       let py = 0;
-      let pz = sgn * latZ * 0.92 + fwdZ * 0.34;
+      let pz = sgn * latZ * 0.4 + fwdZ * 0.78;
       const dot = px * nx + py * ny + pz * nz;
       px -= nx * dot;
       py -= ny * dot;
