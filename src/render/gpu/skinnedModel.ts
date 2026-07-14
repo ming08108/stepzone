@@ -194,16 +194,17 @@ fn fs(
   // TINT the albedo toward that neon (multiplied, not added) so even a white
   // outfit goes lavender/cyan instead of staying neutral grey — additive light
   // washed out on white, which is why the earlier pass read as "bright but flat".
-  let tinted = albedo * mix(vec3f(1.0), envCol, 0.42);
+  let tinted = albedo * mix(vec3f(1.0), envCol, 0.52);
   // Ambient neon fill into the shadow side + a camera-facing fill so the FACE is
-  // never a black void (head self-shadow was eating the character read).
+  // never a black void. The front fill is NEON-tinted (not white) — a white fill
+  // bleached the tint back to grey on the camera-facing cardigan.
   let fill = envCol * (1.0 - ndl) * 0.24;
   let front = max(dot(n, viewDir), 0.0);
-  var lit = tinted * frame.tint.rgb * shade + tinted * fill + albedo * front * 0.16;
-  // Hot rim — BLEND the silhouette toward saturated neon (not additive), so it
-  // reads as a burning cyan/magenta edge at attract distance even over white.
-  let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.7);
-  lit = mix(lit, envCol * 1.5, clamp(rimAmt * 0.8, 0.0, 0.85));
+  var lit = tinted * frame.tint.rgb * shade + tinted * fill + envCol * front * 0.16;
+  // Hot rim — BLEND the silhouette toward saturated neon (not additive), cranked
+  // so the burning cyan/magenta edge beats the bright hexagons behind her.
+  let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
+  lit = mix(lit, envCol * 2.3, clamp(rimAmt * 0.92, 0.0, 0.9));
   // Pad up-glow: magenta light from the deck onto downward-facing surfaces
   // (shins, shoe tops, jaw underside) — grounds her ON the lit stage.
   lit += vec3f(1.0, 0.3, 0.72) * max(-n.y, 0.0) * 0.5;
