@@ -143,7 +143,9 @@ const STEP_SWING_BEATS = 0.42;
  *  the chart panel target. 1 while a step owns the foot; between steps it eases
  *  toward FOOT_CHART_REST so the planted foot mostly holds its last panel while
  *  the leg still breathes with the mocap. FOOT_BLEND_RATE = ease speed (1/s). */
-const FOOT_CHART_REST = 0.35;
+const FOOT_CHART_REST = 0.85; // planted feet hold their panel firmly (feet stay ON
+// the pad's arrows and step between them on the beat — a dancer's footwork), while
+// the mocap still drives the hips/torso/arms/head above them.
 const FOOT_BLEND_RATE = 9;
 
 // ---- physics helpers (pure, allocation-free) --------------------------------
