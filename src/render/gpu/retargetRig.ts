@@ -105,8 +105,21 @@ export const VRM_CHAINS: readonly BoneChain[] = [
   // across/into the torso, and the near-180° aim deltas make quatFromTo
   // degenerate (random roll).
   { bone: 'spine', restChild: 'chest', from: 'pelvis', to: 'chest' },
-  { bone: 'chest', restChild: 'neck', from: 'chest', to: 'neck' },
-  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.5 },
+  // The chest carries a POLE too: aiming chest→neck (up) leaves the axial TWIST
+  // undetermined, so the shoulders never counter-rotate against the hips and the
+  // torso stays square to camera. The pole aligns the chest's shoulder-plane
+  // (up × shoulder-out) to the source's twisted shoulder line, so the whole
+  // upper body rotates with the groove. (source shoulderR ↔ model leftUpperArm
+  // under the crossed L/R mapping.)
+  {
+    bone: 'chest',
+    restChild: 'neck',
+    from: 'chest',
+    to: 'neck',
+    pole: ['pelvis', 'chest', 'shoulderR'],
+    poleModel: ['spine', 'chest', 'leftUpperArm'],
+  },
+  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.72 },
   // The clavicle follows the arm PARTWAY (low damp) so a raised arm doesn't
   // concentrate the whole bend at the deltoid — that linear-blend-skinning pinch
   // is what distorts the shoulder. It's aimed at the same target as the upper arm

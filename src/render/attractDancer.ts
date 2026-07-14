@@ -2556,11 +2556,16 @@ export class AttractDancer {
     s3[HEADB * 3] = nbX;
     s3[HEADB * 3 + 1] = nbY;
     s3[HEADB * 3 + 2] = nbZ;
+    // Head offset from the neck base carries the nod/tilt so the aim retarget
+    // (neck→head) reproduces it: pitch swings the head fwd+down, roll slides it
+    // ear-to-shoulder. Displacements are generous — a still head reads as
+    // lifeless. (Yaw/turn can't be shown by moving the head centre — it needs a
+    // gaze target — so it stays a 2D-face cue via faceTurn.)
     const r = R_HEAD * B;
-    const nod = Math.sin(hpit) * r * 0.4;
-    const hX = nbX + ux * r * 0.9 + latSX * Math.sin(hroll) * r + fwdSX * nod;
-    const hY = nbY + uy * r * 0.9 + Math.sin(hpit) * r * 0.25;
-    const hZ = nbZ + uz * r * 0.9 + latSZ * Math.sin(hroll) * r + fwdSZ * nod;
+    const nod = Math.sin(hpit) * r * 0.85;
+    const hX = nbX + ux * r * 0.9 + latSX * Math.sin(hroll) * r * 1.15 + fwdSX * nod;
+    const hY = nbY + uy * r * 0.9 + Math.sin(hpit) * r * 0.5;
+    const hZ = nbZ + uz * r * 0.9 + latSZ * Math.sin(hroll) * r * 1.15 + fwdSZ * nod;
     s3[HEAD * 3] = hX;
     s3[HEAD * 3 + 1] = hY;
     s3[HEAD * 3 + 2] = hZ;
