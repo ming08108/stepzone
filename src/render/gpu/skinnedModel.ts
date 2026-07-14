@@ -612,8 +612,8 @@ export class SkinnedModel {
     ];
     // One pipeline per (blend, cull) combination, built lazily and cached.
     const pipeCache = new Map<string, GPURenderPipeline>();
-    const getPipeline = (blend: boolean, cull: GPUCullMode): GPURenderPipeline => {
-      const key = `${blend ? 'b' : 'o'}-${cull}`;
+    const getPipeline = (blend: boolean, cull: GPUCullMode, zWrite: boolean): GPURenderPipeline => {
+      const key = `${blend ? 'b' : 'o'}-${cull}-${zWrite ? 'z' : ''}`;
       let p = pipeCache.get(key);
       if (!p) {
         p = device.createRenderPipeline({
@@ -649,8 +649,17 @@ export class SkinnedModel {
             ],
           },
           primitive: { topology: 'triangle-list', cullMode: cull },
-          // Blended prims test depth but don't write it (drawn after opaque).
-          depthStencil: { format: 'depth24plus', depthWriteEnabled: !blend, depthCompare: 'less' },
+          // Opaque prims write depth. Blended prims normally only test it (drawn
+          // after opaque), EXCEPT "transparent-with-ZWrite" ones (zWrite) — MMD/
+          // MToon materials that are tagged BLEND but are really opaque with
+          // anti-aliased edges. Those must write depth so their stacked face
+          // layers (skin + brow + mouth) occlude instead of alpha-blending into
+          // a muddy patch. See the isBlend/zWrite computation below.
+          depthStencil: {
+            format: 'depth24plus',
+            depthWriteEnabled: !blend || zWrite,
+            depthCompare: 'less',
+          },
         });
         pipeCache.set(key, p);
       }
@@ -693,6 +702,13 @@ export class SkinnedModel {
       const mat = p.materialIndex >= 0 ? model.materials[p.materialIndex] : undefined;
       const useTexture = !!mat && mat.baseColorTexture >= 0;
       const isBlend = mat?.alphaMode === 'BLEND';
+      // A BLEND material whose base-color alpha is fully opaque isn't really
+      // translucent — it's "transparent-with-ZWrite" (MMD/MToon exports tag
+      // opaque-but-anti-aliased surfaces this way). Let those write depth so
+      // overlapping face layers occlude rather than blend into mush. A genuinely
+      // translucent material (base alpha < 1) keeps depth-write off for correct
+      // over-compositing.
+      const zWrite = isBlend && p.baseColor[3] >= 1;
       const cull: GPUCullMode = mat?.doubleSided ? 'none' : 'back';
       return {
         posBuf: makeVertexBuffer(device, p.position),
@@ -711,7 +727,7 @@ export class SkinnedModel {
         useTexture,
         isBlend,
         alphaCutoff: mat?.alphaMode === 'MASK' ? mat.alphaCutoff : 0,
-        pipeline: getPipeline(isBlend, cull),
+        pipeline: getPipeline(isBlend, cull, zWrite),
         texBind: mat && p.materialIndex >= 0 ? materialBind[p.materialIndex] : defaultBind,
         recolor: false,
       };
