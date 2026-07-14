@@ -187,14 +187,22 @@ fn fs(
   // reads as a stylized cel character (PS2-DDR dancer), not a flat/murky mesh.
   // The bands are lifted (0.72..1.05) so nothing sinks into a dead grey.
   let ndl = dot(n, l) * 0.5 + 0.5; // half-lambert — softer wrap, no black side
-  let band = smoothstep(0.34, 0.5, ndl) * 0.18 + smoothstep(0.55, 0.72, ndl) * 0.15;
-  let shade = 0.72 + band; // 0.72 (shadow) → ~1.05 (lit)
+  let band = smoothstep(0.34, 0.5, ndl) * 0.2 + smoothstep(0.55, 0.72, ndl) * 0.18;
+  let shade = 0.86 + band; // brighter base (0.86 shadow → ~1.24 lit) — she was underexposed
   // Neon rim — cyan→magenta by facing — so the silhouette pops off the tunnel
-  // and the skin never looks pale/ghostly. Additive, view-based Fresnel.
-  let fres = pow(1.0 - max(dot(n, viewDir), 0.0), 2.4);
-  let rimCol = mix(vec3f(0.15, 0.55, 1.0), vec3f(1.0, 0.25, 0.75), n.x * 0.5 + 0.5);
-  let rim = rimCol * fres * 0.6;
-  var lit = albedo * frame.tint.rgb * shade + rim;
+  // and the skin never looks pale/ghostly. Additive, view-based Fresnel. Stronger
+  // now: she should read as lit BY the neon world, not floating dim over it.
+  let fres = pow(1.0 - max(dot(n, viewDir), 0.0), 2.1);
+  let rimCol = mix(vec3f(0.22, 0.72, 1.0), vec3f(1.0, 0.3, 0.82), n.x * 0.5 + 0.5);
+  let rim = rimCol * fres * 1.15;
+  // Neon ambient fill: wash the shadow side with a faint cyan/magenta instead of
+  // muddy grey, so she picks up the environment's colour.
+  let fill = mix(vec3f(0.12, 0.2, 0.36), vec3f(0.3, 0.12, 0.3), n.x * 0.5 + 0.5) * (1.0 - ndl) * 0.7;
+  // Pad up-glow: the dancepad below throws magenta light onto downward-facing
+  // surfaces (shins, shoe tops, jaw underside) so she reads as standing ON a lit
+  // stage, grounding her in the scene.
+  let padGlow = vec3f(1.0, 0.28, 0.72) * max(-n.y, 0.0) * 0.4;
+  var lit = albedo * frame.tint.rgb * shade + albedo * fill + rim + padGlow;
   // Re-encode to sRGB for textured prims (linear lighting → sRGB store);
   // flat-color prims keep the renderer's original non-linear passthrough.
   if (useTex) { lit = pow(max(lit, vec3f(0.0)), vec3f(1.0 / 2.2)); }

@@ -1575,11 +1575,12 @@ export class AttractDancer {
       dg * 0.5,
       dbl * 0.5,
     );
-    // Dim rim outline around the slab top.
-    const rr = (pb[0] / 255) * 0.1;
-    const rg = (pb[1] / 255) * 0.1;
-    const rb = (pb[2] / 255) * 0.1;
-    this.padEdge(pp[0], pp[1], pp[2], pp[3], 0.8, rr, rg, rb);
+    // Neon rim outline around the slab top — an emissive edge that reads as the
+    // deck's lit trim (was near-invisible before).
+    const rr = (pb[0] / 255) * 0.42;
+    const rg = (pb[1] / 255) * 0.42;
+    const rb = (pb[2] / 255) * 0.42;
+    this.padEdge(pp[0], pp[1], pp[2], pp[3], 1.1, rr, rg, rb);
     this.padEdge(pp[2], pp[3], pp[4], pp[5], 0.8, rr, rg, rb);
     this.padEdge(pp[4], pp[5], pp[6], pp[7], 0.8, rr, rg, rb);
     this.padEdge(pp[6], pp[7], pp[0], pp[1], 0.8, rr, rg, rb);
@@ -1624,29 +1625,30 @@ export class AttractDancer {
       const db = Number.isFinite(beat) ? beat - this.padFlash[panel] : 1e9;
       const flash = db >= 0 && db < 1.2 ? Math.exp(-3.2 * db) : 0;
 
-      // Lit fill (additive glow) — a fan from the centroid, only when flashing.
-      if (flash > 0.02) {
-        const fr = (lerp(pa[0], wht[0], 0.35) / 255) * flash * 0.85;
-        const fg = (lerp(pa[1], wht[1], 0.35) / 255) * flash * 0.85;
-        const fb = (lerp(pa[2], wht[2], 0.35) / 255) * flash * 0.85;
-        for (let k = 0; k < 7; k++) {
-          const n = (k + 1) % 7;
-          this.addTri(
-            pts[14],
-            pts[15],
-            pts[k * 2],
-            pts[k * 2 + 1],
-            pts[n * 2],
-            pts[n * 2 + 1],
-            fr,
-            fg,
-            fb,
-          );
-        }
+      // Lit fill (additive glow) — a fan from the centroid. Persistently emissive
+      // (a neon arrow always glows) and much hotter on the stepped beat, so the
+      // pad reads as a lit stage, not a shadow.
+      const glow = 0.16 + 1.0 * flash;
+      const fr = (lerp(pa[0], wht[0], 0.3 + 0.4 * flash) / 255) * glow;
+      const fg = (lerp(pa[1], wht[1], 0.3 + 0.4 * flash) / 255) * glow;
+      const fb = (lerp(pa[2], wht[2], 0.3 + 0.4 * flash) / 255) * glow;
+      for (let k = 0; k < 7; k++) {
+        const n = (k + 1) % 7;
+        this.addTri(
+          pts[14],
+          pts[15],
+          pts[k * 2],
+          pts[k * 2 + 1],
+          pts[n * 2],
+          pts[n * 2 + 1],
+          fr,
+          fg,
+          fb,
+        );
       }
 
-      // Outline: dim cyan floor line at rest, ramping to hot white on flash.
-      const baseI = 0.12 + 0.9 * flash;
+      // Outline: neon floor line at rest, ramping to hot white on flash.
+      const baseI = 0.34 + 0.85 * flash;
       const oc0 = pb;
       const or = (lerp(oc0[0], wht[0], flash) / 255) * baseI;
       const og = (lerp(oc0[1], wht[1], flash) / 255) * baseI;
