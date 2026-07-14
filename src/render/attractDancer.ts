@@ -51,6 +51,8 @@
  * feeds the VRM aim-retarget — a single NaN would poison it).
  */
 
+import { MOCAP_DIRS, MOCAP_FRAMES } from './mocapDance';
+
 // ---- design space (matches attractBackground.ts) ---------------------------
 
 const W = 960;
@@ -169,12 +171,6 @@ const HL_TWIST = 0.12;
 const HL_SIDE = 0.14;
 const HL_LIST = 0.1;
 const HL_HEAD = 0.12; // head look / nod / roll
-const HL_ARM_SH = 0.09; // shoulder (abduction + swing)
-const HL_ARM_EL = 0.15; // elbow bend (trails the shoulder)
-const HL_ARM_FA = 0.26; // forearm fold (softest, whips in last — ~80ms drag)
-/** Hard minimum elbow flex (rad, ~25°): a human elbow never locks straight —
- *  even a full reach keeps this much bend, which kills the ramrod-plank look. */
-const ELBOW_FLOOR = 0.44;
 
 /** Local tempo tracking: bps = lowpass(Δbeat/Δt), clamped to a sane band. */
 const BPS_LP = 0.12;
@@ -191,37 +187,6 @@ const STEP_SWING_BEATS = 0.42;
  *  naturally become quick low hops — correct. */
 const JUMP_LOAD_BEATS = 0.24;
 const JUMP_AIR_BEATS = 1.1;
-
-/** Arm accent vocabulary. Each row is a set-point [abduction, fwd, elbow,
- *  forearm-fold] for the accent arm; the scheduler fires one by context and the
- *  staggered spring chain turns it into a weighted, following gesture. Values
- *  live inside the FK clamp ranges (abd -0.6..3.3, fwd -1.2..1.2, elb -0.5..2.6,
- *  lof -1.2..1.6). Index 0 is the resting groove pose. */
-const ACC_REST = 0;
-const ACC_PUNCH = 1; // downbeat fist punch up in front
-const ACC_FLARE = 2; // jump: arms fling open into an X
-const ACC_SKY = 3; // overhead reach (Up panel)
-const ACC_SIDE = 4; // reach out along the step line (L/R)
-const ACC_CROSS = 5; // arm pulls across the chest (crossover)
-const ACC_DRIVE = 6; // punch down past the hip (Down stomp)
-const ACC_LEAD = 7; // flexed-elbow victory pump overhead
-const N_ACC = 8;
-// prettier-ignore
-// Arm accent set-points [abduction, forward, elbow-flex, forearm-fold], radians.
-// Every entry keeps a BENT elbow (≥~0.8) and caps abduction near horizontal for
-// the everyday poses — a locked, ramrod-straight side-arm reads robotic, so the
-// only near-overhead reaches (sky) are reserved for rare Up/jump accents. The
-// staggered spring chain turns these set-points into weighted follow-through.
-const ACCENTS = new Float32Array([
-  0.26, 0.14, 1.0, 0.35, // 0 rest — relaxed bent hang, hand near the hip
-  0.45, 0.38, 1.55, 0.28, // 1 punch — bent fist up in front
-  0.85, 0.12, 1.05, 0.22, // 2 flare — open, capped ~49° with a bent elbow
-  2.15, 0.14, 0.9, 0.16, // 3 sky — overhead reach, elbow bent (rare: Up / jump)
-  0.7, 0.22, 1.25, 0.2, // 4 side — reach along the step line, ELBOW BENT (no ramrod)
-  0.55, -0.35, 1.3, 0.12, // 5 cross-body — bent pull across the chest
-  0.24, -0.3, 0.9, 0.06, // 6 low drive — low bent pump past the hip
-  1.0, 0.2, 1.45, 0.18, // 7 lead pump — bent-elbow runner/victory pump
-]);
 
 // ---- physics helpers (pure, allocation-free) --------------------------------
 
@@ -325,9 +290,21 @@ const L_UARM = 0.155,
   L_THIGH = 0.25,
   L_SHIN = 0.24,
   L_SHOE = 0.025;
-/** Forward lean of the neck axis (rad) off the torso up-vector — matches the
- *  VRoid rest neck so the aim retarget doesn't crane/over-extend it. */
-const NECK_LEAN = 0.18;
+
+// ---- mocap upper body (Bandai Namco dance dataset, CC BY-NC) -----------------
+// The arms/neck/head are driven by baked dance mocap (chest-local direction
+// vectors) grafted onto the physics torso frame; the legs/CoM/jump stay
+// procedural (panel-accurate). BEAT SYNC: the clip's own tempo (found by
+// autocorrelating its motion energy) is 13 frames/beat, and the baked segment is
+// a whole 40 beats (520 frames); advancing exactly MOCAP_FPB frames per musical
+// beat locks the dance to the beat and loops on a beat boundary with no drift, so
+// the arms speed up / slow down WITH the song. MOCAP_PHASE nudges the downbeat.
+const MOCAP_FPB = 13; // baked frames per musical beat (= the clip's detected tempo)
+const MOCAP_PHASE = 0; // beats of phase offset to align the clip's accent to the beat
+const MOCAP_SEAM = 12; // frames of loop cross-blend hiding the segment seam
+const MOCAP_SR = 1; // sign of the across (right) axis remap
+const MOCAP_SF = 1; // sign of the forward axis remap
+const MOCAP_SWAP = 1; // 1 = mocap-L feeds screen-RIGHT arm (crossed), 0 = direct
 
 // Fixed key light (upper-left) for the flat facet shading.
 const LX = -0.62;
@@ -426,6 +403,7 @@ export class AttractDancer {
   private readonly skel3 = new Float64Array(JOINTS * 3); // 3D joints (x,y,z)
   private readonly jscale = new Float32Array(JOINTS); // per-joint perspective scale
   private readonly sp2 = new Float64Array(2); // spring stepper out: [x, v]
+  private readonly md = new Float64Array(18); // sampled mocap dirs this frame
 
   // ---- timing / tempo ----
   private lastTime = NaN;
@@ -473,28 +451,7 @@ export class AttractDancer {
   private sListV = 0;
   private sHyaw = 0;
   private sHyawV = 0;
-  private sHpit = 0;
-  private sHpitV = 0;
-  private sHroll = 0;
-  private sHrollV = 0;
   private faceLook = 0; // decaying gaze target toward the last step panel
-
-  // ---- arms: staggered shoulder→elbow→forearm spring chain, per foot side ----
-  private readonly armAbd = new Float64Array(2);
-  private readonly armAbdV = new Float64Array(2);
-  private readonly armFwd = new Float64Array(2);
-  private readonly armFwdV = new Float64Array(2);
-  private readonly armElb = new Float64Array(2);
-  private readonly armElbV = new Float64Array(2);
-  private readonly armLof = new Float64Array(2);
-  private readonly armLofV = new Float64Array(2);
-
-  // ---- one live arm accent (latest wins) ----
-  private accActive = false;
-  private accArm = 2; // 0 = left, 1 = right, 2 = both
-  private accIdx = ACC_REST;
-  private accBeat = -1e9; // impact beat
-  private accWindup = 0.3; // rise time (beats) before impact
 
   // ---- feet (0 = screen-left, 1 = screen-right) ----
   private readonly footState = new Uint8Array(2); // 0 stance, 1 swing
@@ -514,8 +471,6 @@ export class AttractDancer {
   private readonly padPts = new Float64Array(16); // projected arrow outline (x,y)*8
   private curGapSec = 1; // gap of the active step (scales the weight transfer)
   private lastFoot = 1; // which foot stepped last (U/D alternation)
-  private stepAlt = 0; // accent styling alternator
-  private stepCount = 0; // total single steps committed (accent-firing gate)
 
   // ---- chart cursors ----
   private hitIdx = -1; // last step whose beat has passed (burst accents)
@@ -689,22 +644,7 @@ export class AttractDancer {
     this.sSide = this.sSideV = 0;
     this.sList = this.sListV = 0;
     this.sHyaw = this.sHyawV = 0;
-    this.sHpit = this.sHpitV = 0;
-    this.sHroll = this.sHrollV = 0;
-    this.accActive = false;
-    this.accArm = 2;
-    this.accIdx = ACC_REST;
-    this.accBeat = -1e9;
-    this.accWindup = 0.3;
     for (let f = 0; f < 2; f++) {
-      this.armAbd[f] = 0.3;
-      this.armAbdV[f] = 0;
-      this.armFwd[f] = 0.1;
-      this.armFwdV[f] = 0;
-      this.armElb[f] = 0.55;
-      this.armElbV[f] = 0;
-      this.armLof[f] = 0.35;
-      this.armLofV[f] = 0;
       const x = CX + (f === 0 ? -1 : 1) * STANCE * B;
       this.plantX[f] = x;
       this.plantZ[f] = 0;
@@ -730,8 +670,6 @@ export class AttractDancer {
     this.synthSched = -1e9;
     this.hitBeat = -1e9;
     this.padFlash.fill(-1e9);
-    this.stepAlt = 0;
-    this.stepCount = 0;
     this.lastFoot = 1;
     this.armFarLeft = true;
     this.legFarLeft = true;
@@ -848,8 +786,6 @@ export class AttractDancer {
     const phase = clock - Math.floor(clock);
     const kick = valid ? Math.exp(-6 * phase) : 0;
     const bop = 0.5 + 0.5 * Math.cos(phase * Math.PI * 2); // 1 ON the count
-    const lfo = Math.sin(clock * Math.PI); // 2-beat side-to-side cycle
-
     // ---- 1. scheduler: fire hit accents, command footsteps / jumps ----------
     if (chart) this.scheduleChart(beat);
     else if (valid) this.scheduleSynth(beat);
@@ -866,7 +802,7 @@ export class AttractDancer {
 
     // ---- 5. torso / head / arm goal springs ---------------------------------
     this.stepPose(dt, bop);
-    this.stepArms(drv, dt, bop, lfo);
+    this.sampleMocap(drv, valid, time); // upper body = baked dance mocap
 
     // ---- 6. solve the 3D skeleton (FK + two-bone leg IK), project -----------
     this.solve3D(time, s30);
@@ -1100,8 +1036,6 @@ export class AttractDancer {
     // Gaze decays back to centre between steps.
     this.faceLook *= Math.pow(0.5, dt / 0.4);
     const hyawGoal = clamp(this.faceLook - this.sYaw * 0.3, -0.5, 0.5);
-    const hpitGoal = clamp(0.05 * bop - 0.02 + (this.airborne ? -0.08 : 0), -0.4, 0.4);
-    const hrollGoal = clamp(-this.sLean * 0.5, -0.4, 0.4);
 
     this.critStep(this.sLean, this.sLeanV, leanGoal, 0, HL_LEAN, dt);
     this.sLean = this.sp2[0];
@@ -1124,79 +1058,6 @@ export class AttractDancer {
     this.critStep(this.sHyaw, this.sHyawV, hyawGoal, 0, HL_HEAD, dt);
     this.sHyaw = this.sp2[0];
     this.sHyawV = this.sp2[1];
-    this.critStep(this.sHpit, this.sHpitV, hpitGoal, 0, HL_HEAD, dt);
-    this.sHpit = this.sp2[0];
-    this.sHpitV = this.sp2[1];
-    this.critStep(this.sHroll, this.sHrollV, hrollGoal, 0, HL_HEAD, dt);
-    this.sHroll = this.sp2[0];
-    this.sHrollV = this.sp2[1];
-  }
-
-  // ---- arms ------------------------------------------------------------------
-
-  /** Per-arm goal = a between-steps groove orbit + a contralateral leg-phase
-   *  counterswing (arm f swings with the OPPOSITE leg's swing) + the live accent
-   *  set-point (blended by an envelope). A staggered shoulder→elbow→forearm
-   *  spring chain then produces the weighted follow-through. */
-  private stepArms(drv: number, dt: number, bop: number, lfo: number): void {
-    // Accent envelope: rise to impact, then decay (follow-through lives in the
-    // springs, not here).
-    let e = 0;
-    if (this.accActive) {
-      if (drv < this.accBeat) {
-        e = smooth01((drv - (this.accBeat - this.accWindup)) / Math.max(this.accWindup, 1e-3));
-      } else {
-        const dd = drv - this.accBeat;
-        e = Math.exp(-2.6 * dd);
-        if (dd > 1.6) this.accActive = false;
-      }
-    }
-    for (let a = 0; a < 2; a++) {
-      const sgn = a === 0 ? 1 : -1;
-      // Groove orbit — she is never limp: elbows breathe into each count, the
-      // whole arm rides the 2-beat weight LFO (out of phase L/R).
-      // Relaxed low arms with a soft elbow, breathing on the beat. The ranges
-      // are kept MODERATE and close to the authored-clip range the VRM arm
-      // retarget's bend-plane pole was tuned for — a deep elbow flex at low
-      // abduction, or a big forward forearm fold, tilts the bend plane out of
-      // that range and the pole mis-rolls the forearm (arms read "twisted").
-      const ebeat = sgn * lfo; // L/R arms pump a half-beat out of phase
-      let gAbd = 0.28 + 0.06 * bop + ebeat * 0.04;
-      let gFwd = 0.16 + ebeat * 0.06;
-      let gElb = 0.55 + 0.28 * bop + ebeat * 0.08; // soft beat-driven elbow flex
-      let gLof = 0.24 + 0.14 * bop; // gentle forward forearm fold (pole-safe range)
-      // Contralateral counterswing: the OPPOSITE leg's swing pumps this arm
-      // forward/back (toward the camera) with a bent elbow, like a natural stride.
-      const dl = 1 - a;
-      if (this.footState[dl] === 1) {
-        const span = Math.max(this.landBeatA[dl] - this.liftBeatA[dl], 1e-4);
-        const s = halfSine(clamp((drv - this.liftBeatA[dl]) / span, 0, 1));
-        gFwd += s * 0.34;
-        gAbd += s * 0.12;
-        gElb += s * 0.2;
-      }
-      // Accent set-point blended in over the groove.
-      if (this.accActive && (this.accArm === a || this.accArm === 2) && e > 1e-3) {
-        const o = this.accIdx * 4;
-        gAbd = lerp(gAbd, ACCENTS[o], e);
-        gFwd = lerp(gFwd, ACCENTS[o + 1], e);
-        gElb = lerp(gElb, ACCENTS[o + 2], e);
-        gLof = lerp(gLof, ACCENTS[o + 3], e);
-      }
-      // Staggered spring chain: shoulder stiff, elbow softer, forearm softest.
-      this.critStep(this.armAbd[a], this.armAbdV[a], gAbd, 0, HL_ARM_SH, dt);
-      this.armAbd[a] = this.sp2[0];
-      this.armAbdV[a] = this.sp2[1];
-      this.critStep(this.armFwd[a], this.armFwdV[a], gFwd, 0, HL_ARM_SH, dt);
-      this.armFwd[a] = this.sp2[0];
-      this.armFwdV[a] = this.sp2[1];
-      this.critStep(this.armElb[a], this.armElbV[a], gElb, 0, HL_ARM_EL, dt);
-      this.armElb[a] = this.sp2[0];
-      this.armElbV[a] = this.sp2[1];
-      this.critStep(this.armLof[a], this.armLofV[a], gLof, 0, HL_ARM_FA, dt);
-      this.armLof[a] = this.sp2[0];
-      this.armLofV[a] = this.sp2[1];
-    }
   }
 
   // ---- scheduler -------------------------------------------------------------
@@ -1327,8 +1188,6 @@ export class AttractDancer {
       const load = Math.min(JUMP_LOAD_BEATS, w * 0.4);
       this.jpTakeoff = st.beat - Math.min(JUMP_AIR_BEATS, w - load);
       this.jpPending = true;
-      const up = jl === 2 || jr === 2;
-      this.setAccent(2, up ? ACC_SKY : ACC_FLARE, st.beat, JUMP_AIR_BEATS);
       this.faceLook = 0;
       this.lastFoot = 1;
       return;
@@ -1347,41 +1206,9 @@ export class AttractDancer {
       else if (panel === 3) foot = 1;
       else foot = 1 - this.lastFoot;
     }
-    const cross = (foot === 0 && panel === 3) || (foot === 1 && panel === 0);
     this.assignFoot(foot, panel, beat, st.beat);
-
-    // Arm accent: reach with the panel-side arm (crossover ⇒ opposite), Up/Down
-    // drive both. Alternate two stylings so repeats don't loop one gesture.
-    let arm = panel === 0 ? 0 : panel === 3 ? 1 : 2;
-    if (cross) arm = foot === 0 ? 1 : 0;
-    // Fire a big arm accent only SOME steps — a crossover (distinctive) always,
-    // otherwise every other step. Between accents the arms ride the groove orbit
-    // + contralateral counterswing, so they stay alive without a pose on every
-    // beat (an accent on every beat reads as one repeated fling).
-    if (cross || this.stepCount % 2 === 0) {
-      const idx = this.accentIdx(panel, cross);
-      this.setAccent(arm, idx, st.beat, w);
-    }
     this.faceLook = clamp((this.pt[0] - CX) / (0.3 * BODY_H), -1, 1) * 0.22;
-    this.stepAlt ^= 1;
-    this.stepCount++;
     this.lastFoot = foot;
-  }
-
-  /** Pick an accent set-point by step context (alternates via stepAlt). */
-  private accentIdx(panel: number, cross: boolean): number {
-    if (cross) return ACC_CROSS;
-    if (panel === 2) return this.stepAlt ? ACC_SKY : ACC_LEAD; // Up
-    if (panel === 1) return this.stepAlt ? ACC_DRIVE : ACC_PUNCH; // Down
-    return this.stepAlt ? ACC_SIDE : ACC_PUNCH; // Left / Right
-  }
-
-  private setAccent(arm: number, idx: number, beat: number, windup: number): void {
-    this.accActive = true;
-    this.accArm = arm;
-    this.accIdx = clamp(idx, 0, N_ACC - 1) | 0;
-    this.accBeat = beat;
-    this.accWindup = Math.max(windup, 0.08);
   }
 
   /** Start a foot swinging: origin = wherever the foot is NOW (mid-swing
@@ -1468,6 +1295,29 @@ export class AttractDancer {
 
   private readonly sp4 = new Float64Array(4); // springTail out: px, py, vx, vy
 
+  /** Sample the baked dance-mocap upper body into `this.md` (18 chest-local
+   *  direction floats), interpolated between frames and cross-blended over the
+   *  loop seam so the wrap doesn't pop. Advanced by the beat (native tempo) with
+   *  a time fallback during the chart-less lead-in. */
+  private sampleMocap(drv: number, valid: boolean, time: number): void {
+    const t = valid ? (drv + MOCAP_PHASE) * MOCAP_FPB : time * 30;
+    let fp = t % MOCAP_FRAMES;
+    if (!(fp >= 0)) fp += MOCAP_FRAMES;
+    if (!(fp >= 0 && fp < MOCAP_FRAMES)) fp = 0;
+    const f0 = Math.floor(fp);
+    const a = fp - f0;
+    const f1 = f0 + 1 >= MOCAP_FRAMES ? 0 : f0 + 1;
+    const o0 = f0 * 18;
+    const o1 = f1 * 18;
+    const md = this.md;
+    for (let k = 0; k < 18; k++)
+      md[k] = MOCAP_DIRS[o0 + k] + (MOCAP_DIRS[o1 + k] - MOCAP_DIRS[o0 + k]) * a;
+    if (fp > MOCAP_FRAMES - MOCAP_SEAM) {
+      const w = (fp - (MOCAP_FRAMES - MOCAP_SEAM)) / MOCAP_SEAM;
+      for (let k = 0; k < 18; k++) md[k] += (MOCAP_DIRS[k] - md[k]) * w;
+    }
+  }
+
   /** FK the torso/head/arms from the pose springs, two-bone-IK the legs onto
    *  the animated ankle targets, project everything through the weak-perspective
    *  camera, then run the secondary hair/cloth springs on the projected joints.
@@ -1484,8 +1334,6 @@ export class AttractDancer {
     const twist = clamp(this.sTwist, -0.8, 0.8);
     const side = clamp(this.sSide, -0.08, 0.08);
     const hyaw = clamp(this.sHyaw, -0.8, 0.8);
-    const hpit = clamp(this.sHpit, -0.6, 0.6);
-    const hroll = clamp(this.sHroll, -0.6, 0.6);
     const list = clamp(this.sList, -0.08, 0.08);
 
     // Pelvis frame from yaw (the hip lateral axis; it yaws with the CoM travel).
@@ -1547,38 +1395,30 @@ export class AttractDancer {
     s3[COLLAR * 3 + 1] = shY + uy * 0.06 * B;
     s3[COLLAR * 3 + 2] = shZ + uz * 0.06 * B;
 
-    // Neck axis: the torso up-vector tilted slightly FORWARD to match the VRoid
-    // bind posture. The retarget aims the neck/head bones along chest→neck→head;
-    // a dead-vertical chain straightens the model's natural cervical curve and
-    // lifts the skull, which reads as a craned, over-extended neck vs the bind
-    // T-pose. Leaning the neck axis forward keeps the head sitting on the
-    // shoulders with a short, natural neck.
-    const nl = NECK_LEAN;
-    const cnl = Math.cos(nl);
-    const snl = Math.sin(nl);
-    const nux = ux * cnl + fwdSX * snl;
-    const nuy = uy * cnl;
-    const nuz = uz * cnl + fwdSZ * snl;
-    // Neck + head (head roll shifts the skull laterally, pitch nods it).
-    const nbX = shX + nux * L_NECK * B;
-    const nbY = shY + nuy * L_NECK * B;
-    const nbZ = shZ + nuz * L_NECK * B;
+    // Neck + head from the dance mocap: transform its chest-local direction
+    // vectors (neck = md 0..2, head = md 3..5) into world through our chest frame
+    // (right = shoulder-lateral, up = torso-up, fwd = torso-forward), then hang
+    // the neck/head at our own bone lengths. The mocap carries the natural neck
+    // curve, so no manual lean is needed. `mdW*` are reused per-joint scratch.
+    const md = this.md;
+    const r = R_HEAD * B;
+    let mdx = MOCAP_SR * md[0] * latSX + md[1] * ux + MOCAP_SF * md[2] * fwdSX;
+    let mdy = md[1] * uy;
+    let mdz = MOCAP_SR * md[0] * latSZ + md[1] * uz + MOCAP_SF * md[2] * fwdSZ;
+    let ml = Math.hypot(mdx, mdy, mdz) || 1;
+    const nbX = shX + (mdx / ml) * L_NECK * B;
+    const nbY = shY + (mdy / ml) * L_NECK * B;
+    const nbZ = shZ + (mdz / ml) * L_NECK * B;
     s3[HEADB * 3] = nbX;
     s3[HEADB * 3 + 1] = nbY;
     s3[HEADB * 3 + 2] = nbZ;
-    // Head offset from the neck base carries the nod/tilt so the aim retarget
-    // (neck→head) reproduces it: pitch swings the head fwd+down, roll slides it
-    // ear-to-shoulder. Displacements are generous — a still head reads as
-    // lifeless. (Yaw/turn can't be shown by moving the head centre — it needs a
-    // gaze target — so it stays a 2D-face cue via faceTurn.)
-    const r = R_HEAD * B;
-    const nod = Math.sin(hpit) * r * 0.85;
-    const hX = nbX + nux * r * 0.9 + latSX * Math.sin(hroll) * r * 1.15 + fwdSX * nod;
-    const hY = nbY + nuy * r * 0.9 + Math.sin(hpit) * r * 0.5;
-    const hZ = nbZ + nuz * r * 0.9 + latSZ * Math.sin(hroll) * r * 1.15 + fwdSZ * nod;
-    s3[HEAD * 3] = hX;
-    s3[HEAD * 3 + 1] = hY;
-    s3[HEAD * 3 + 2] = hZ;
+    mdx = MOCAP_SR * md[3] * latSX + md[4] * ux + MOCAP_SF * md[5] * fwdSX;
+    mdy = md[4] * uy;
+    mdz = MOCAP_SR * md[3] * latSZ + md[4] * uz + MOCAP_SF * md[5] * fwdSZ;
+    ml = Math.hypot(mdx, mdy, mdz) || 1;
+    s3[HEAD * 3] = nbX + (mdx / ml) * r * 0.9;
+    s3[HEAD * 3 + 1] = nbY + (mdy / ml) * r * 0.9;
+    s3[HEAD * 3 + 2] = nbZ + (mdz / ml) * r * 0.9;
     this.faceTurn = clamp(Math.sin(hyaw + yawS * 0.35) * r * 0.5, -r, r);
 
     // Shoulder sockets: on the twisted shoulder line, counter-tilted against
@@ -1617,73 +1457,36 @@ export class AttractDancer {
     s3[HIPR * 3 + 1] = pelY - list * B;
     s3[HIPR * 3 + 2] = pelZ + latZ * W_HIP * B;
 
-    // Arms: FK from the spring-driven angles. Upper arm = down rotated outward
-    // by abduction in the coronal plane, then toward the viewer by the fwd
-    // channel; the forearm continues the arc (elbow bend) with its own forward
-    // component. This produces an anatomically sensible elbow bend PLANE, which
-    // is what the VRM aim-retarget reads (shoulder→elbow→hand + its normal).
+    // Arms from the dance mocap: transform each mocap arm's chest-local upper-arm
+    // and forearm direction vectors into world through our chest frame, then hang
+    // the elbow/hand off our own shoulder positions at our own bone lengths. The
+    // dancer faces the viewer, so the mocap's anatomical L feeds our screen-RIGHT
+    // arm (MOCAP_SWAP). Real mocap keeps the shoulder→elbow→hand bend plane
+    // natural, which is what the VRM aim-retarget's pole reads.
     for (let f = 0; f < 2; f++) {
-      const sgn = f === 0 ? -1 : 1;
-      const abd = clamp(this.armAbd[f], -0.6, 3.3);
-      const fw = clamp(this.armFwd[f], -1.2, 1.2);
-      let elb = clamp(this.armElb[f], -0.5, 2.6);
-      // Soft elbow — the anti-mannequin rule: a human arm never locks dead
-      // straight, so blend a small residual bend into a near-straight arm (fades
-      // out by |elb|=0.6). Kept modest: it exists only to avoid a hyperextended
-      // ruler on a full reach, NOT to hold a bend at rest — the resting arms get
-      // their natural soft bend from the pose itself.
-      const straight = 1 - Math.min(Math.abs(elb) * (1 / 0.6), 1);
-      elb += 0.22 * straight * straight;
-      let lof = clamp(this.armLof[f], -1.2, 1.6);
-      // Bend DIRECTION on a raised arm: +elb continues the coronal arc, which
-      // on a reach (upper arm at/above horizontal) carries the forearm UPWARD
-      // past the humerus line. An elbow only flexes one way — that upward bow
-      // reads as hyperextension, a backward break at the joint. So redirect
-      // small near-straight bends (residual floor included) on raised arms
-      // into what a relaxed elbow actually does out there: a slight gravity
-      // droop below the upper-arm line plus a forward (toward-viewer) fold.
-      // Big authored curls (|elb| ≳ 1.2: fists, pumps) and inward flexes
-      // (elb < 0) pass untouched, and the redirect fades smoothly on both the
-      // bend and the elevation axes, so accent changes never pop.
-      if (elb > 0) {
-        const elev = smooth01((abd - 0.85) * (1 / 0.95)); // 0 low arm → 1 raised
-        const soft = smooth01(1 - elb * (1 / 1.2)); // 1 near-straight → 0 big curl
-        const w = elev * soft;
-        lof += w * 0.7 * elb; // forward fold (f2 is clamped below)
-        elb -= w * 1.9 * elb; // >1× ⇒ net droop below the humerus line
-      }
-      // Hard elbow floor: never let the forearm line up with the upper arm
-      // (the locked-plank silhouette). Preserve the bend's sign (a droop stays a
-      // droop) but guarantee at least ELBOW_FLOOR of visible flex.
-      if (elb > -ELBOW_FLOOR && elb < ELBOW_FLOOR) elb = elb < 0 ? -ELBOW_FLOOR : ELBOW_FLOOR;
       const soI = f === 0 ? SHL : SHR;
       const elI = f === 0 ? ELL : ELR;
       const haI = f === 0 ? HAL : HAR;
-      const outX = sgn * latSX;
-      const outZ = sgn * latSZ;
-      const sA = Math.sin(abd);
-      const cA = Math.cos(abd);
-      const sF = Math.sin(fw);
-      const cF = Math.cos(fw);
-      // d1 = (down*cosA + out*sinA)*cosF + fwd*sinF   (down = +y)
-      const d1x = outX * sA * cF + fwdSX * sF;
-      const d1y = cA * cF;
-      const d1z = outZ * sA * cF + fwdSZ * sF;
-      const eX = s3[soI * 3] + d1x * L_UARM * B;
-      const eY = s3[soI * 3 + 1] + d1y * L_UARM * B;
-      const eZ = s3[soI * 3 + 2] + d1z * L_UARM * B;
+      const useR = MOCAP_SWAP === 1 ? f === 0 : f === 1;
+      const uo = useR ? 12 : 6; // upper-arm dir offset in md
+      const fo = useR ? 15 : 9; // forearm dir offset in md
+      let ax = MOCAP_SR * md[uo] * latSX + md[uo + 1] * ux + MOCAP_SF * md[uo + 2] * fwdSX;
+      let ay = md[uo + 1] * uy;
+      let az = MOCAP_SR * md[uo] * latSZ + md[uo + 1] * uz + MOCAP_SF * md[uo + 2] * fwdSZ;
+      let al = Math.hypot(ax, ay, az) || 1;
+      const eX = s3[soI * 3] + (ax / al) * L_UARM * B;
+      const eY = s3[soI * 3 + 1] + (ay / al) * L_UARM * B;
+      const eZ = s3[soI * 3 + 2] + (az / al) * L_UARM * B;
       s3[elI * 3] = eX;
       s3[elI * 3 + 1] = eY;
       s3[elI * 3 + 2] = eZ;
-      const a2 = abd + elb;
-      const f2 = clamp(fw + lof, -1.35, 1.45);
-      const sA2 = Math.sin(a2);
-      const cA2 = Math.cos(a2);
-      const sF2 = Math.sin(f2);
-      const cF2 = Math.cos(f2);
-      s3[haI * 3] = eX + (outX * sA2 * cF2 + fwdSX * sF2) * L_FARM * B;
-      s3[haI * 3 + 1] = eY + cA2 * cF2 * L_FARM * B;
-      s3[haI * 3 + 2] = eZ + (outZ * sA2 * cF2 + fwdSZ * sF2) * L_FARM * B;
+      ax = MOCAP_SR * md[fo] * latSX + md[fo + 1] * ux + MOCAP_SF * md[fo + 2] * fwdSX;
+      ay = md[fo + 1] * uy;
+      az = MOCAP_SR * md[fo] * latSZ + md[fo + 1] * uz + MOCAP_SF * md[fo + 2] * fwdSZ;
+      al = Math.hypot(ax, ay, az) || 1;
+      s3[haI * 3] = eX + (ax / al) * L_FARM * B;
+      s3[haI * 3 + 1] = eY + (ay / al) * L_FARM * B;
+      s3[haI * 3 + 2] = eZ + (az / al) * L_FARM * B;
     }
 
     // Legs: analytic two-bone IK from each hip to its animated ankle. The
