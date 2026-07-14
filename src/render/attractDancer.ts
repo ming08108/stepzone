@@ -40,6 +40,7 @@
  */
 
 import { MOCAP_DIRS, MOCAP_FRAMES, MOCAP_STRIDE } from './mocapDance';
+import { MOCAP_DIRS as MOCAP_DIRS_2, MOCAP_FRAMES as MOCAP_FRAMES_2 } from './mocapDance2';
 
 // ---- design space (matches attractBackground.ts) ---------------------------
 
@@ -291,23 +292,38 @@ const GROOVE_ANTIC_AMT = 0.5; // coil rise as a fraction of the dip amplitude
 /** Circular / arithmetic mean of a per-frame float over the whole clip — the
  *  neutral the yaw/sway are measured against, so she centres on the viewer.
  *  Computed once at module load (deterministic, no per-frame cost). */
-function clipMean(k: number): number {
-  let s = 0;
-  for (let f = 0; f < MOCAP_FRAMES; f++) s += MOCAP_DIRS[f * MOCAP_STRIDE + k];
-  return s / MOCAP_FRAMES;
+interface MocapClip {
+  dirs: Float32Array;
+  frames: number;
+  meanHeading: number; // circular mean heading — the neutral the yaw is measured against
+  meanHipX: number; // arithmetic mean hip sway centre (x, z)
+  meanHipZ: number;
 }
-const MEAN_HEADING = (() => {
+/** Precompute a clip's neutral means (once at load) so several clips can share the
+ *  reconstruction, each centring on the viewer against its OWN mean pose. */
+function makeClip(dirs: Float32Array, frames: number): MocapClip {
+  const mean = (k: number): number => {
+    let s = 0;
+    for (let f = 0; f < frames; f++) s += dirs[f * MOCAP_STRIDE + k];
+    return s / frames;
+  };
   let sx = 0;
   let sy = 0;
-  for (let f = 0; f < MOCAP_FRAMES; f++) {
-    const h = MOCAP_DIRS[f * MOCAP_STRIDE + 45];
+  for (let f = 0; f < frames; f++) {
+    const h = dirs[f * MOCAP_STRIDE + 45];
     sx += Math.cos(h);
     sy += Math.sin(h);
   }
-  return Math.atan2(sy, sx);
-})();
-const MEAN_HIPX = clipMean(47);
-const MEAN_HIPZ = clipMean(48);
+  return { dirs, frames, meanHeading: Math.atan2(sy, sx), meanHipX: mean(47), meanHipZ: mean(48) };
+}
+/** The dance clips, one chosen per session for replay variety (like the avatar):
+ *  [0] a long, arm-forward idol routine; [1] a more athletic take (lunges, a bow,
+ *  level changes) from a different capture. All runtime layers (foot-IK, groove,
+ *  expression, scene rim) are clip-agnostic, so both play at full quality. */
+const MOCAP_CLIPS: readonly MocapClip[] = [
+  makeClip(MOCAP_DIRS, MOCAP_FRAMES),
+  makeClip(MOCAP_DIRS_2, MOCAP_FRAMES_2),
+];
 
 /** skel3 joint index → source mocap joint index (−1 = derived/accessory). The
  *  L/R cross: the dancer faces the viewer, so mocap-LEFT joints (3/4/5 arm,
@@ -438,6 +454,7 @@ export class AttractDancer {
   private readonly skel3 = new Float64Array(JOINTS * 3); // 3D joints (x,y,z)
   private readonly jscale = new Float32Array(JOINTS); // per-joint perspective scale
   private readonly md = new Float64Array(MOCAP_STRIDE); // sampled mocap frame (49)
+  private readonly clip: MocapClip; // the dance clip this instance plays (set in ctor)
   private readonly moff = new Float64Array(45); // world pelvis-relative offsets (15×xyz)
   private readonly footBlend = new Float64Array(2); // per-foot mocap→chart-target weight
 
@@ -529,8 +546,13 @@ export class AttractDancer {
   private tfVy = 0;
   private tfUl = 1;
 
-  constructor(variant: number) {
+  /** Number of dance clips available (for the caller's random per-session pick). */
+  static readonly CLIP_COUNT = MOCAP_CLIPS.length;
+
+  constructor(variant: number, clip = 0) {
     this.pal = PALETTES[((variant % PALETTES.length) + PALETTES.length) % PALETTES.length];
+    this.clip =
+      MOCAP_CLIPS[(((clip | 0) % MOCAP_CLIPS.length) + MOCAP_CLIPS.length) % MOCAP_CLIPS.length];
 
     // Dancer color zones: 3-step flat ramps toward near-black ink. Eyes/blush
     // are pre-composited over the lit face (the mesh is opaque — no alpha).
@@ -1049,21 +1071,22 @@ export class AttractDancer {
    *  tempo) with a time fallback during the chart-less lead-in. */
   private sampleMocap(drv: number, valid: boolean, time: number): void {
     const S = MOCAP_STRIDE;
+    const dirs = this.clip.dirs;
+    const frames = this.clip.frames;
     const t = valid ? (drv + MOCAP_PHASE) * MOCAP_FPB : time * 30;
-    let fp = t % MOCAP_FRAMES;
-    if (!(fp >= 0)) fp += MOCAP_FRAMES;
-    if (!(fp >= 0 && fp < MOCAP_FRAMES)) fp = 0;
+    let fp = t % frames;
+    if (!(fp >= 0)) fp += frames;
+    if (!(fp >= 0 && fp < frames)) fp = 0;
     const f0 = Math.floor(fp);
     const a = fp - f0;
-    const f1 = f0 + 1 >= MOCAP_FRAMES ? 0 : f0 + 1;
+    const f1 = f0 + 1 >= frames ? 0 : f0 + 1;
     const o0 = f0 * S;
     const o1 = f1 * S;
     const md = this.md;
-    for (let k = 0; k < S; k++)
-      md[k] = MOCAP_DIRS[o0 + k] + (MOCAP_DIRS[o1 + k] - MOCAP_DIRS[o0 + k]) * a;
-    if (fp > MOCAP_FRAMES - MOCAP_SEAM) {
-      const w = (fp - (MOCAP_FRAMES - MOCAP_SEAM)) / MOCAP_SEAM;
-      for (let k = 0; k < S; k++) md[k] += (MOCAP_DIRS[k] - md[k]) * w;
+    for (let k = 0; k < S; k++) md[k] = dirs[o0 + k] + (dirs[o1 + k] - dirs[o0 + k]) * a;
+    if (fp > frames - MOCAP_SEAM) {
+      const w = (fp - (frames - MOCAP_SEAM)) / MOCAP_SEAM;
+      for (let k = 0; k < S; k++) md[k] += (dirs[k] - md[k]) * w;
     }
   }
 
@@ -1083,7 +1106,7 @@ export class AttractDancer {
 
     // --- pelvis world transform from the mocap heading -----------------------
     // yaw = damped deviation from the clip's mean heading (keeps her ~facing us).
-    const yawRaw = md[45] - MEAN_HEADING;
+    const yawRaw = md[45] - this.clip.meanHeading;
     const yaw = clamp(Number.isFinite(yawRaw) ? yawRaw * MOCAP_YAW_DAMP : 0, -1.2, 1.2);
     const cy = Math.cos(yaw);
     const sy = Math.sin(yaw);
@@ -1108,8 +1131,8 @@ export class AttractDancer {
     // Pelvis position: damped horizontal hip sway; grounded so the LOWEST foot
     // sits on the pad floor plane (the bounce comes from the feet/pelvis relative
     // motion, NOT from md[46], so she never floats).
-    let pelX = CX + (md[47] - MEAN_HIPX) * legPx * MOCAP_SWAY;
-    let pelZ = (md[48] - MEAN_HIPZ) * legPx * MOCAP_SWAY;
+    let pelX = CX + (md[47] - this.clip.meanHipX) * legPx * MOCAP_SWAY;
+    let pelZ = (md[48] - this.clip.meanHipZ) * legPx * MOCAP_SWAY;
     const lowestFootYoff = Math.max(moff[11 * 3 + 1], moff[14 * 3 + 1]); // y DOWN
     let pelY = FOOT_Y - L_SHOE * B - lowestFootYoff;
     // Chart-reactive bounce: sink the WHOLE body toward the pad on the beat (y is

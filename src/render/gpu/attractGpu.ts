@@ -587,7 +587,15 @@ export class AttractGpu {
     const v = (((cfg.variant | 0) % n) + n) % n;
     this.pal = PALETTES[v];
     // One dancer per song (fresh spring/cursor state), stepping to this chart.
-    this.dancer = new AttractDancer(v);
+    // Pick one of the dance clips at random for replay variety (like the avatar) —
+    // a one-time per-song choice; the per-frame reconstruction stays deterministic.
+    // `?dancerClip=N` forces a clip (testing), else random.
+    const clipQ = new URLSearchParams(location.search).get('dancerClip');
+    const clipIdx =
+      clipQ !== null
+        ? parseInt(clipQ, 10) || 0
+        : Math.floor(Math.random() * AttractDancer.CLIP_COUNT);
+    this.dancer = new AttractDancer(v, clipIdx);
     this.dancer.setSteps(cfg.steps ?? []);
     // The heavy textured avatar is single-player only (two of them starve the
     // field in 2-player) — kick off its load lazily here. When it's off, the
