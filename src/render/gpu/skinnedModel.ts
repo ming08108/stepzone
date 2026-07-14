@@ -188,21 +188,25 @@ fn fs(
   // The bands are lifted (0.72..1.05) so nothing sinks into a dead grey.
   let ndl = dot(n, l) * 0.5 + 0.5; // half-lambert — softer wrap, no black side
   let band = smoothstep(0.34, 0.5, ndl) * 0.2 + smoothstep(0.55, 0.72, ndl) * 0.18;
-  let shade = 0.86 + band; // brighter base (0.86 shadow → ~1.24 lit) — she was underexposed
-  // Neon rim — cyan→magenta by facing — so the silhouette pops off the tunnel
-  // and the skin never looks pale/ghostly. Additive, view-based Fresnel. Stronger
-  // now: she should read as lit BY the neon world, not floating dim over it.
-  let fres = pow(1.0 - max(dot(n, viewDir), 0.0), 2.1);
-  let rimCol = mix(vec3f(0.22, 0.72, 1.0), vec3f(1.0, 0.3, 0.82), n.x * 0.5 + 0.5);
-  let rim = rimCol * fres * 1.15;
-  // Neon ambient fill: wash the shadow side with a faint cyan/magenta instead of
-  // muddy grey, so she picks up the environment's colour.
-  let fill = mix(vec3f(0.12, 0.2, 0.36), vec3f(0.3, 0.12, 0.3), n.x * 0.5 + 0.5) * (1.0 - ndl) * 0.7;
-  // Pad up-glow: the dancepad below throws magenta light onto downward-facing
-  // surfaces (shins, shoe tops, jaw underside) so she reads as standing ON a lit
-  // stage, grounding her in the scene.
-  let padGlow = vec3f(1.0, 0.28, 0.72) * max(-n.y, 0.0) * 0.4;
-  var lit = albedo * frame.tint.rgb * shade + albedo * fill + rim + padGlow;
+  let shade = 0.9 + band; // brighter base — she was underexposed
+  // The neon world's colour, by facing: cyan on one side, magenta on the other.
+  let envCol = mix(vec3f(0.35, 0.85, 1.15), vec3f(1.2, 0.42, 0.95), n.x * 0.5 + 0.5);
+  // TINT the albedo toward that neon (multiplied, not added) so even a white
+  // outfit goes lavender/cyan instead of staying neutral grey — additive light
+  // washed out on white, which is why the earlier pass read as "bright but flat".
+  let tinted = albedo * mix(vec3f(1.0), envCol, 0.42);
+  // Ambient neon fill into the shadow side + a camera-facing fill so the FACE is
+  // never a black void (head self-shadow was eating the character read).
+  let fill = envCol * (1.0 - ndl) * 0.24;
+  let front = max(dot(n, viewDir), 0.0);
+  var lit = tinted * frame.tint.rgb * shade + tinted * fill + albedo * front * 0.16;
+  // Hot rim — BLEND the silhouette toward saturated neon (not additive), so it
+  // reads as a burning cyan/magenta edge at attract distance even over white.
+  let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.7);
+  lit = mix(lit, envCol * 1.5, clamp(rimAmt * 0.8, 0.0, 0.85));
+  // Pad up-glow: magenta light from the deck onto downward-facing surfaces
+  // (shins, shoe tops, jaw underside) — grounds her ON the lit stage.
+  lit += vec3f(1.0, 0.3, 0.72) * max(-n.y, 0.0) * 0.5;
   // Re-encode to sRGB for textured prims (linear lighting → sRGB store);
   // flat-color prims keep the renderer's original non-linear passthrough.
   if (useTex) { lit = pow(max(lit, vec3f(0.0)), vec3f(1.0 / 2.2)); }
