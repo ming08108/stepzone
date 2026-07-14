@@ -602,25 +602,32 @@ export class AttractGpu {
     // turned the face into a murky, hollow-eyed smudge in-game.
     void dim;
     model.setTint(1.12, 1.12, 1.12);
-    // Dynamic camera: a slow orbit + gentle breathe, with an on-beat push-in,
-    // around the framed model. (The background shader sways to match.)
+    // Dynamic camera — a proper moving shot, not a static frame: a wide,
+    // two-frequency orbit sweeps most of the way around her and never repeats;
+    // the eye cranes up and dips on a slower arc; it breathes in/out and punches
+    // IN on every beat. (The background shader sways to match.)
     const c = model.center;
     const r = model.radius;
     const fovY = 0.62;
     const phase = b - Math.floor(b);
     const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
-    const orbit = 0.3 * Math.sin(now * 0.23);
-    const dolly = 1 + 0.07 * Math.sin(now * 0.16) - 0.05 * kick;
-    const dist = (r / Math.sin(fovY / 2)) * 1.05 * dolly;
-    const panY = 0.1 * r * Math.sin(now * 0.19);
+    const orbit = 0.62 * Math.sin(now * 0.16) + 0.22 * Math.sin(now * 0.37 + 1.0);
+    const crane = 0.3 * r * Math.sin(now * 0.13 + 0.5);
+    const dolly = 1 + 0.1 * Math.sin(now * 0.11) - 0.07 * kick;
+    const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
+    const panY = 0.08 * r * Math.sin(now * 0.19);
     // Frame lift: raising both eye and target drops the subject in frame so
     // her feet land on the near (large) cells of the shader floor grid instead
     // of hovering over its far rows.
     const lift = 0.13 * r;
     model.render(enc, viewW, viewH, {
       fovY,
-      eye: [c[0] + Math.sin(orbit) * dist, c[1] + 0.35 * r + lift, c[2] + Math.cos(orbit) * dist],
-      target: [c[0], c[1] + panY + lift, c[2]],
+      eye: [
+        c[0] + Math.sin(orbit) * dist,
+        c[1] + 0.32 * r + lift + crane,
+        c[2] + Math.cos(orbit) * dist,
+      ],
+      target: [c[0], c[1] + panY + lift + crane * 0.35, c[2]],
     });
     this.usingModel = true;
   }
@@ -668,9 +675,11 @@ export class AttractGpu {
     // Dynamic camera sway on the background — drifts + breathes with the model's
     // orbit so the whole scene reads as one moving camera.
     const kick = valid ? Math.exp(-6 * phase) : 0;
-    d[44] = 0.02 * Math.sin(now * 0.23); // panX (tracks the model orbit)
-    d[45] = 0.008 * Math.sin(now * 0.19); // panY
-    d[46] = 1 + 0.05 * Math.sin(now * 0.16) + 0.04 * kick; // zoom breathe + beat push
+    // Track the model's wider two-frequency orbit + beat push so the tunnel
+    // reads as the same moving camera.
+    d[44] = 0.05 * Math.sin(now * 0.16) + 0.018 * Math.sin(now * 0.37 + 1.0); // panX
+    d[45] = 0.02 * Math.sin(now * 0.13 + 0.5); // panY (tracks the crane)
+    d[46] = 1 + 0.06 * Math.sin(now * 0.11) + 0.05 * kick; // zoom breathe + beat push
     d[47] = 0;
     this.device.queue.writeBuffer(this.uniform, 0, d);
     pass.setPipeline(this.pipeline);
