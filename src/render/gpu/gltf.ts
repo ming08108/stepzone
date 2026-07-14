@@ -160,6 +160,12 @@ export interface GltfPrimitive {
   nodeIndex: number;
   /** Skin index, or -1 when the primitive is a rigid (non-skinned) mesh. */
   skinIndex: number;
+  /** VRM expression morph deltas for this primitive, keyed by preset name
+   *  (`joy`, `a`, `blink`, …): each a f32x3-per-vertex POSITION delta (already
+   *  scaled by the blend-shape bind weight), summed if a preset binds several
+   *  targets on this mesh. Only present on face primitives that carry the morph.
+   *  Undefined when the model has no VRM blend shapes. */
+  morphs?: Record<string, Float32Array<ArrayBuffer>>;
 }
 
 /** A decode-ready embedded image (raw compressed bytes + MIME type). */
@@ -230,6 +236,8 @@ interface RawGltf {
       indices?: number;
       material?: number;
       mode?: number;
+      /** Morph targets: each maps an attribute (POSITION/NORMAL) to an accessor. */
+      targets?: Record<string, number>[];
     }[];
   }[];
   skins?: { joints: number[]; inverseBindMatrices?: number; skeleton?: number }[];
@@ -257,7 +265,16 @@ interface RawGltf {
   bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[];
   buffers?: { byteLength: number; uri?: string }[];
   extensions?: {
-    VRM?: { humanoid?: { humanBones?: { bone: string; node: number }[] } };
+    VRM?: {
+      humanoid?: { humanBones?: { bone: string; node: number }[] };
+      blendShapeMaster?: {
+        blendShapeGroups?: {
+          presetName?: string;
+          name?: string;
+          binds?: { mesh: number; index: number; weight: number }[];
+        }[];
+      };
+    };
     VRMC_vrm?: { humanoid?: { humanBones?: Record<string, { node: number }> } };
   };
 }
@@ -468,6 +485,14 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
     };
   });
 
+  // VRM 0.x expression → morph binds. We only pull the presets the attract
+  // dancer drives (a smile, an open mouth, a blink) so the face can perform to
+  // the beat instead of holding a dead neutral. Map: preset → binds on a mesh.
+  const MORPH_PRESETS: readonly string[] = ['joy', 'fun', 'a', 'blink'];
+  const blendGroups = (json.extensions?.VRM?.blendShapeMaster?.blendShapeGroups ?? [])
+    .map((g) => ({ preset: (g.presetName || g.name || '').toLowerCase(), binds: g.binds ?? [] }))
+    .filter((g) => MORPH_PRESETS.includes(g.preset));
+
   // Drawable primitives: every node that references a mesh.
   const primitives: GltfPrimitive[] = [];
   for (let ni = 0; ni < rawNodes.length; ni++) {
@@ -515,6 +540,28 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
       const baseColor: [number, number, number, number] =
         bcf && bcf.length === 4 ? [bcf[0], bcf[1], bcf[2], bcf[3]] : [0.8, 0.8, 0.8, 1];
 
+      // Expression morph deltas for the presets the dancer drives. For each such
+      // preset that binds a target on THIS mesh, read that target's POSITION delta
+      // (accumulating if a preset binds several targets) scaled by the bind weight.
+      let morphs: Record<string, Float32Array<ArrayBuffer>> | undefined;
+      const targets = prim.targets;
+      if (targets && targets.length && blendGroups.length) {
+        for (const g of blendGroups) {
+          let acc: Float32Array<ArrayBuffer> | undefined;
+          for (const b of g.binds) {
+            if (b.mesh !== meshIndex) continue;
+            const tgt = targets[b.index];
+            const pAcc = tgt?.['POSITION'];
+            if (pAcc === undefined) continue;
+            const delta = readFloat32(json, bin, pAcc);
+            const s = (b.weight ?? 100) / 100;
+            if (!acc) acc = new Float32Array(delta.length);
+            for (let k = 0; k < delta.length && k < acc.length; k++) acc[k] += delta[k] * s;
+          }
+          if (acc) (morphs ??= {})[g.preset] = acc;
+        }
+      }
+
       primitives.push({
         position,
         normal,
@@ -527,6 +574,7 @@ export function parseGlb(buffer: ArrayBuffer): GltfModel {
         nodeIndex: ni,
         // Only mark skinned when the primitive actually carries skin data.
         skinIndex: joints.some((v) => v !== 0) || weights.some((v) => v !== 0) ? skinIndex : -1,
+        morphs,
       });
     }
   }

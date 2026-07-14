@@ -81,6 +81,12 @@ interface GpuPrimitive {
   texBind: GPUBindGroup; // group 2: base-color texture + sampler
   recolor: boolean; // replace texture hue with baseColor, keep luminance (hair tint)
   faceKind: number; // 0 = body, 1 = face/skin (spare the neon wash), 2 = eye highlight (emissive)
+  // Expression morph state (face prims only): the bind base positions and the
+  // per-preset f32x3 POSITION deltas, so `applyExpression` can rebuild the vertex
+  // buffer each frame as base + Σ weightᵢ·deltaᵢ. Undefined for prims with no morph.
+  basePos?: Float32Array<ArrayBuffer>;
+  morphs?: Record<string, Float32Array<ArrayBuffer>>;
+  morphScratch?: Float32Array<ArrayBuffer>; // reused morphed-position buffer (no per-frame alloc)
 }
 
 const DRAW_STRIDE = 256; // dynamic-uniform offset alignment
@@ -848,6 +854,9 @@ export class SkinnedModel {
         texBind: mat && p.materialIndex >= 0 ? materialBind[p.materialIndex] : defaultBind,
         recolor: false,
         faceKind: 0,
+        basePos: p.morphs ? p.position.slice() : undefined,
+        morphs: p.morphs,
+        morphScratch: p.morphs ? p.position.slice() : undefined,
       };
     });
     // Classify FACE prims by material name so they can be spared the neon wash —
@@ -1069,6 +1078,49 @@ export class SkinnedModel {
     quatFromTo(this.qC, 0, N1, N); // spin about dir aligning N1 → N
     if (w < 1) quatSlerpIdentity(this.qC, 0, this.qC, 0, w); // ease in with bend
     quatMul(q, 0, this.qC, 0, q, 0); // q = qRoll · q
+  }
+
+  private readonly morphW: Record<string, number> = { joy: 0, fun: 0, a: 0, blink: 0 };
+
+  /** Drive the face expression morphs from the beat so she PERFORMS instead of
+   *  holding a dead neutral: a soft idol smile that swells a touch on each beat,
+   *  a subtle open-mouth "ah" accent just after the downbeat, and deterministic
+   *  periodic blinks. Rebuilds the morphed face vertex buffers (base + Σ w·delta)
+   *  in place — no per-frame allocation, no RNG (blinks key off `now` seconds so
+   *  they don't feel metronomic). No-op on models without VRM blend shapes. */
+  applyExpression(now: number, beat: number): void {
+    const valid = Number.isFinite(beat) && beat >= 0;
+    const phase = valid ? beat - Math.floor(beat) : 0;
+    const kick = valid ? Math.exp(-6 * phase) : 0;
+    const w = this.morphW;
+    w.joy = 0.4 + 0.16 * kick; // held smile, lifts on the beat
+    w.fun = 0.12; // a hint of "fun" softens the smile without baring teeth
+    // Open mouth: a soft "ah" right on the beat that decays over the first ~1/3.
+    w.a = valid ? 0.16 * Math.max(0, 1 - phase * 3) : 0;
+    // Blink: a quick close/reopen every ~3.4s (seconds, so it never locks to the
+    // beat and read as robotic). A triangle spike over the last/first ~3.5% of the
+    // cycle → ~0.12s closed. Deterministic; `now` may be any finite seconds value.
+    const bf = valid || Number.isFinite(now) ? now / 3.4 - Math.floor(now / 3.4) : 0;
+    const blink = Math.min(
+      1,
+      (bf > 0.965 ? (bf - 0.965) / 0.035 : 0) + (bf < 0.03 ? 1 - bf / 0.03 : 0),
+    );
+    w.blink = Number.isFinite(blink) ? blink : 0;
+    for (const gp of this.prims) {
+      const base = gp.basePos;
+      const out = gp.morphScratch;
+      const morphs = gp.morphs;
+      if (!base || !out || !morphs) continue;
+      out.set(base);
+      for (const preset in morphs) {
+        const wt = w[preset] ?? 0;
+        if (wt <= 0.0005) continue;
+        const d = morphs[preset];
+        const n = Math.min(out.length, d.length);
+        for (let k = 0; k < n; k++) out[k] += d[k] * wt;
+      }
+      this.device.queue.writeBuffer(gp.posBuf, 0, out);
+    }
   }
 
   retargetFromSkeleton(skel: Float64Array, idx: Record<string, number>): void {
