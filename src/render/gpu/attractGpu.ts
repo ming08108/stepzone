@@ -469,6 +469,7 @@ export class AttractGpu {
   private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
   private flatBg = false; // ?dancerFlat dev aid: flat neutral bg for inspecting the dancer
+  private camAz: number | null = null; // ?dancerCam=<rad> dev aid: lock the camera azimuth
   private padFrame: ReturnType<AttractDancer['build']> | null = null; // for the pad-under-avatar draw
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
   private readonly dancerUniform: GPUBuffer;
@@ -604,7 +605,14 @@ export class AttractGpu {
     // `?dancerFlat` renders a flat neutral background instead of the neon tunnel —
     // a dev aid for inspecting the dancer's silhouette/geometry without the busy
     // scene hiding rig issues (does not affect the shipped scene).
-    this.flatBg = new URLSearchParams(location.search).has('dancerFlat');
+    const q = new URLSearchParams(location.search);
+    this.flatBg = q.has('dancerFlat');
+    // `?dancerCam=<radians>` locks the camera azimuth (0=front, ~1.57=side,
+    // ~3.14=back) and stills the crane/dolly/pan — a dev aid for inspecting the
+    // dancer's geometry from a chosen angle (depth clipping the front view hides).
+    const camQ = q.get('dancerCam');
+    this.camAz =
+      camQ !== null && camQ !== '' && Number.isFinite(parseFloat(camQ)) ? parseFloat(camQ) : null;
     // The heavy textured avatar is single-player only (two of them starve the
     // field in 2-player) — kick off its load lazily here. When it's off, the
     // light procedural dancer carries the whole show.
@@ -681,11 +689,15 @@ export class AttractGpu {
     const fovY = 0.62;
     const phase = b - Math.floor(b);
     const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
-    const orbit = 0.62 * Math.sin(now * 0.16) + 0.22 * Math.sin(now * 0.37 + 1.0);
-    const crane = 0.3 * r * Math.sin(now * 0.13 + 0.5);
-    const dolly = 1 + 0.1 * Math.sin(now * 0.11) - 0.07 * kick;
+    // A locked azimuth (dev inspection) stills the wander for a stable angle.
+    const fixed = this.camAz !== null;
+    const orbit = fixed
+      ? (this.camAz as number)
+      : 0.62 * Math.sin(now * 0.16) + 0.22 * Math.sin(now * 0.37 + 1.0);
+    const crane = fixed ? 0 : 0.3 * r * Math.sin(now * 0.13 + 0.5);
+    const dolly = fixed ? 1 : 1 + 0.1 * Math.sin(now * 0.11) - 0.07 * kick;
     const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
-    const panY = 0.08 * r * Math.sin(now * 0.19);
+    const panY = fixed ? 0 : 0.08 * r * Math.sin(now * 0.19);
     // Frame lift: raising both eye and target drops the subject in frame so
     // her feet land on the near (large) cells of the shader floor grid instead
     // of hovering over its far rows.
