@@ -317,10 +317,12 @@ export class ThreeVrmDancer {
     this.legLen = left.L1 + left.L2;
     this.socketH = this.ankleY + this.legLen * 0.88;
     for (const h of HOME) h.setY(this.ankleY);
-    for (const f of this.feet) {
-      f.plant.setY(this.ankleY);
-      f.from.setY(this.ankleY);
-      f.to.setY(this.ankleY);
+    for (let f = 0; f < 2; f++) {
+      const st = this.feet[f];
+      st.plant.setY(this.ankleY);
+      st.from.setY(this.ankleY);
+      st.to.setY(this.ankleY);
+      this.footPos[f].copy(st.plant); // seed so the first swing glides from rest, not (0,0,0)
     }
   }
 
@@ -473,12 +475,11 @@ export class ThreeVrmDancer {
       this.stepCursor++;
       const land = row.beat;
       if (land < beat - 0.25) continue; // missed (seek/lag) — skip cleanly
-      const lift = land - 1;
       const jump = (row.lCol ?? -1) >= 0 && (row.rCol ?? -1) >= 0;
-      if ((row.lCol ?? -1) >= 0) this.assignFoot(0, row.lCol as number, lift, land);
-      if ((row.rCol ?? -1) >= 0) this.assignFoot(1, row.rCol as number, lift, land);
+      if ((row.lCol ?? -1) >= 0) this.assignFoot(0, row.lCol as number, land, beat);
+      if ((row.rCol ?? -1) >= 0) this.assignFoot(1, row.rCol as number, land, beat);
       if (jump) {
-        this.jumpWin.t0 = lift;
+        this.jumpWin.t0 = Math.max(beat, land - 1);
         this.jumpWin.t1 = land;
       }
     }
@@ -503,24 +504,28 @@ export class ThreeVrmDancer {
     ];
     const step = SYNTH[((ib % SYNTH.length) + SYNTH.length) % SYNTH.length];
     if (step === 'jump') {
-      this.assignFoot(0, 0, ib, ib + 1);
-      this.assignFoot(1, 3, ib, ib + 1);
-      this.jumpWin.t0 = ib;
+      this.assignFoot(0, 0, ib + 1, beat);
+      this.assignFoot(1, 3, ib + 1, beat);
+      this.jumpWin.t0 = beat;
       this.jumpWin.t1 = ib + 1;
       return;
     }
     // Only the stepping foot moves; the other HOLDS its last arrow and flows straight
     // to its next step — never yanked back to centre (which read as a twitchy reset).
-    this.assignFoot(step.foot, step.panel, ib, ib + 1);
+    this.assignFoot(step.foot, step.panel, ib + 1, beat);
   }
 
-  private assignFoot(foot: 0 | 1, panel: number, t0: number, t1: number): void {
+  /** Schedule `foot` to land on `panel` at beat `land`. Starts the swing from where the
+   *  foot IS right now (this frame's footPos) with t0 clamped to the present, so a step
+   *  scheduled less than a beat early glides in from the current spot instead of
+   *  teleporting to the middle of a lerp that "already started" in the past. */
+  private assignFoot(foot: 0 | 1, panel: number, land: number, nowBeat: number): void {
     const st = this.feet[foot];
-    st.from.copy(st.plant);
+    st.from.copy(this.footPos[foot]);
     st.to.copy(PANEL[panel]).setY(this.ankleY);
-    st.t0 = t0;
-    st.t1 = t1;
-    this.litPanel[panel] = t1;
+    st.t0 = Math.max(nowBeat, land - 1);
+    st.t1 = Math.max(st.t0 + 0.05, land);
+    this.litPanel[panel] = land;
   }
 
   /** Per-foot swing/plant → footPos + support weights; returns extra hip lift for jumps. */

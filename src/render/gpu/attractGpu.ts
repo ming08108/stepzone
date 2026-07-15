@@ -551,9 +551,12 @@ export class AttractGpu {
     // Throttle her HEAVY per-frame work (three render + spring bones + foot-IK) to
     // ~60fps: she's a background element, so at 144/240Hz the composite reuses the last
     // render for the in-between frames — the note field itself stays at full refresh.
-    if (d.colorView && now - this.lastDancerUpdate < 1 / 62) return;
-    const dt = Math.min(Math.max(now - this.lastDancerUpdate, 0), 1 / 30);
-    this.lastDancerUpdate = now;
+    // Throttle + physics dt use a MONOTONIC wall clock, NOT the song `now` (which seeks/
+    // loops/resets between songs — a backward `now` would freeze her forever).
+    const wall = performance.now() * 0.001;
+    if (d.colorView && wall - this.lastDancerUpdate < 1 / 62) return;
+    const dt = Math.min(Math.max(wall - this.lastDancerUpdate, 0), 1 / 30);
+    this.lastDancerUpdate = wall;
     d.setSize(viewW, viewH);
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     d.build(now, b, dt); // animation + chart footwork + foot-IK + spring bones
