@@ -119,7 +119,14 @@ export const VRM_CHAINS: readonly BoneChain[] = [
     pole: ['pelvis', 'chest', 'shoulderR'],
     poleModel: ['spine', 'chest', 'leftUpperArm'],
   },
-  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.72 },
+  // Neck heavily damped: the head bone is rigid to the neck, so a big neck BEND
+  // swings the head off the shoulders and — because linear-blend skinning can't
+  // preserve volume across a sharp bend — stretches and thins the neck mesh (it
+  // read as a rubber-necked giraffe on head-up/turned poses). The bones never
+  // change length (rotation-only retarget), so this is purely the skin stretching
+  // over the bend; keeping the neck mostly upright (damp 0.45) holds the head on
+  // the shoulders and keeps the column solid, at the cost of a little head sway.
+  { bone: 'neck', restChild: 'head', from: 'neck', to: 'head', damp: 0.45 },
   // The clavicle follows the arm PARTWAY (low damp) so a raised arm doesn't
   // concentrate the whole bend at the deltoid — that linear-blend-skinning pinch
   // is what distorts the shoulder. It's aimed at the same target as the upper arm
