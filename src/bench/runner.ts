@@ -26,6 +26,7 @@ import { parseSimfile } from '../parse/loader';
 import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
+import { buildAttractConfig } from '../render/attractConfig';
 import { makeBenchSsc, type BenchChartOpts } from './benchChart';
 
 export interface BenchScenario {
@@ -42,6 +43,10 @@ export interface BenchScenario {
   /** Composite a moving background VIDEO — exercises the per-frame external-
    *  texture import + bind-group rebuild the image path never touches. */
   bgVideo?: boolean;
+  /** Render the DANCE attract background: the neon tunnel + the three.js VRM dancer
+   *  (chart-footed) composited behind the field. Warmed up so the measured window
+   *  includes the dancer, not just the tunnel. */
+  bgDance?: boolean;
   /** Render this many extra rival field views on the one canvas (0..3), each a
    *  separate autoplayed mirror judge — the live-versus path (docs/VERSUS.md).
    *  1 = 2 players, 3 = a full 4-player race. */
@@ -92,6 +97,14 @@ export const BENCH_SCENARIOS: BenchScenario[] = [
     chart: STRESS_CHART,
     scrollValue: 1,
     bgVideo: true,
+  },
+  {
+    id: 'gpu-arcade-stress-bgdance',
+    label: 'WEBGPU · STRESS + 3D DANCER',
+    noteSkin: 'arcade',
+    chart: STRESS_CHART,
+    scrollValue: 1,
+    bgDance: true,
   },
   {
     id: 'gpu-itg-stress',
@@ -446,6 +459,7 @@ const BENCH_META = {
 async function buildScene(
   scn: BenchScenario,
   container: HTMLElement,
+  signal?: AbortSignal,
 ): Promise<Scene | { skipped: string }> {
   const song = parseSimfile(makeBenchSsc(scn.chart), 'bench.ssc');
   const chart = song.charts[0];
@@ -516,6 +530,26 @@ async function buildScene(
     );
   }
   field.prewarm(); // bake atlas + compile pipelines before the measured window
+
+  if (scn.bgDance) {
+    // The neon tunnel + three.js VRM dancer, footed to this chart. Force a committed
+    // model (PS1 Miku ships freely + loads fast) so the bench is deterministic and
+    // never 404s on the gitignored default.
+    const acfg = buildAttractConfig(BENCH_META.title, timing, chart);
+    field.setAttract({ ...acfg, model: true, modelId: 'ps1' });
+    // Warm the dancer: pump frames until it has loaded AND three has produced its
+    // first frame (VRM decode + async pipeline compile), so the measured window
+    // captures the dancer's real per-frame cost rather than the tunnel-only loading.
+    const t0 = performance.now();
+    let wb = 0;
+    while (!field.attractDancerRendered() && performance.now() - t0 < 8000) {
+      throwIfAborted(signal);
+      await nextFrame(signal);
+      field.draw(judge, START_OFFSET_SECONDS + (performance.now() - t0) / 1000, wb, 0.5, fb);
+      wb += 0.13;
+    }
+  }
+
   return {
     ...common,
     render: (now, beat, progress) => {
@@ -593,7 +627,7 @@ async function runScenario(
     growsInWindow: 0,
   });
 
-  const built = await buildScene(scn, opts.container);
+  const built = await buildScene(scn, opts.container, opts.signal);
   if ('skipped' in built) {
     return skippedResult(built.skipped);
   }

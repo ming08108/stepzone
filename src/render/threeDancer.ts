@@ -54,6 +54,14 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 
 const SAMBA_URL = '/threejs-demo/samba.fbx';
 
+/** Cap the offscreen dancer render height (keep aspect) — she's a background element
+ *  composited (upscaled) behind the field, so full 4K per frame is wasted GPU. */
+const MAX_OFFSCREEN_H = 960;
+function capOffscreen(w: number, h: number): [number, number] {
+  const s = Math.min(1, MAX_OFFSCREEN_H / Math.max(1, h));
+  return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
+}
+
 interface Leg {
   hip: THREE.Object3D;
   knee: THREE.Object3D;
@@ -129,6 +137,19 @@ export class ThreeVrmDancer {
   private qP = new THREE.Quaternion();
   private hipPos = new THREE.Vector3();
   private kneePos = new THREE.Vector3();
+  // IK hot-path scratch (solveLeg 2×/frame, orient 4×/frame) — reused, never allocated.
+  private sToT = new THREE.Vector3();
+  private sN = new THREE.Vector3();
+  private sPole = new THREE.Vector3();
+  private sAxis = new THREE.Vector3();
+  private sKneeDir = new THREE.Vector3();
+  private sAim = new THREE.Vector3();
+  private oX1 = new THREE.Vector3();
+  private oY1 = new THREE.Vector3();
+  private oZ1 = new THREE.Vector3();
+  private oX = new THREE.Vector3();
+  private oSec = new THREE.Vector3();
+  private oZ = new THREE.Vector3();
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
   private footPos = [new THREE.Vector3(), new THREE.Vector3()];
@@ -228,20 +249,27 @@ export class ThreeVrmDancer {
     // Renderer — shared device (offscreen) or own device (canvas).
     void format; // reserved: the offscreen RT format three picks is sampleable as-is
     if (device) {
+      // Cap the OFFSCREEN render resolution — the dancer is a background element and
+      // the composite upscales with a linear sampler, so rendering the ~25k-tri VRM at
+      // full 4K every frame is wasted GPU. Big saving on high-DPI, invisible in motion.
+      const [cw, ch] = capOffscreen(w, h);
       this.renderer = new THREE.WebGPURenderer({
-        canvas: canvas ?? (new OffscreenCanvas(w, h) as unknown as HTMLCanvasElement),
+        canvas: canvas ?? (new OffscreenCanvas(cw, ch) as unknown as HTMLCanvasElement),
         device,
         antialias: true,
         alpha: true,
       });
-      this.rt = new THREE.RenderTarget(w, h, { depthBuffer: true, samples: 4 });
+      this.rt = new THREE.RenderTarget(cw, ch, { depthBuffer: true, samples: 4 });
+      this.renderer.setSize(cw, ch, false);
     } else {
       this.renderer = new THREE.WebGPURenderer({ canvas: canvas!, antialias: true });
       this.renderer.setPixelRatio(
         Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1),
       );
+      this.renderer.setSize(w, h, false);
     }
-    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
     this.renderer.toneMapping = THREE.NeutralToneMapping;
     await this.renderer.init();
     if (this.disposed) return;
@@ -537,15 +565,15 @@ export class ThreeVrmDancer {
     ref: THREE.Vector3,
     aimWorld: THREE.Vector3,
   ): void {
-    const x1 = child.clone();
-    const y1 = ref.clone().addScaledVector(x1, -ref.dot(x1)).normalize();
-    const z1 = new THREE.Vector3().crossVectors(x1, y1);
+    const x1 = this.oX1.copy(child);
+    const y1 = this.oY1.copy(ref).addScaledVector(x1, -ref.dot(x1)).normalize();
+    const z1 = this.oZ1.crossVectors(x1, y1);
     this.mL.makeBasis(x1, y1, z1);
-    const X = aimWorld.clone().normalize();
-    const sec = this.FWD.clone();
+    const X = this.oX.copy(aimWorld).normalize();
+    const sec = this.oSec.copy(this.FWD);
     if (Math.abs(sec.dot(X)) > 0.98) sec.set(0, 1, 0);
     const Y = sec.addScaledVector(X, -sec.dot(X)).normalize();
-    const Z = new THREE.Vector3().crossVectors(X, Y);
+    const Z = this.oZ.crossVectors(X, Y);
     this.mW.makeBasis(X, Y, Z);
     this.qW
       .setFromRotationMatrix(this.mW)
@@ -557,29 +585,34 @@ export class ThreeVrmDancer {
   private solveLeg(leg: Leg, targetWorld: THREE.Vector3): void {
     leg.hip.updateWorldMatrix(true, false);
     leg.hip.getWorldPosition(this.hipPos);
-    const toT = targetWorld.clone().sub(this.hipPos);
+    const toT = this.sToT.copy(targetWorld).sub(this.hipPos);
     const d = THREE.MathUtils.clamp(
       toT.length(),
       Math.abs(leg.L1 - leg.L2) + 1e-3,
       leg.L1 + leg.L2 - 1e-3,
     );
-    const n = toT.clone().normalize();
+    const n = this.sN.copy(toT).normalize();
     const cosHip = THREE.MathUtils.clamp(
       (leg.L1 * leg.L1 + d * d - leg.L2 * leg.L2) / (2 * leg.L1 * d),
       -1,
       1,
     );
     const hipAngle = Math.acos(cosHip);
-    const pole = this.FWD.clone().sub(n.clone().multiplyScalar(this.FWD.dot(n)));
+    const pole = this.sPole.copy(this.FWD).addScaledVector(n, -this.FWD.dot(n));
     if (pole.lengthSq() < 1e-6) pole.set(0, 0, 1);
     pole.normalize();
-    const axis = new THREE.Vector3().crossVectors(n, pole).normalize();
-    const kneeDir = n.clone().applyAxisAngle(axis, hipAngle);
+    const axis = this.sAxis.crossVectors(n, pole).normalize();
+    const kneeDir = this.sKneeDir.copy(n).applyAxisAngle(axis, hipAngle);
     this.kneePos.copy(this.hipPos).addScaledVector(kneeDir, leg.L1);
-    this.orient(leg.hip, leg.hipChild, leg.hipRef, this.kneePos.clone().sub(this.hipPos));
+    this.orient(leg.hip, leg.hipChild, leg.hipRef, this.sAim.copy(this.kneePos).sub(this.hipPos));
     leg.hip.updateWorldMatrix(true, false);
     leg.knee.getWorldPosition(this.kneePos);
-    this.orient(leg.knee, leg.kneeChild, leg.kneeRef, targetWorld.clone().sub(this.kneePos));
+    this.orient(
+      leg.knee,
+      leg.kneeChild,
+      leg.kneeRef,
+      this.sAim.copy(targetWorld).sub(this.kneePos),
+    );
     leg.knee.updateWorldMatrix(true, false);
     leg.ankle.parent!.getWorldQuaternion(this.qP);
     leg.ankle.quaternion.copy(this.qP.invert().multiply(leg.footBind));
@@ -606,8 +639,16 @@ export class ThreeVrmDancer {
   setSize(w: number, h: number): void {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer?.setSize(w, h, false);
-    this.rt?.setSize(w, h);
+    if (this.rt) {
+      // Offscreen: render at the capped resolution (see capOffscreen); skip no-op resizes.
+      const [cw, ch] = capOffscreen(w, h);
+      if (cw !== this.rt.width || ch !== this.rt.height) {
+        this.renderer?.setSize(cw, ch, false);
+        this.rt.setSize(cw, ch);
+      }
+    } else {
+      this.renderer?.setSize(w, h, false);
+    }
   }
 
   dispose(): void {

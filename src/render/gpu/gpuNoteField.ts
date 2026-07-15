@@ -363,6 +363,13 @@ export class GpuNoteField {
     this.attract?.pushStep(atBeat, cols, lCol, rCol);
   }
 
+  /** True once the attract 3D dancer has loaded and rendered its first frame — the
+   *  benchmark warms up on this so the dance scenario measures the dancer, not just
+   *  the neon background while it's still loading. */
+  attractDancerRendered(): boolean {
+    return this.attract?.dancerRendered ?? false;
+  }
+
   /** Per-beat elapsed times (see beatTimes()) enabling the guide-line pass;
    *  null turns beat lines off. */
   setBeatTimes(times: Float64Array | null): void {

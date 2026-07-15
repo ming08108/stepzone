@@ -18,6 +18,11 @@ export const DANCER_MODELS: readonly DancerModelDef[] = [
 
 export const DANCER_MODEL_IDS: readonly string[] = DANCER_MODELS.map((m) => m.id);
 
+/** The shipped default — a COMMITTED model (Miku4.vrm is gitignored/non-redistributable,
+ *  so it can't be the out-of-the-box default; pick it in Options if you have the file).
+ *  PS1 Miku ships freely, is tiny, and shows the footwork. */
+export const DEFAULT_DANCER_MODEL = 'ps1';
+
 export function dancerModelUrl(id: string): string {
   return (DANCER_MODELS.find((m) => m.id === id) ?? DANCER_MODELS[0]).url;
 }

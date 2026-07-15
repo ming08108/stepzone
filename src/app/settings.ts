@@ -28,7 +28,7 @@ import {
   type ControlRole,
 } from '../input/controls';
 import { isRecord, loadJson, removeJson, saveJson } from './storage';
-import { DANCER_MODELS, DANCER_MODEL_IDS } from '../render/dancerModels';
+import { DANCER_MODEL_IDS, DEFAULT_DANCER_MODEL } from '../render/dancerModels';
 
 export type { ScrollMode } from '../game/playOptions';
 export type { Bindings } from '../input/controls';
@@ -44,7 +44,7 @@ export interface Settings extends PlayOptions {
 export const DEFAULT_SETTINGS: Settings = {
   ...DEFAULT_PLAY_OPTIONS,
   bindings: defaultBindings(),
-  dancerModel: DANCER_MODELS[0].id,
+  dancerModel: DEFAULT_DANCER_MODEL,
 };
 
 const STORAGE_KEY = 'notefield.settings.v1';

@@ -386,6 +386,9 @@ export interface AttractConfig {
   /** Use the 3D dancer (default true). Set false in 2-player so two three.js
    *  renderers don't starve the field — attract then shows just the background. */
   model?: boolean;
+  /** Force a specific dancer model id (else the user's settings.dancerModel).
+   *  Used by the benchmark for a deterministic, committed model. */
+  modelId?: string;
 }
 
 export class AttractGpu {
@@ -407,6 +410,7 @@ export class AttractGpu {
   private dancer: ThreeVrmDancer | null = null;
   private steps: readonly DancerStep[] = [];
   private modelId = ''; // the settings model id the current dancer was loaded for
+  private forcedModelId: string | undefined; // AttractConfig.modelId override (bench)
   private lastW = 0;
   private lastH = 0;
   private lastNow = 0; // previous renderModel `now` (seconds), for dt
@@ -459,8 +463,14 @@ export class AttractGpu {
    *  dancer covers until it's ready, and stays in 2-player (model === false).
    *  One of the redistributable VRoid sample avatars is picked at random per
    *  session for variety; `?dancerModel=B` (etc.) forces one for testing. */
+  /** True once the dancer has loaded AND three has produced its first frame (its
+   *  offscreen texture is available) — the benchmark waits on this before measuring. */
+  get dancerRendered(): boolean {
+    return !!this.dancer?.ready && this.dancer.colorView != null;
+  }
+
   private loadModel(): void {
-    const id = loadSettings().dancerModel;
+    const id = this.forcedModelId ?? loadSettings().dancerModel;
     if (this.modelLoadStarted && id === this.modelId) return; // already loaded for this model
     if (this.dancer) {
       this.dancer.dispose();
@@ -496,6 +506,7 @@ export class AttractGpu {
     // The chart's StepParity foot stream — which foot steps which arrow (+ jumps).
     this.steps = cfg.steps ?? [];
     this.dancer?.setSteps(this.steps);
+    this.forcedModelId = cfg.modelId;
     // `?dancerFlat` renders a flat neutral background instead of the neon tunnel —
     // a dev aid for inspecting the dancer's silhouette without the busy scene.
     const q = new URLSearchParams(location.search);
