@@ -509,14 +509,9 @@ export class ThreeVrmDancer {
       this.jumpWin.t1 = ib + 1;
       return;
     }
+    // Only the stepping foot moves; the other HOLDS its last arrow and flows straight
+    // to its next step — never yanked back to centre (which read as a twitchy reset).
     this.assignFoot(step.foot, step.panel, ib, ib + 1);
-    // the other foot recovers toward home (keeps the stance narrow → clean skirt)
-    const other = (1 - step.foot) as 0 | 1;
-    const st = this.feet[other];
-    st.from.copy(st.plant);
-    st.to.copy(HOME[other]);
-    st.t0 = ib;
-    st.t1 = ib + 1;
   }
 
   private assignFoot(foot: 0 | 1, panel: number, t0: number, t1: number): void {

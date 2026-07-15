@@ -413,7 +413,7 @@ export class AttractGpu {
   private forcedModelId: string | undefined; // AttractConfig.modelId override (bench)
   private lastW = 0;
   private lastH = 0;
-  private lastNow = 0; // previous renderModel `now` (seconds), for dt
+  private lastDancerUpdate = -1; // last time (s) the dancer's heavy work ran (throttled)
 
   constructor(
     private readonly device: GPUDevice,
@@ -547,10 +547,15 @@ export class AttractGpu {
       this.usingModel = false;
       return;
     }
+    this.usingModel = true; // the composite (draw) samples her last render every frame
+    // Throttle her HEAVY per-frame work (three render + spring bones + foot-IK) to
+    // ~60fps: she's a background element, so at 144/240Hz the composite reuses the last
+    // render for the in-between frames — the note field itself stays at full refresh.
+    if (d.colorView && now - this.lastDancerUpdate < 1 / 62) return;
+    const dt = Math.min(Math.max(now - this.lastDancerUpdate, 0), 1 / 30);
+    this.lastDancerUpdate = now;
     d.setSize(viewW, viewH);
     const b = Number.isFinite(beat) ? beat : now * 1.4;
-    const dt = Math.min(Math.max(now - this.lastNow, 0), 1 / 30);
-    this.lastNow = now;
     d.build(now, b, dt); // animation + chart footwork + foot-IK + spring bones
 
     // Keep her vivid and lit BY the tunnel: a slight over-bright tint + a rim that
