@@ -1,48 +1,62 @@
 # Dancer models
 
-`AvatarSample_A.vrm`, `AvatarSample_B.vrm`, and `AvatarSample_C.vrm` are the
-official **VRoid** sample avatars published by pixiv Inc. These sample models are
-free for anyone to use in any activity (commercial or not), with no attribution
-required, and may be freely redistributed (the only restrictions: don't re-license
-them as CC0 and don't sell the VRM file itself). They drive the attract-mode
-dancer (single-player); one is chosen at random per session for variety
-(`MODEL_POOL` / `pickModelUrl` in `src/render/gpu/attractGpu.ts`), posed by our
-own retargeting/animation system (`src/render/gpu/skinnedModel.ts`,
-`retargetRig.ts`). Force a specific one for testing with `?dancerModel=B`.
+The attract-mode dancer (single-player) is a three.js VRM avatar driven by
+`ThreeVrmDancer` (`src/render/threeDancer.ts`). The selectable avatars live in the
+registry `src/render/dancerModels.ts` (`DANCER_MODELS`) and are surfaced in the
+settings screen (Options → DANCER MODEL). The chosen id is persisted as
+`settings.dancerModel`; the default is in `DEFAULT_DANCER_MODEL`.
 
-Source: VRoid sample models (VRoid Hub / vroid.com/en/studio), pulled from the
-`madjin/vrm-samples` mirror (`vroid/stable/AvatarSample_*.vrm`).
+| id     | file                 | licensing                                                                        |
+| ------ | -------------------- | -------------------------------------------------------------------------------- |
+| `miku` | `Miku4.vrm`          | edited **Tda Hatsune Miku V4X** — non-commercial Piapro, see `MODELS_LICENSE.md` |
+| `ps1`  | `PS1Miku.vrm`        | **original** (ours), ships freely                                                |
+| `suit` | `AvatarSample_A.vrm` | VRoid CC0 sample                                                                 |
+| `goth` | `AvatarSample_B.vrm` | VRoid CC0 sample                                                                 |
+| `coat` | `AvatarSample_C.vrm` | VRoid CC0 sample                                                                 |
 
-Two-player races fall back to the light procedural dancer instead of loading a
-model (see `AttractConfig.model`), so these ~13–15 MB assets are only fetched in
-solo play.
+Two-player races skip the model to save GPU (see `AttractConfig`), so these
+assets are only fetched in solo play.
 
-## The "Miku" avatar
+## `Miku4.vrm` — edited, optimized Tda Miku V4X (default)
 
-The `Miku` pool entry is NOT an actual Hatsune Miku model — that character is
-Crypton Future Media's under the **Piapro Character License** (non-commercial,
-attribution, restricted redistribution), so a real Miku VRM can't be shipped
-here. Instead it's `AvatarSample_B` (a redistributable VRoid sample, sailor-style
-top) with its hair recolored **teal at render time** — the `hair` field in
-`MODEL_POOL` drives a luminance-preserving HAIR-material recolor in the shader
-(`skinnedModel.ts`). The teal hair + sailor uniform reads Miku-ish without using
-any licensed asset. Force it with `?dancerModel=Miku`.
+The default dancer is a **licensed derivative** of Tda's _Hatsune Miku V4X_ MMD
+model: converted MMD→VRM, the skirt lengthened so it drapes over the thighs
+instead of clipping, then optimized for shipping — the 63 unused facial morphs
+(the VRM wires up zero blend-shape groups) were stripped and the exploded
+conversion mesh re-welded (~460k → ~25k verts), taking the file from ~43 MB to
+**~5.6 MB** with no visible change. Full rig, textures, materials, spring-bone
+skirt/hair physics, and VRM metadata are intact.
 
-To use a real Miku VRM you're licensed for, drop it in this folder and point a
-`MODEL_POOL` entry at it locally — just don't commit it.
+**This is redistributed under the model's own Terms of Service, reproduced in
+full (Japanese + English) with credits in [`MODELS_LICENSE.md`](./MODELS_LICENSE.md).**
+Key points: **non-commercial only** (commercial use needs Crypton's permission),
+no R-18 use, credit Tda. If this project ever goes commercial, remove `Miku4.vrm`
+and set `DEFAULT_DANCER_MODEL` back to `ps1`.
+
+Local-only Miku working files (`Miku4_hires.vrm`, etc.) are gitignored
+(`public/models/Miku*.vrm`) with an explicit exception for the shipped
+`Miku4.vrm`.
+
+## `AvatarSample_A/B/C.vrm` — VRoid CC0 samples
+
+The official **VRoid** sample avatars published by pixiv Inc. Free for any use
+(commercial or not), no attribution required, freely redistributable (only: don't
+re-license as CC0, don't sell the VRM itself). Pulled from the `madjin/vrm-samples`
+mirror (`vroid/stable/AvatarSample_*.vrm`).
 
 ## `PS1Miku.vrm` — the hand-crafted PS1 dancer
 
-`PS1Miku.vrm` is an **original**, PlayStation-era low-poly "Miku-style" idol
-(teal twintails, sleeveless white top, teal tie, navy skirt, thigh-high boots,
-a painted anime face) — ~390 triangles, flat-shaded, rigid-skinned (one bone per
-vertex, i.e. segmented PS1 limbs), with a tiny procedurally-painted face texture.
-Because every vertex and texel is generated from scratch (no licensed asset), it
-**ships freely** — it's the `PS1` pool entry and rides in the random rotation.
+An **original**, PlayStation-era low-poly "Miku-style" idol (teal twintails,
+sleeveless white top, teal tie, navy skirt, thigh-high boots, painted anime face)
+— ~390 triangles, flat-shaded, rigid-skinned segmented limbs, tiny procedurally
+painted face texture. Every vertex and texel is generated from scratch (no licensed
+asset), so it **ships freely** and is the commercial-safe fallback.
 
-It's produced by `scripts/genPs1Miku.mjs` (`node scripts/genPs1Miku.mjs`), which
-emits a VRM 0.x GLB with the humanoid bone names our retarget expects
-(`retargetRig.ts`), calibrated to the real Miku model's proportions/colors. Edit
-the generator and re-run to regenerate; the `.vrm` is committed as the built
-asset. Force it with `?dancerModel=PS1` (or `?dancer&dancerModel=PS1` for the
-keyboard dance-test harness).
+Produced by `scripts/genPs1Miku.mjs` (`node scripts/genPs1Miku.mjs`), which emits a
+VRM 0.x GLB with the humanoid bone names `ThreeVrmDancer` expects. Edit the
+generator and re-run to regenerate; the `.vrm` is committed as the built asset.
+
+## Testing a model directly
+
+`?vrm&model=<key>` renders one avatar standalone via `VrmTest`
+(`src/ui/VrmTest.tsx`): `miku4`, `a`, `b`, `c`, `ps1`.

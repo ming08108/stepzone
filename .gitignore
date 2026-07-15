@@ -34,6 +34,8 @@ robot-test.html
 vrm-test.html
 .*.mjs
 
-# Licensed-character models (e.g. real Hatsune Miku) — local use only, never
-# committed; the character's license (Crypton Piapro) restricts redistribution.
+# Local-only Miku working files (hi-res source, experiments) — kept out of the
+# repo for size. The ONE shipped Miku is the optimized, license-compliant
+# derivative Miku4.vrm (see public/models/MODELS_LICENSE.md), explicitly allowed.
 public/models/Miku*.vrm
+!public/models/Miku4.vrm
