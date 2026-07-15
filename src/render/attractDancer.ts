@@ -1031,12 +1031,15 @@ export class AttractDancer {
   private panelTarget(panel: number, foot: number): void {
     const B = BODY_H;
     const s = foot === 0 ? -1 : 1;
+    // The level shoe extends FORWARD (+z) of the ankle, so aim the ankle a little
+    // BEHIND each side arrow's z=0 line to centre the shoe on the L/R decal (it was
+    // landing a half-shoe forward of the arrow).
     if (panel === 0) {
       this.pt[0] = CX - 0.245 * B;
-      this.pt[1] = 0;
+      this.pt[1] = -0.05 * B;
     } else if (panel === 3) {
       this.pt[0] = CX + 0.245 * B;
-      this.pt[1] = 0;
+      this.pt[1] = -0.05 * B;
     } else if (panel === 2) {
       // Up/Down arrows are drawn at centre (PAD_CX = CX); land the foot ON the
       // arrow, not beside it. Keep only a hair of sideways spread (per foot) so the

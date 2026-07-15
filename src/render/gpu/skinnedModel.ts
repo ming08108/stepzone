@@ -228,8 +228,10 @@ fn fs(
   let rimAmt = pow(1.0 - max(dot(n, viewDir), 0.0), 1.5);
   lit = mix(lit, rimCol, clamp(rimAmt * select(0.92, 0.2, isFace), 0.0, 0.9));
   // Pad up-glow: magenta light from the deck onto downward-facing surfaces
-  // (shins, shoe tops, jaw underside) — grounds her ON the lit stage.
-  lit += vec3f(1.0, 0.3, 0.72) * max(-n.y, 0.0) * 0.5;
+  // (shins, jaw underside) — grounds her ON the lit stage. Sharpened + dimmed so
+  // it only kisses steeply-down faces: the broad softly-down skirt front was
+  // catching a bright pink blob dead-centre (a very unfortunate hotspot).
+  lit += vec3f(1.0, 0.3, 0.72) * pow(max(-n.y, 0.0), 2.0) * 0.34;
   // Highlight rolloff (body only): soft-knee compress the top end so the white
   // cardigan keeps a gradient instead of clipping FLAT to detail-free 1.0 at the
   // framebuffer store (the sleeves blew out in extended-arm reach poses). Leaves
@@ -640,14 +642,17 @@ export class SkinnedModel {
 
     const FINGERS = ['Index', 'Middle', 'Ring', 'Little'] as const;
     const SEGS = ['Proximal', 'Intermediate', 'Distal'] as const;
-    const CURL = [0.4, 0.54, 0.35]; // radians per phalanx, tighter toward the tip
-    const THUMB = [0.34, 0.22, 0.14]; // gentler — the thumb folds toward the palm edge
+    // Curl the fingers into a soft loose fist so the low-poly hand reads as a
+    // rounded hand rather than a flat splayed paddle. Moderate: a stronger curl
+    // reads as a flipper on edge-on hands, a weaker one as splayed fork-tines.
+    const CURL = [0.46, 0.6, 0.42]; // radians per phalanx, tighter toward the tip
+    const THUMB = [0.4, 0.28, 0.18]; // fold the thumb over the curled fingers
     // Slight wrist EXTENSION baked into the hand bone: the hand isn't retargeted,
     // so on an extended/raised arm it keeps its bind break at the wrist and, with
     // the finger curl, reads as a limp hand drooping off the forearm. A small
     // extension (about local Z, opposite the finger flexion) lifts the palm back
     // toward the forearm line so the hand continues the arm instead of hanging.
-    const WRIST_EXT = 0.19;
+    const WRIST_EXT = 0.3;
     for (const side of ['left', 'right'] as const) {
       const sgn = side === 'left' ? 1 : -1;
       const jb = side === 'left' ? 'L' : 'R';
