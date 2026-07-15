@@ -58,6 +58,51 @@ const SWING_BEATS = 0.55;
 
 const SAMBA_URL = '/threejs-demo/samba.fbx';
 
+// Placeholder choreography for the ?vrm proving ground / no-chart fallback. A 16-beat
+// routine at 8th-note (half-beat) resolution — alternating quarter steps, fast 8th runs,
+// crossovers, jumps, and a feet-together stomp — so the dancer shows off complex footwork
+// with no chart. Indexed by half-beat; 'hold' = no new step, {l,r} = both feet (a jump),
+// {foot,panel} = one foot. Panels 0=L,1=D,2=U,3=R.
+type SynthStep = { foot: 0 | 1; panel: number } | { l: number; r: number } | 'hold';
+const SYNTH: SynthStep[] = [
+  // beats 1-4 — alternating quarters, an 8th flourish on 3
+  { foot: 0, panel: 0 },
+  'hold',
+  { foot: 1, panel: 3 },
+  'hold',
+  { foot: 0, panel: 1 },
+  { foot: 1, panel: 2 },
+  { foot: 0, panel: 0 },
+  'hold',
+  // beats 5-8 — jump out, a double crossover, jump vertical
+  { l: 0, r: 3 },
+  'hold',
+  { foot: 0, panel: 3 },
+  { foot: 1, panel: 0 },
+  { foot: 0, panel: 1 },
+  'hold',
+  { l: 1, r: 2 },
+  'hold',
+  // beats 9-12 — a fast 8th run sweeping the panels
+  { foot: 0, panel: 0 },
+  { foot: 1, panel: 1 },
+  { foot: 0, panel: 2 },
+  { foot: 1, panel: 3 },
+  { foot: 0, panel: 1 },
+  { foot: 1, panel: 2 },
+  { foot: 0, panel: 0 },
+  'hold',
+  // beats 13-16 — crossovers, a feet-together stomp, split back out
+  { foot: 1, panel: 0 },
+  'hold',
+  { foot: 0, panel: 3 },
+  'hold',
+  { l: 1, r: 1 },
+  'hold',
+  { foot: 0, panel: 0 },
+  { foot: 1, panel: 3 },
+];
+
 /** Cap the offscreen dancer render height (keep aspect) — she's a background element
  *  composited (upscaled) behind the field, so full 4K per frame is wasted GPU. */
 const MAX_OFFSCREEN_H = 960;
@@ -127,7 +172,7 @@ export class ThreeVrmDancer {
   private feet: [FootState, FootState];
   private litPanel = [-9, -9, -9, -9];
   private jumpWin = { t0: 0, t1: -1 }; // active jump beat window
-  private lastSynthBeat = -1;
+  private lastSynthHb = -1;
 
   ready = false;
   private disposed = false;
@@ -160,6 +205,14 @@ export class ThreeVrmDancer {
   private bodyShift = new THREE.Vector3();
   private desiredShift = new THREE.Vector3();
   private yaw = 0;
+  // weight / balance layer (contrapposto sway + torso counter, weighty settle)
+  private weight = 0; // smoothed lateral weight side, screen space [-1,1]
+  private lean = 0; // smoothed fore/aft weight
+  private upperChest: THREE.Object3D | null = null;
+  private eSway = new THREE.Euler();
+  private qSway = new THREE.Quaternion();
+  private eChest = new THREE.Euler();
+  private qChest = new THREE.Quaternion();
   private _center: [number, number, number] = [0, 1, 0];
   private _radius = 1;
 
@@ -247,6 +300,8 @@ export class ThreeVrmDancer {
 
     this.hips = this.raw('hips');
     this.hipsRestQuat.copy(this.hips.quaternion);
+    // Torso bone the shoulders counter-sway on (prefer upperChest → chest → spine).
+    this.upperChest = this.rawOpt('upperChest') ?? this.rawOpt('chest') ?? this.rawOpt('spine');
     this.baseRotY = vrm.scene.rotation.y;
     this.setupLegs();
 
@@ -284,6 +339,9 @@ export class ThreeVrmDancer {
 
   private raw(n: VRMHumanBoneName): THREE.Object3D {
     return this.vrm.humanoid!.getRawBoneNode(n) as THREE.Object3D;
+  }
+  private rawOpt(n: VRMHumanBoneName): THREE.Object3D | null {
+    return (this.vrm.humanoid!.getRawBoneNode(n) as THREE.Object3D | null) ?? null;
   }
 
   private setupLegs(): void {
@@ -415,46 +473,82 @@ export class ThreeVrmDancer {
     this.schedule(b);
     const bodyLift = this.stepFeet(b);
 
-    // Stabilise + servo the pelvis so the sockets sit where the feet can reach, then IK.
-    this.hips.quaternion.slerp(this.hipsRestQuat, 0.82);
-    vrm.scene.updateMatrixWorld(true);
-    // GROOVE: a beat-synced hip bounce the planted feet absorb into a knee flex, so the
-    // legs are continuously alive (not frozen IK to fixed points → robotic). Lowest on
-    // the beat (landing), rising between. Deeper on quarter-notes, a lighter offbeat lilt.
+    // Both feet converging on ONE arrow would occupy the same point and clip. If they get
+    // closer than a minimum stance width, spread them — each toward its own hip's side
+    // (foot 0 drives the VRM right leg → −x, foot 1 the left → +x) so they sit side by side
+    // instead of intersecting. Only fires when genuinely close; a real cross to opposite
+    // panels stays wide and is handled by the body pivot below.
+    const FOOT_GAP = 0.12;
+    const sepX = this.footPos[1].x - this.footPos[0].x;
+    const sep = Math.hypot(sepX, this.footPos[1].z - this.footPos[0].z);
+    if (sep < FOOT_GAP) {
+      const push = 0.5 * (FOOT_GAP - sep);
+      this.footPos[0].x -= push;
+      this.footPos[1].x += push;
+    }
+
+    // ---- Weight & balance ----
+    // Where the weight sits: the support-weighted centre of the feet (screen space). As a
+    // foot swings out its support drops, so the centre leads onto the PLANTED leg — she
+    // commits weight before the step finishes (anticipation), then settles on the land.
+    const support = this.support;
+    const wsum = support[0] + support[1] || 1;
+    const comX = (this.footPos[0].x * support[0] + this.footPos[1].x * support[1]) / wsum;
+    const comZ = (this.footPos[0].z * support[0] + this.footPos[1].z * support[1]) / wsum;
+    this.weight += (THREE.MathUtils.clamp(comX / 0.28, -1, 1) - this.weight) * 0.16;
+    this.lean += (THREE.MathUtils.clamp(comZ / 0.3, -1, 1) - this.lean) * 0.16;
+
+    // Beat-phase vertical: a WEIGHTY settle — the body sinks onto the beat (the loaded leg
+    // absorbs into a knee flex) and springs back. Sharper down than up (pow < 1), and
+    // deeper while a foot is mid-transfer so a step lands with impact, not a float.
     const bp = b - Math.floor(b);
-    const bounce = 0.5 + 0.5 * Math.cos(2 * Math.PI * bp); // 1 on the beat, 0 mid-beat
-    const groove = this.legLen * (0.05 * bounce + 0.012 * Math.sin(4 * Math.PI * bp));
+    const dip = Math.pow(0.5 + 0.5 * Math.cos(2 * Math.PI * bp), 0.7); // 1 on beat, 0 mid
+    const transfer = 1 - Math.min(support[0], support[1]); // 0 both planted → ~0.85 mid-swing
+    const groove =
+      this.legLen * (0.045 * dip * (1 + 0.5 * transfer) + 0.012 * Math.sin(4 * Math.PI * bp));
+
+    // Pelvis: stabilise toward rest (keeps the IK sane), then add contrapposto — raise the
+    // loaded-side hip and lean slightly into the weight, so she stands ON a leg rather than
+    // hovering between both. Foot-IK re-plants afterwards, so the feet stay put while the
+    // pelvis rides over them.
+    this.hips.quaternion.slerp(this.hipsRestQuat, 0.82);
+    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.05, 0, this.weight * 0.12);
+    this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
+    // Torso counter-sway: the shoulders resist the hip tilt (the classic S-curve) and turn
+    // a touch into the weight — flow through the spine instead of a rigid plank.
+    if (this.upperChest) {
+      this.eChest.set(0.02 * dip, -this.weight * 0.05, -this.weight * 0.06);
+      this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
+    }
+    vrm.scene.updateMatrixWorld(true);
+
     const socketY =
       0.5 *
       (this.legs[0].hip.getWorldPosition(this.tmp).y +
         this.legs[1].hip.getWorldPosition(this.tmp2).y);
     vrm.scene.position.y += this.socketH + bodyLift - groove - socketY;
 
-    // Weight shift + crossover yaw.
-    const support = this.support;
-    const wsum = support[0] + support[1] || 1;
-    const comX = (this.footPos[0].x * support[0] + this.footPos[1].x * support[1]) / wsum;
-    const comZ = (this.footPos[0].z * support[0] + this.footPos[1].z * support[1]) / wsum;
-    this.desiredShift.set(comX * 0.4, 0, comZ * 0.22);
-    this.bodyShift.lerp(this.desiredShift, 0.14);
+    // Shift the whole body so the centre of mass tracks over the support foot (balance) —
+    // a little quicker/further so the reaction to a step reads.
+    this.desiredShift.set(comX * 0.36, 0, comZ * 0.22);
+    this.bodyShift.lerp(this.desiredShift, 0.16);
     vrm.scene.position.x = this.bodyShift.x;
     vrm.scene.position.z = this.bodyShift.z;
-    // Body facing: gently track the working side, but when the feet actually CROSS the
-    // centreline (foot 0's target ends up right of foot 1's, or vice-versa) pivot the
-    // whole body toward the crossing so the reaching leg rotates around instead of
-    // scissoring stiffly through the torso — like a real crossover step.
-    const cross = this.footPos[0].x - this.footPos[1].x; // >0 ⇒ feet crossed (0 left of 1)
-    let crossDir = 0;
-    if (Math.abs(cross) > 0.04) {
-      // The foot furthest from centre leads the turn, toward the side it reached.
-      crossDir =
-        Math.abs(this.footPos[0].x) > Math.abs(this.footPos[1].x)
-          ? Math.sign(this.footPos[0].x)
-          : Math.sign(this.footPos[1].x);
-      if (cross < 0) crossDir = 0; // not actually crossed, just a wide non-crossing stance
-    }
-    const targetYaw = THREE.MathUtils.clamp(-(comX * 0.6 + crossDir * 0.3), -0.55, 0.55);
-    this.yaw += (targetYaw - this.yaw) * 0.1;
+    // Body yaw: pivot INTO crossovers so a leg reaching across the centreline swings AROUND
+    // the other instead of scissoring through it. A leg is "crossed" when its foot is on the
+    // opposite side from its hip (not merely when foot 0 passes foot 1). footPos[0] drives
+    // the VRM RIGHT leg (hip on screen-left, −x) → crossed when its foot is on +x; footPos[1]
+    // drives the LEFT leg (hip +x) → crossed when its foot is on −x. +yaw turns the −x hip
+    // toward the camera so the right leg passes in FRONT of the left; −yaw mirrors it.
+    const rightCross = Math.max(0, this.footPos[0].x); // VRM right leg reaching to +x
+    const leftCross = Math.max(0, -this.footPos[1].x); // VRM left leg reaching to −x
+    let pivot = rightCross - leftCross;
+    // Full double-cross (both legs over the line, an X): the difference cancels but the legs
+    // are MOST tangled — turn hard toward the deeper-reaching leg so they go front/back.
+    if (rightCross > 0.08 && leftCross > 0.08)
+      pivot = (rightCross + leftCross) * (rightCross >= leftCross ? 1 : -1);
+    const targetYaw = THREE.MathUtils.clamp(pivot * 2.4, -0.8, 0.8);
+    this.yaw += (targetYaw - this.yaw) * 0.14;
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
     vrm.scene.updateMatrixWorld(true);
 
@@ -499,34 +593,25 @@ export class ThreeVrmDancer {
     }
   }
 
-  /** Placeholder groove when no chart: alternating steps that include deliberate
-   *  crossovers (left foot → right panel, right foot → left panel) and a jump, so the
-   *  crossover-pivot and jump read even without a chart. Panels: 0=L,1=D,2=U,3=R. */
+  /** Placeholder choreography when no chart (the SYNTH routine above): steps on 8th notes,
+   *  landing on the next half-beat. A stepping foot moves; the other HOLDS its last arrow
+   *  and flows straight to its next step (never yanked back to centre). Panels 0=L,1=D,2=U,3=R. */
   private synth(beat: number): void {
-    const ib = Math.floor(beat);
-    if (ib <= this.lastSynthBeat) return;
-    this.lastSynthBeat = ib;
-    const SYNTH: ({ foot: 0 | 1; panel: number } | 'jump')[] = [
-      { foot: 0, panel: 0 }, // left foot → L (normal)
-      { foot: 1, panel: 3 }, // right foot → R (normal)
-      { foot: 0, panel: 3 }, // left foot → R (CROSSOVER)
-      { foot: 1, panel: 0 }, // right foot → L (CROSSOVER)
-      'jump',
-      { foot: 0, panel: 2 }, // left foot → U
-      { foot: 1, panel: 0 }, // right foot → L (CROSSOVER)
-      { foot: 0, panel: 3 }, // left foot → R (CROSSOVER)
-    ];
-    const step = SYNTH[((ib % SYNTH.length) + SYNTH.length) % SYNTH.length];
-    if (step === 'jump') {
-      this.assignFoot(0, 0, ib + 1, beat);
-      this.assignFoot(1, 3, ib + 1, beat);
-      this.jumpWin.t0 = Math.max(beat, ib + 1 - SWING_BEATS);
-      this.jumpWin.t1 = ib + 1;
+    const hb = Math.floor(beat * 2); // half-beat index (8th-note grid)
+    if (hb <= this.lastSynthHb) return;
+    this.lastSynthHb = hb;
+    const step = SYNTH[((hb % SYNTH.length) + SYNTH.length) % SYNTH.length];
+    if (step === 'hold') return;
+    const land = (hb + 1) / 2;
+    if ('l' in step) {
+      // A jump: both feet leave and land together (the whole body hops in stepFeet).
+      this.assignFoot(0, step.l, land, beat);
+      this.assignFoot(1, step.r, land, beat);
+      this.jumpWin.t0 = Math.max(beat, land - SWING_BEATS);
+      this.jumpWin.t1 = land;
       return;
     }
-    // Only the stepping foot moves; the other HOLDS its last arrow and flows straight
-    // to its next step — never yanked back to centre (which read as a twitchy reset).
-    this.assignFoot(step.foot, step.panel, ib + 1, beat);
+    this.assignFoot(step.foot, step.panel, land, beat);
   }
 
   /** Schedule `foot` to land on `panel` at beat `land`. Starts the swing from where the
