@@ -280,8 +280,11 @@ export class ThreeVrmDancer {
     const left = mk('leftUpperLeg', 'leftLowerLeg', 'leftFoot');
     const right = mk('rightUpperLeg', 'rightLowerLeg', 'rightFoot');
     this.legs = [left, right];
-    // foot 0 = LEFT foot = VRM left; foot 1 = RIGHT foot = VRM right (chart convention).
-    this.footLeg = [left, right];
+    // MIRROR mapping: the dancer FACES the viewer, so her anatomical left leg is on the
+    // viewer's RIGHT. The chart's left foot (index 0, home at −x/screen-left) must
+    // therefore drive the VRM's RIGHT leg (whose hip is on the screen-left side) — else
+    // the legs scissor into an X to reach the arrows (worst on a wide jump).
+    this.footLeg = [right, left];
     this.ankleY = 0.5 * (wp(left.ankle).y + wp(right.ankle).y);
     this.legLen = left.L1 + left.L2;
     this.socketH = this.ankleY + this.legLen * 0.88;
