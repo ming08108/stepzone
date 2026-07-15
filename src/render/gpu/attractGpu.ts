@@ -557,53 +557,59 @@ export class AttractGpu {
     if (d.colorView && wall - this.lastDancerUpdate < 1 / 62) return;
     const dt = Math.min(Math.max(wall - this.lastDancerUpdate, 0), 1 / 30);
     this.lastDancerUpdate = wall;
-    d.setSize(viewW, viewH);
-    const b = Number.isFinite(beat) ? beat : now * 1.4;
-    d.build(now, b, dt); // animation + chart footwork + foot-IK + spring bones
+    try {
+      d.setSize(viewW, viewH);
+      const b = Number.isFinite(beat) ? beat : now * 1.4;
+      d.build(now, b, dt); // animation + chart footwork + foot-IK + spring bones
 
-    // Keep her vivid and lit BY the tunnel: a slight over-bright tint + a rim that
-    // cycles the same neon the hexagon rings sweep (accentA→B→D on the beat pump).
-    d.setTint(1.22, 1.19, 1.26);
-    const acc = [this.pal.accentA, this.pal.accentB, this.pal.accentD];
-    const cyc = (((b * 0.5) % 3) + 3) % 3;
-    const seg = Math.floor(cyc);
-    const f = cyc - seg;
-    const c0 = acc[seg % 3];
-    const c1 = acc[(seg + 1) % 3];
-    d.setEnv(
-      c0[0] + (c1[0] - c0[0]) * f,
-      c0[1] + (c1[1] - c0[1]) * f,
-      c0[2] + (c1[2] - c0[2]) * f,
-      0.7,
-    );
+      // Keep her vivid and lit BY the tunnel: a slight over-bright tint + a rim that
+      // cycles the same neon the hexagon rings sweep (accentA→B→D on the beat pump).
+      d.setTint(1.22, 1.19, 1.26);
+      const acc = [this.pal.accentA, this.pal.accentB, this.pal.accentD];
+      const cyc = (((b * 0.5) % 3) + 3) % 3;
+      const seg = Math.floor(cyc);
+      const f = cyc - seg;
+      const c0 = acc[seg % 3];
+      const c1 = acc[(seg + 1) % 3];
+      d.setEnv(
+        c0[0] + (c1[0] - c0[0]) * f,
+        c0[1] + (c1[1] - c0[1]) * f,
+        c0[2] + (c1[2] - c0[2]) * f,
+        0.7,
+      );
 
-    // Dynamic camera: a wide two-frequency orbit + slow crane + beat dolly. The pad
-    // is IN the three scene (feet stay on the arrows at any angle), so the orbit can
-    // be freer than the old 2D-pad dancer; kept moderate to match the tunnel's sway.
-    const c = d.center;
-    const r = d.radius;
-    const fovY = 0.62;
-    const phase = b - Math.floor(b);
-    const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
-    const fixed = this.camAz !== null;
-    const orbit = fixed
-      ? (this.camAz as number)
-      : 0.16 * Math.sin(now * 0.16) + 0.07 * Math.sin(now * 0.37 + 1.0);
-    const crane = fixed ? 0 : 0.07 * r * Math.sin(now * 0.13 + 0.5);
-    const dolly = fixed ? 1 : 1 + 0.03 * Math.sin(now * 0.11) - 0.05 * kick;
-    const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
-    const panY = fixed ? 0 : 0.025 * r * Math.sin(now * 0.19);
-    const lift = 0.05 * r;
-    d.render({
-      fovY,
-      eye: [
-        c[0] + Math.sin(orbit) * dist,
-        c[1] + 0.22 * r + lift + crane,
-        c[2] + Math.cos(orbit) * dist,
-      ],
-      target: [c[0], c[1] + panY + lift + crane * 0.35, c[2]],
-    });
-    this.usingModel = true;
+      // Dynamic camera: a wide two-frequency orbit + slow crane + beat dolly. The pad
+      // is IN the three scene (feet stay on the arrows at any angle), so the orbit can
+      // be freer than the old 2D-pad dancer; kept moderate to match the tunnel's sway.
+      const c = d.center;
+      const r = d.radius;
+      const fovY = 0.62;
+      const phase = b - Math.floor(b);
+      const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
+      const fixed = this.camAz !== null;
+      const orbit = fixed
+        ? (this.camAz as number)
+        : 0.16 * Math.sin(now * 0.16) + 0.07 * Math.sin(now * 0.37 + 1.0);
+      const crane = fixed ? 0 : 0.07 * r * Math.sin(now * 0.13 + 0.5);
+      const dolly = fixed ? 1 : 1 + 0.03 * Math.sin(now * 0.11) - 0.05 * kick;
+      const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
+      const panY = fixed ? 0 : 0.025 * r * Math.sin(now * 0.19);
+      const lift = 0.05 * r;
+      d.render({
+        fovY,
+        eye: [
+          c[0] + Math.sin(orbit) * dist,
+          c[1] + 0.22 * r + lift + crane,
+          c[2] + Math.cos(orbit) * dist,
+        ],
+        target: [c[0], c[1] + panY + lift + crane * 0.35, c[2]],
+      });
+    } catch {
+      // A three.js hiccup (device loss, a bad resource, a transient NaN) must NEVER
+      // crash the game's render loop — swallow it and keep compositing her last good
+      // frame; she resumes on the next update. usingModel is already set above.
+      void 0;
+    }
   }
 
   draw(

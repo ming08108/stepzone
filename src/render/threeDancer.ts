@@ -54,7 +54,7 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 // A step is a QUICK move at the end of the beat, not a slow glide across the whole beat
 // — the foot HOLDS its arrow, then steps and plants on the beat (a real step, not a
 // floaty drift). Beats of swing before the landing beat.
-const SWING_BEATS = 0.42;
+const SWING_BEATS = 0.55;
 
 const SAMBA_URL = '/threejs-demo/samba.fbx';
 
@@ -399,8 +399,13 @@ export class ThreeVrmDancer {
   build(now: number, beat: number, dt: number): void {
     if (!this.ready) return;
     const vrm = this.vrm;
+    // Guard the clock inputs: a NaN/negative from a song seek/glitch would poison
+    // mixer time and every downstream position, freezing or exploding the pose.
+    if (!Number.isFinite(now)) now = 0;
+    if (!Number.isFinite(dt) || dt < 0) dt = 1 / 60;
+    dt = Math.min(dt, 1 / 20);
     const b = Number.isFinite(beat) ? beat : now * 1.4;
-    const elapsed = now;
+    const elapsed = now < 0 ? 0 : now;
 
     // Calm groove drives the upper body (slowed); humanoid maps normalized → raw.
     this.mixer.setTime((elapsed * 0.28) % this.clipDur);
@@ -413,12 +418,17 @@ export class ThreeVrmDancer {
     // Stabilise + servo the pelvis so the sockets sit where the feet can reach, then IK.
     this.hips.quaternion.slerp(this.hipsRestQuat, 0.82);
     vrm.scene.updateMatrixWorld(true);
-    const dip = 0.02 * Math.max(0, Math.sin(b * Math.PI));
+    // GROOVE: a beat-synced hip bounce the planted feet absorb into a knee flex, so the
+    // legs are continuously alive (not frozen IK to fixed points → robotic). Lowest on
+    // the beat (landing), rising between. Deeper on quarter-notes, a lighter offbeat lilt.
+    const bp = b - Math.floor(b);
+    const bounce = 0.5 + 0.5 * Math.cos(2 * Math.PI * bp); // 1 on the beat, 0 mid-beat
+    const groove = this.legLen * (0.05 * bounce + 0.012 * Math.sin(4 * Math.PI * bp));
     const socketY =
       0.5 *
       (this.legs[0].hip.getWorldPosition(this.tmp).y +
         this.legs[1].hip.getWorldPosition(this.tmp2).y);
-    vrm.scene.position.y += this.socketH + bodyLift - dip - socketY;
+    vrm.scene.position.y += this.socketH + bodyLift - groove - socketY;
 
     // Weight shift + crossover yaw.
     const support = this.support;
