@@ -1038,10 +1038,13 @@ export class AttractDancer {
       this.pt[0] = CX + 0.245 * B;
       this.pt[1] = 0;
     } else if (panel === 2) {
-      this.pt[0] = CX + s * 0.055 * B;
+      // Up/Down arrows are drawn at centre (PAD_CX = CX); land the foot ON the
+      // arrow, not beside it. Keep only a hair of sideways spread (per foot) so the
+      // two feet don't perfectly stack, but well inside the arrow tile.
+      this.pt[0] = CX + s * 0.02 * B;
       this.pt[1] = -0.28 * B;
     } else {
-      this.pt[0] = CX + s * 0.1 * B;
+      this.pt[0] = CX + s * 0.03 * B;
       this.pt[1] = 0.2 * B;
     }
   }

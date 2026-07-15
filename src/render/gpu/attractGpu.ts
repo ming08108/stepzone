@@ -690,14 +690,19 @@ export class AttractGpu {
     const phase = b - Math.floor(b);
     const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
     // A locked azimuth (dev inspection) stills the wander for a stable angle.
+    // The pad/arrows are drawn in a FIXED front projection (the 2D dancer space),
+    // so a big camera orbit would swing her feet off the arrows she's stepping —
+    // the whole point of the dancepad. Keep the shot alive but GENTLE (a small
+    // azimuth sway + crane + beat dolly) so her feet stay on the lit arrows; this
+    // also matches the background's small camera sway (they now move together).
     const fixed = this.camAz !== null;
     const orbit = fixed
       ? (this.camAz as number)
-      : 0.62 * Math.sin(now * 0.16) + 0.22 * Math.sin(now * 0.37 + 1.0);
-    const crane = fixed ? 0 : 0.3 * r * Math.sin(now * 0.13 + 0.5);
-    const dolly = fixed ? 1 : 1 + 0.1 * Math.sin(now * 0.11) - 0.07 * kick;
+      : 0.12 * Math.sin(now * 0.16) + 0.05 * Math.sin(now * 0.37 + 1.0);
+    const crane = fixed ? 0 : 0.07 * r * Math.sin(now * 0.13 + 0.5);
+    const dolly = fixed ? 1 : 1 + 0.03 * Math.sin(now * 0.11) - 0.05 * kick;
     const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
-    const panY = fixed ? 0 : 0.08 * r * Math.sin(now * 0.19);
+    const panY = fixed ? 0 : 0.025 * r * Math.sin(now * 0.19);
     // Frame lift: raising both eye and target drops the subject in frame so
     // her feet land on the near (large) cells of the shader floor grid instead
     // of hovering over its far rows.
