@@ -13,11 +13,12 @@
  * the palettes and layer design mirror it 1:1.
  */
 
-import { AttractDancer, DANCER_SKELETON } from '../attractDancer';
-import { SkinnedModel } from './skinnedModel';
+import { ThreeVrmDancer, type DancerStep } from '../threeDancer';
+import { dancerModelUrl } from '../dancerModels';
+import { loadSettings } from '../../app/settings';
 
-// Composite pass: draw the skinned model's offscreen render (a real 3D
-// character our animation drives) over the background as a full-canvas quad.
+// Composite pass: draw the three.js VRM dancer's offscreen render (a real 3D
+// character that dances the chart) over the background as a full-canvas quad.
 const MODEL_WGSL = /* wgsl */ `
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -35,45 +36,6 @@ fn fs(v: VO) -> @location(0) vec4f {
   return textureSample(tex, samp, v.uv);
 }
 `;
-
-/** A dancer avatar: a model URL and an optional hair recolor (see skinnedModel
- *  — replaces HAIR-material hue, keeps luminance). */
-interface DancerModel {
-  url: string;
-  hair?: readonly [number, number, number];
-  texCap?: number; // cap texture size (retro/PS2 low-res look, kills aliasing)
-}
-
-/** The dancer avatars — redistributable VRoid CC-usage sample models (see
- *  public/models/README.md). One is chosen at random per session for variety.
- *  "Miku" is avatar B recolored teal — real Hatsune Miku is license-locked, but
- *  a teal-haired sailor-top sample reads close enough to ship. */
-const MODEL_POOL: Record<string, DancerModel> = {
-  A: { url: '/models/AvatarSample_A.vrm' },
-  B: { url: '/models/AvatarSample_B.vrm' },
-  C: { url: '/models/AvatarSample_C.vrm' },
-  Miku: { url: '/models/AvatarSample_B.vrm', hair: [0.05, 0.78, 0.72] },
-  // A hand-crafted, PS1-style Miku — ORIGINAL low-poly geometry + a painted face
-  // texture (scripts/genPs1Miku.mjs), so unlike `Real` it ships freely. Rigid
-  // segmented limbs + flat shading = peak PlayStation-era character. Tiny (~80KB).
-  PS1: { url: '/models/PS1Miku.vrm' },
-  // `Real` = an actual Hatsune Miku VRM. NOT shipped (Crypton's Piapro Character
-  // License restricts redistribution) — Miku*.vrm is gitignored, so drop your own
-  // licensed copy in public/models/ to use it. Forced-only (never in the random
-  // rotation), so it's inert for anyone without the file (loadModel falls back to
-  // the procedural dancer if the fetch 404s).
-  Real: { url: '/models/Miku4_low.vrm', texCap: 256 },
-};
-
-/** Avatars in the random rotation (redistributable only — excludes `Real`). */
-const RANDOM_KEYS = ['A', 'B', 'C', 'Miku', 'PS1'] as const;
-
-/** Pick a dancer: `?dancerModel=Real` forces any pool entry, else random. */
-function pickModel(): DancerModel {
-  const forced = new URLSearchParams(location.search).get('dancerModel');
-  if (forced && MODEL_POOL[forced]) return MODEL_POOL[forced];
-  return MODEL_POOL[RANDOM_KEYS[Math.floor(Math.random() * RANDOM_KEYS.length)]];
-}
 
 /** One mood/variant's colors, as 0..1 float RGB ready for the uniform buffer. */
 interface GpuPalette {
@@ -414,31 +376,6 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 }
 `;
 
-// The dancer mesh: real triangles built CPU-side (AttractDancer) in a fixed
-// 960x540 design space (y down), cover-fit to the viewport here, per-vertex
-// colored. Drawn over the background — solid facets, then additive edges/glow.
-const DANCER_WGSL = /* wgsl */ `
-struct DU { p: vec4f };   // viewW, viewH, dim, _
-@group(0) @binding(0) var<uniform> du: DU;
-struct VO { @builtin(position) pos: vec4f, @location(0) col: vec3f };
-@vertex
-fn vs(@location(0) xy: vec2f, @location(1) col: vec3f) -> VO {
-  let vw = du.p.x;
-  let vh = du.p.y;
-  let sc = max(vw / 960.0, vh / 540.0);   // cover-fit the design space
-  let px = (vw - 960.0 * sc) * 0.5 + xy.x * sc;
-  let py = (vh - 540.0 * sc) * 0.5 + xy.y * sc;
-  var o: VO;
-  o.pos = vec4f(px / vw * 2.0 - 1.0, 1.0 - py / vh * 2.0, 0.0, 1.0);
-  o.col = col;
-  return o;
-}
-@fragment
-fn fs(v: VO) -> @location(0) vec4f {
-  return vec4f(v.col * (1.0 - du.p.z), 1.0);   // dim folded in, like the bg
-}
-`;
-
 /** Config for the current song's attract loop. */
 export interface AttractConfig {
   variant: number;
@@ -446,8 +383,8 @@ export interface AttractConfig {
    *  lCol/rCol (0..3, or -1) are the StepParity foot placement — which panel
    *  each foot steps to — so the dancer foots the chart as a player would. */
   steps?: readonly { beat: number; cols: number; lCol?: number; rCol?: number }[];
-  /** Use the heavy textured 3D model (default true). Set false in 2-player so
-   *  two of them don't starve the field — the light procedural dancer shows. */
+  /** Use the 3D dancer (default true). Set false in 2-player so two three.js
+   *  renderers don't starve the field — attract then shows just the background. */
   model?: boolean;
 }
 
@@ -458,30 +395,25 @@ export class AttractGpu {
   private readonly data = new Float32Array(52); // 13 vec4
   private pal: GpuPalette = PALETTES[0];
 
-  // Dancer mesh: CPU geometry (AttractDancer) drawn via two blend passes.
-  private readonly solidPipe: GPURenderPipeline;
-  private readonly addPipe: GPURenderPipeline;
-
-  // Real 3D model (loaded async). While it loads, the procedural mesh shows;
-  // once ready, our animation retargets onto it and we composite its render.
+  // Composite pipeline: samples the dancer's offscreen render, alpha over the scene.
   private readonly modelPipe: GPURenderPipeline;
   private readonly modelSampler: GPUSampler;
-  private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
   private flatBg = false; // ?dancerFlat dev aid: flat neutral bg for inspecting the dancer
   private camAz: number | null = null; // ?dancerCam=<rad> dev aid: lock the camera azimuth
-  private padFrame: ReturnType<AttractDancer['build']> | null = null; // for the pad-under-avatar draw
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
-  private readonly dancerUniform: GPUBuffer;
-  private readonly dancerBind: GPUBindGroup;
-  private readonly dancerData = new Float32Array(4); // viewW, viewH, dim, _
-  private solidBuf: GPUBuffer | null = null;
-  private addBuf: GPUBuffer | null = null;
-  private dancer: AttractDancer | null = null;
+  // The three.js VRM dancer (loaded async, single-player only). Renders offscreen; its
+  // colorView is composited over the neon background. Null until the model loads.
+  private dancer: ThreeVrmDancer | null = null;
+  private steps: readonly DancerStep[] = [];
+  private modelId = ''; // the settings model id the current dancer was loaded for
+  private lastW = 0;
+  private lastH = 0;
+  private lastNow = 0; // previous renderModel `now` (seconds), for dt
 
   constructor(
     private readonly device: GPUDevice,
-    private readonly format: GPUTextureFormat,
+    format: GPUTextureFormat,
   ) {
     const module = device.createShaderModule({ code: WGSL });
     this.pipeline = device.createRenderPipeline({
@@ -499,55 +431,8 @@ export class AttractGpu {
       entries: [{ binding: 0, resource: { buffer: this.uniform } }],
     });
 
-    // Dancer mesh pipelines: one shared cover-fit shader, two blend modes.
-    const dm = device.createShaderModule({ code: DANCER_WGSL });
-    const vbLayout: GPUVertexBufferLayout = {
-      arrayStride: 20, // x,y,r,g,b = 5 * f32
-      attributes: [
-        { shaderLocation: 0, offset: 0, format: 'float32x2' },
-        { shaderLocation: 1, offset: 8, format: 'float32x3' },
-      ],
-    };
-    // A shared explicit layout so both blend-variant pipelines accept the same
-    // bind group (an 'auto' layout would give each its own, incompatible one).
-    const dancerBGL = device.createBindGroupLayout({
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: 'uniform' },
-        },
-      ],
-    });
-    const dancerPL = device.createPipelineLayout({ bindGroupLayouts: [dancerBGL] });
-    const meshPipe = (blend?: GPUBlendState): GPURenderPipeline =>
-      device.createRenderPipeline({
-        layout: dancerPL,
-        vertex: { module: dm, entryPoint: 'vs', buffers: [vbLayout] },
-        fragment: { module: dm, entryPoint: 'fs', targets: [{ format, blend }] },
-        primitive: { topology: 'triangle-list' },
-      });
-    // Solid: opaque body, src-over (alpha is always 1 → replace where drawn).
-    this.solidPipe = meshPipe({
-      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'zero', operation: 'add' },
-    });
-    // Additive: neon edges + rim glow + sparks glow onto the scene.
-    this.addPipe = meshPipe({
-      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-    });
-    this.dancerUniform = device.createBuffer({
-      size: this.dancerData.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.dancerBind = device.createBindGroup({
-      layout: dancerBGL,
-      entries: [{ binding: 0, resource: { buffer: this.dancerUniform } }],
-    });
-
-    // Model composite pipeline (samples the model's offscreen render, alpha
-    // over the scene) + a linear sampler.
+    // Composite pipeline (samples the dancer's offscreen render, alpha over the
+    // scene) + a linear sampler.
     const mm = device.createShaderModule({ code: MODEL_WGSL });
     this.modelPipe = device.createRenderPipeline({
       layout: 'auto',
@@ -575,15 +460,32 @@ export class AttractGpu {
    *  One of the redistributable VRoid sample avatars is picked at random per
    *  session for variety; `?dancerModel=B` (etc.) forces one for testing. */
   private loadModel(): void {
-    if (this.modelLoadStarted) return;
+    const id = loadSettings().dancerModel;
+    if (this.modelLoadStarted && id === this.modelId) return; // already loaded for this model
+    if (this.dancer) {
+      this.dancer.dispose();
+      this.dancer = null;
+    }
     this.modelLoadStarted = true;
-    const pick = pickModel();
-    void SkinnedModel.load(this.device, this.format, pick.url, pick.hair, pick.texCap)
-      .then((m) => {
-        this.model = m;
+    this.modelId = id;
+    const d = new ThreeVrmDancer({
+      modelUrl: dancerModelUrl(id),
+      device: this.device,
+      width: this.lastW || 512,
+      height: this.lastH || 768,
+    });
+    void d
+      .init()
+      .then(() => {
+        if (this.modelId !== id) {
+          d.dispose(); // a newer model was selected while this one loaded
+          return;
+        }
+        d.setSteps(this.steps);
+        this.dancer = d;
       })
       .catch(() => {
-        // No model (fetch/decode failed) — stay on the procedural dancer.
+        // Load/decode failed (e.g. 404) — attract shows just the neon background.
       });
   }
 
@@ -591,47 +493,25 @@ export class AttractGpu {
     const n = PALETTES.length;
     const v = (((cfg.variant | 0) % n) + n) % n;
     this.pal = PALETTES[v];
-    // One dancer per song (fresh spring/cursor state), stepping to this chart.
-    // Pick one of the dance clips at random for replay variety (like the avatar) —
-    // a one-time per-song choice; the per-frame reconstruction stays deterministic.
-    // `?dancerClip=N` forces a clip (testing), else random.
-    const clipQ = new URLSearchParams(location.search).get('dancerClip');
-    const clipIdx =
-      clipQ !== null
-        ? parseInt(clipQ, 10) || 0
-        : Math.floor(Math.random() * AttractDancer.CLIP_COUNT);
-    this.dancer = new AttractDancer(v, clipIdx);
-    this.dancer.setSteps(cfg.steps ?? []);
+    // The chart's StepParity foot stream — which foot steps which arrow (+ jumps).
+    this.steps = cfg.steps ?? [];
+    this.dancer?.setSteps(this.steps);
     // `?dancerFlat` renders a flat neutral background instead of the neon tunnel —
-    // a dev aid for inspecting the dancer's silhouette/geometry without the busy
-    // scene hiding rig issues (does not affect the shipped scene).
+    // a dev aid for inspecting the dancer's silhouette without the busy scene.
     const q = new URLSearchParams(location.search);
     this.flatBg = q.has('dancerFlat');
-    // `?dancerCam=<radians>` locks the camera azimuth (0=front, ~1.57=side,
-    // ~3.14=back) and stills the crane/dolly/pan — a dev aid for inspecting the
-    // dancer's geometry from a chosen angle (depth clipping the front view hides).
+    // `?dancerCam=<radians>` locks the camera azimuth + stills the crane/dolly/pan.
     const camQ = q.get('dancerCam');
     this.camAz =
       camQ !== null && camQ !== '' && Number.isFinite(parseFloat(camQ)) ? parseFloat(camQ) : null;
-    // The heavy textured avatar is single-player only (two of them starve the
-    // field in 2-player) — kick off its load lazily here. When it's off, the
-    // light procedural dancer carries the whole show.
+    // The 3D dancer is single-player only (two starve the field in 2-player).
     if (cfg.model !== false) this.loadModel();
   }
 
-  /** Live-inject a dance step (keyboard test mode). */
-  pushStep(atBeat: number, cols: number, lCol: number, rCol: number): void {
-    this.dancer?.pushStep(atBeat, cols, lCol, rCol);
-  }
-
-  /** Grow (or lazily create) a vertex buffer to hold `arr`. */
-  private ensureVB(buf: GPUBuffer | null, arr: Float32Array): GPUBuffer {
-    if (buf && buf.size >= arr.byteLength) return buf;
-    buf?.destroy();
-    return this.device.createBuffer({
-      size: arr.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
+  /** Live-inject a dance step — no-op now the dancer runs off the chart's step stream
+   *  (was used by the removed keyboard DancerTest harness). */
+  pushStep(_atBeat: number, _cols: number, _lCol: number, _rCol: number): void {
+    void _atBeat;
   }
 
   /** Encode the fullscreen background (call first in the pass; it overwrites). */
@@ -647,71 +527,59 @@ export class AttractGpu {
     beat: number,
     dim = 0,
   ): void {
-    const model = this.model;
-    if (!model || !this.dancer || viewW <= 0 || viewH <= 0) {
+    void enc; // three renders onto the shared device queue itself, not the game's encoder
+    void dim; // the dancer stays vivid regardless of the field's bg dim
+    this.lastW = viewW;
+    this.lastH = viewH;
+    const d = this.dancer;
+    if (!d || !d.ready || viewW <= 0 || viewH <= 0) {
       this.usingModel = false;
       return;
     }
-    // Only single-player renders the model (2-player uses the light procedural
-    // dancer — see setConfig), so there's GPU headroom to run it at full
-    // resolution and monitor refresh: no cap, no downscale.
+    d.setSize(viewW, viewH);
     const b = Number.isFinite(beat) ? beat : now * 1.4;
-    this.padFrame = this.dancer.build(now, b); // solves skel3 + emits the floor pad
-    model.retargetFromSkeleton(this.dancer.getSkeleton3D(), DANCER_SKELETON);
-    model.applyExpression(now, b, this.dancer.chartEnergy); // face: smile/mouth track beat + chart energy
-    // The dancer is the STAR of the attract scene, not a background element —
-    // keep her vivid and full-bright (with a slight boost so she pops off the
-    // dimmed tunnel) regardless of the field's bg dim. Dimming her down was what
-    // turned the face into a murky, hollow-eyed smudge in-game.
-    void dim;
-    model.setTint(1.22, 1.19, 1.26);
-    // Scene-synced rim: cycle her silhouette rim through the same neon the hexagon
-    // rings sweep (accentA→B→D, on the beat pump the rings use) so she reads as lit
-    // BY the tunnel instead of pasted on. Only the rim samples this (see setEnv).
+    const dt = Math.min(Math.max(now - this.lastNow, 0), 1 / 30);
+    this.lastNow = now;
+    d.build(now, b, dt); // animation + chart footwork + foot-IK + spring bones
+
+    // Keep her vivid and lit BY the tunnel: a slight over-bright tint + a rim that
+    // cycles the same neon the hexagon rings sweep (accentA→B→D on the beat pump).
+    d.setTint(1.22, 1.19, 1.26);
     const acc = [this.pal.accentA, this.pal.accentB, this.pal.accentD];
     const cyc = (((b * 0.5) % 3) + 3) % 3;
     const seg = Math.floor(cyc);
     const f = cyc - seg;
     const c0 = acc[seg % 3];
     const c1 = acc[(seg + 1) % 3];
-    model.setEnv(
+    d.setEnv(
       c0[0] + (c1[0] - c0[0]) * f,
       c0[1] + (c1[1] - c0[1]) * f,
       c0[2] + (c1[2] - c0[2]) * f,
       0.7,
     );
-    // Dynamic camera — a proper moving shot, not a static frame: a wide,
-    // two-frequency orbit sweeps most of the way around her and never repeats;
-    // the eye cranes up and dips on a slower arc; it breathes in/out and punches
-    // IN on every beat. (The background shader sways to match.)
-    const c = model.center;
-    const r = model.radius;
+
+    // Dynamic camera: a wide two-frequency orbit + slow crane + beat dolly. The pad
+    // is IN the three scene (feet stay on the arrows at any angle), so the orbit can
+    // be freer than the old 2D-pad dancer; kept moderate to match the tunnel's sway.
+    const c = d.center;
+    const r = d.radius;
     const fovY = 0.62;
     const phase = b - Math.floor(b);
     const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
-    // A locked azimuth (dev inspection) stills the wander for a stable angle.
-    // The pad/arrows are drawn in a FIXED front projection (the 2D dancer space),
-    // so a big camera orbit would swing her feet off the arrows she's stepping —
-    // the whole point of the dancepad. Keep the shot alive but GENTLE (a small
-    // azimuth sway + crane + beat dolly) so her feet stay on the lit arrows; this
-    // also matches the background's small camera sway (they now move together).
     const fixed = this.camAz !== null;
     const orbit = fixed
       ? (this.camAz as number)
-      : 0.12 * Math.sin(now * 0.16) + 0.05 * Math.sin(now * 0.37 + 1.0);
+      : 0.16 * Math.sin(now * 0.16) + 0.07 * Math.sin(now * 0.37 + 1.0);
     const crane = fixed ? 0 : 0.07 * r * Math.sin(now * 0.13 + 0.5);
     const dolly = fixed ? 1 : 1 + 0.03 * Math.sin(now * 0.11) - 0.05 * kick;
     const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
     const panY = fixed ? 0 : 0.025 * r * Math.sin(now * 0.19);
-    // Frame lift: raising both eye and target drops the subject in frame so
-    // her feet land on the near (large) cells of the shader floor grid instead
-    // of hovering over its far rows.
-    const lift = 0.13 * r;
-    model.render(enc, viewW, viewH, {
+    const lift = 0.05 * r;
+    d.render({
       fovY,
       eye: [
         c[0] + Math.sin(orbit) * dist,
-        c[1] + 0.32 * r + lift + crane,
+        c[1] + 0.22 * r + lift + crane,
         c[2] + Math.cos(orbit) * dist,
       ],
       target: [c[0], c[1] + panY + lift + crane * 0.35, c[2]],
@@ -768,86 +636,47 @@ export class AttractGpu {
     d[45] = 0.02 * Math.sin(now * 0.13 + 0.5); // panY (tracks the crane)
     d[46] = 1 + 0.06 * Math.sin(now * 0.11) + 0.05 * kick; // zoom breathe + beat push
     d[47] = this.flatBg ? 1 : 0; // dev flat-background flag (see setConfig / bg shader)
-    // Dance-pad arrow flash (L,D,U,R) — drawn on the shader floor so the pad
-    // shows under EVERY dancer, including the 3D avatars.
-    if (this.dancer) this.dancer.padFlashInto(b, this.data.subarray(48, 52));
-    else d.fill(0, 48, 52);
+    // The 3D dancer carries its own dancepad (in its offscreen render), so the
+    // shader floor no longer flashes arrows.
+    d.fill(0, 48, 52);
     this.device.queue.writeBuffer(this.uniform, 0, d);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bind);
     pass.draw(3);
 
-    // The dancer over the background. If the real 3D model is loaded, our
-    // animation was retargeted onto it in renderModel() (offscreen); composite
-    // it. Otherwise draw the procedural mesh (solid facets + additive edges).
-    if (this.usingModel && this.model) {
-      // The 3D floor pad is emitted into the dancer's solid/additive buffers
-      // (leading padSolidCount/padAddCount verts) even in avatar mode; draw it
-      // BEHIND the composited avatar so she stands ON a visible dancepad.
-      const f = this.padFrame;
-      if (f && (f.padSolidCount > 0 || f.padAddCount > 0)) {
-        const dd = this.dancerData;
-        dd[0] = viewW;
-        dd[1] = viewH;
-        dd[2] = Math.max(0, Math.min(1, dim));
-        this.device.queue.writeBuffer(this.dancerUniform, 0, dd);
-        pass.setBindGroup(0, this.dancerBind);
-        if (f.padSolidCount > 0) {
-          this.solidBuf = this.ensureVB(this.solidBuf, f.solid);
-          this.device.queue.writeBuffer(this.solidBuf, 0, f.solid, 0, f.padSolidCount * 5);
-          pass.setPipeline(this.solidPipe);
-          pass.setVertexBuffer(0, this.solidBuf);
-          pass.draw(f.padSolidCount);
+    // Composite the three.js dancer's offscreen render (pad + avatar) over the
+    // background. Its colorView is null for the first frames while three compiles its
+    // pipelines — then the neon background simply shows on its own until she appears.
+    if (this.usingModel && this.dancer) {
+      const view = this.dancer.colorView;
+      if (view) {
+        // Rebuild the bind group only when the texture view changes (on resize) —
+        // not every frame.
+        if (view !== this.compositeView) {
+          this.compositeView = view;
+          this.compositeBind = this.device.createBindGroup({
+            layout: this.modelPipe.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: this.modelSampler },
+              { binding: 1, resource: view },
+            ],
+          });
         }
-        if (f.padAddCount > 0) {
-          this.addBuf = this.ensureVB(this.addBuf, f.additive);
-          this.device.queue.writeBuffer(this.addBuf, 0, f.additive, 0, f.padAddCount * 5);
-          pass.setPipeline(this.addPipe);
-          pass.setVertexBuffer(0, this.addBuf);
-          pass.draw(f.padAddCount);
-        }
-      }
-      const bind = this.device.createBindGroup({
-        layout: this.modelPipe.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: this.modelSampler },
-          { binding: 1, resource: this.model.colorView },
-        ],
-      });
-      pass.setPipeline(this.modelPipe);
-      pass.setBindGroup(0, bind);
-      pass.draw(3);
-    } else if (this.dancer) {
-      const dd = this.dancerData;
-      dd[0] = viewW;
-      dd[1] = viewH;
-      dd[2] = Math.max(0, Math.min(1, dim));
-      this.device.queue.writeBuffer(this.dancerUniform, 0, dd);
-      const f = this.dancer.build(now, b);
-      pass.setBindGroup(0, this.dancerBind);
-      if (f.solidCount > 0) {
-        this.solidBuf = this.ensureVB(this.solidBuf, f.solid);
-        this.device.queue.writeBuffer(this.solidBuf, 0, f.solid, 0, f.solidCount * 5);
-        pass.setPipeline(this.solidPipe);
-        pass.setVertexBuffer(0, this.solidBuf);
-        pass.draw(f.solidCount);
-      }
-      if (f.additiveCount > 0) {
-        this.addBuf = this.ensureVB(this.addBuf, f.additive);
-        this.device.queue.writeBuffer(this.addBuf, 0, f.additive, 0, f.additiveCount * 5);
-        pass.setPipeline(this.addPipe);
-        pass.setVertexBuffer(0, this.addBuf);
-        pass.draw(f.additiveCount);
+        pass.setPipeline(this.modelPipe);
+        pass.setBindGroup(0, this.compositeBind!);
+        pass.draw(3);
       }
     }
   }
 
+  private compositeView: GPUTextureView | null = null;
+  private compositeBind: GPUBindGroup | null = null;
+
   destroy(): void {
+    this.dancer?.dispose();
+    this.dancer = null;
     try {
       this.uniform.destroy();
-      this.dancerUniform.destroy();
-      this.solidBuf?.destroy();
-      this.addBuf?.destroy();
     } catch {
       // device already lost
     }

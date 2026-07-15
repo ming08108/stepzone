@@ -13,6 +13,7 @@ import { defaultBindings, type Bindings, type ControlRole } from '../input/contr
 import { connectedPadInfo, pressedGamepadButtons, type PadInfo } from '../input/gamepad';
 import { setBindCaptureActive } from '../input/inputBus';
 import { getIdentity, setPlayerName } from '../net/identity';
+import { DANCER_MODELS } from '../render/dancerModels';
 import { Stage, STEP_AC as AC } from './Stage';
 import { useSettings } from './SettingsContext';
 import { useMenuNav } from './useMenuNav';
@@ -110,13 +111,11 @@ export function Options({
   onCalibrate,
   onBenchmark,
   onInputTest,
-  onDancerTest,
 }: {
   onBack: () => void;
   onCalibrate: () => void;
   onBenchmark: () => void;
   onInputTest: () => void;
-  onDancerTest: () => void;
 }) {
   const { settings, update } = useSettings();
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -414,16 +413,25 @@ export function Options({
                 controller update rate + timing granularity
               </span>
             </Row>
-            <Row label="DANCER TEST">
-              <button
-                onClick={onDancerTest}
-                className="border px-4 py-1.5 text-[13px] tracking-wide"
-                style={{ borderColor: AC, background: AC + '1a', color: '#ececec' }}
-              >
-                Drive the dancer ▸
-              </button>
+            <Row label="DANCER MODEL">
+              <div className="flex flex-wrap gap-2">
+                {DANCER_MODELS.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => update({ dancerModel: m.id })}
+                    className="border px-3 py-1.5 text-[13px] tracking-wide"
+                    style={{
+                      borderColor: AC,
+                      background: settings.dancerModel === m.id ? AC + '55' : AC + '1a',
+                      color: '#ececec',
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
               <span className="text-[12px] text-[#ececec]/55">
-                arrow keys step the attract dancer (also at ?dancer)
+                the avatar dancing in the attract background (BACKGROUND=DANCE)
               </span>
             </Row>
           </Section>

@@ -6,7 +6,7 @@ import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
 import { InputTest } from './InputTest';
-import { DancerTest } from './DancerTest';
+import { VrmTest } from './VrmTest';
 import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
@@ -22,14 +22,7 @@ import { RoomDock } from './RoomDock';
 import { RoomJoinOverlay } from './RoomJoinOverlay';
 
 type View =
-  | 'menu'
-  | 'playoptions'
-  | 'play'
-  | 'options'
-  | 'calibrate'
-  | 'benchmark'
-  | 'inputtest'
-  | 'dancertest';
+  'menu' | 'playoptions' | 'play' | 'options' | 'calibrate' | 'benchmark' | 'inputtest' | 'vrmtest';
 
 /** The one-line "what's happening / what to do" for the room dock, given the
  *  current screen — makes a GUEST's inability to pick songs explicit. */
@@ -60,12 +53,12 @@ function roomDockStatus(view: View, vs: RoomUiState): string | undefined {
 }
 
 export function App() {
-  // ?bench / ?bench=auto deep-links into the render benchmark; ?dancer into the
-  // keyboard-driven dancer test harness.
+  // ?bench / ?bench=auto deep-links into the render benchmark; ?vrm into the
+  // three.js dancer proving ground (?model=miku|ps1|a|b|c picks the avatar).
   const [view, setView] = useState<View>(() => {
     const params = new URLSearchParams(location.search);
     if (params.has('bench')) return 'benchmark';
-    if (params.has('dancer')) return 'dancertest';
+    if (params.has('vrm')) return 'vrmtest';
     return 'menu';
   });
   const [req, setReq] = useState<PlayRequest | null>(null);
@@ -138,15 +131,14 @@ export function App() {
         onCalibrate={() => setView('calibrate')}
         onBenchmark={() => setView('benchmark')}
         onInputTest={() => setView('inputtest')}
-        onDancerTest={() => setView('dancertest')}
       />
     );
   } else if (view === 'benchmark') {
     body = <Benchmark onBack={() => setView('options')} />;
   } else if (view === 'inputtest') {
     body = <InputTest onBack={() => setView('options')} />;
-  } else if (view === 'dancertest') {
-    body = <DancerTest onExit={() => setView('menu')} />;
+  } else if (view === 'vrmtest') {
+    body = <VrmTest onExit={() => setView('menu')} />;
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else {
