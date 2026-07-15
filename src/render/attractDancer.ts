@@ -50,6 +50,14 @@ const CX = W / 2;
 const FOOT_Y = H * 0.86; // where the feet plant
 const BODY_H = H * 0.55; // dancer height in px
 
+// Physical dancepad extents (× BODY_H), shared by emitPad (the drawn slab) and the
+// foot-IK clamp (so planted feet stay on the deck they're drawn on). The near
+// (camera-side, +z) edge is pushed out so the dance's forward foot reaches land on
+// the pad instead of hanging off the front; the 4 arrow panels sit well inside it.
+const PAD_HW = 0.36; // half-width
+const PAD_ZN = 0.42; // near edge (+z, toward viewer)
+const PAD_ZF = -0.4; // far edge (−z)
+
 // ---- palette (copied from attractBackground.ts) -----------------------------
 
 type RGB = readonly [number, number, number];
@@ -298,6 +306,7 @@ interface MocapClip {
   meanHeading: number; // circular mean heading — the neutral the yaw is measured against
   meanHipX: number; // arithmetic mean hip sway centre (x, z)
   meanHipZ: number;
+  footZBias: number; // clip's mean foot FWD offset (leg-lengths) — centred on the pad
 }
 /** Precompute a clip's neutral means (once at load) so several clips can share the
  *  reconstruction, each centring on the viewer against its OWN mean pose. */
@@ -314,7 +323,20 @@ function makeClip(dirs: Float32Array, frames: number): MocapClip {
     sx += Math.cos(h);
     sy += Math.sin(h);
   }
-  return { dirs, frames, meanHeading: Math.atan2(sy, sx), meanHipX: mean(47), meanHipZ: mean(48) };
+  // Mean forward offset of the two ankles (joints 11=ftL, 14=ftR; fwd is +2). The
+  // capture's neutral stance plants the feet a bit AHEAD of the hips, which — with
+  // the pelvis pinned at pad centre — pushed the feet off the pad's near (camera)
+  // edge for half the loop. Subtracting this bias at runtime re-centres her stance
+  // on the deck so the feet actually rest on it.
+  const footZBias = (mean(11 * 3 + 2) + mean(14 * 3 + 2)) / 2;
+  return {
+    dirs,
+    frames,
+    meanHeading: Math.atan2(sy, sx),
+    meanHipX: mean(47),
+    meanHipZ: mean(48),
+    footZBias,
+  };
 }
 /** The dance clips, one chosen per session for replay variety (like the avatar):
  *  [0] a long, arm-forward idol routine; [1] a more athletic take (lunges, a bow,
@@ -1140,6 +1162,11 @@ export class AttractDancer {
     // motion, NOT from md[46], so she never floats).
     let pelX = CX + (md[47] - this.clip.meanHipX) * legPx * MOCAP_SWAY;
     let pelZ = (md[48] - this.clip.meanHipZ) * legPx * MOCAP_SWAY;
+    // Re-centre the stance on the pad: shift the pelvis BACK along the facing axis
+    // by the clip's mean foot-forward bias, so the neutral stance sits on the deck
+    // instead of hanging off its near (camera) edge (feet were planting on air).
+    pelX -= this.clip.footZBias * sfX * legPx;
+    pelZ -= this.clip.footZBias * sfZ * legPx;
     const lowestFootYoff = Math.max(moff[11 * 3 + 1], moff[14 * 3 + 1]); // y DOWN
     let pelY = FOOT_Y - L_SHOE * B - lowestFootYoff;
     // Chart-reactive bounce: sink the WHOLE body toward the pad on the beat (y is
@@ -1242,11 +1269,18 @@ export class AttractDancer {
       // planted it is (`plant`≈1 near the floor, →0 as it lifts) so a genuine
       // step-out/kick isn't truncated. The 4 step panels sit inside this rect, so
       // chart footwork is untouched; only wide idle mocap stances get reined in.
-      const plant = clamp(1 - (FOOT_Y - L_SHOE * B - ty) / (0.22 * B), 0, 1);
+      // `plant`≈1 while the ankle is anywhere near the pad plane (a wide range so a
+      // lightly-loaded forward toe-tap still counts as planted and gets reined in),
+      // easing to 0 only once the foot clearly lifts — so a genuine step-out/kick
+      // isn't truncated.
+      const plant = clamp(1 - (FOOT_Y - L_SHOE * B - ty) / (0.34 * B), 0, 1);
       if (plant > 0) {
-        const inset = 0.04 * B; // shoe half-length margin so the whole shoe stays on
-        const cxl = clamp(tx, CX - 0.36 * B + inset, CX + 0.36 * B - inset);
-        const czl = clamp(tz, -0.36 * B + inset, 0.27 * B - inset);
+        // The clamp bounds the ANKLE, but the level shoe extends forward from it, so
+        // the near (toe) inset is a full shoe-length while the far (heel) and side
+        // insets are small — keeps the whole shoe on the deck without jamming the
+        // stance narrow.
+        const cxl = clamp(tx, CX - (PAD_HW - 0.04) * B, CX + (PAD_HW - 0.04) * B);
+        const czl = clamp(tz, (PAD_ZF + 0.05) * B, (PAD_ZN - 0.17) * B);
         tx += (cxl - tx) * plant;
         tz += (czl - tz) * plant;
       }
@@ -1679,9 +1713,9 @@ export class AttractDancer {
     const gb = this.pal.gradBot;
 
     // --- platform slab: dark rounded quad spanning the panels ---
-    const hw = 0.36 * B; // half width in world x
-    const zN = 0.27 * B; // near edge (+z, toward the viewer) — snug past the D arrow
-    const zF = -0.36 * B; // far edge (−z) — snug past the U arrow, so she stands ON it
+    const hw = PAD_HW * B; // half width in world x
+    const zN = PAD_ZN * B; // near edge (+z, toward the viewer) — room for forward reaches
+    const zF = PAD_ZF * B; // far edge (−z) — past the U arrow, so she stands ON it
     this.projFloor(CX - hw, zN, pp, 0); // front-left
     this.projFloor(CX + hw, zN, pp, 2); // front-right
     this.projFloor(CX + hw, zF, pp, 4); // back-right

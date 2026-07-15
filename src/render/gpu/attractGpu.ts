@@ -217,6 +217,9 @@ fn modN(x: f32, n: f32) -> f32 {
 
 @fragment
 fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+  // Dev flat-background (?dancerFlat): skip the whole tunnel and paint a flat
+  // neutral field so the dancer's silhouette/geometry is easy to inspect.
+  if (u.cam.w > 0.5) { return vec4f(0.32, 0.32, 0.37, 1.0); }
   let res = u.res.xy;
   let uv = frag.xy / res;            // 0..1, y down (matches Canvas2D)
   let asp = u.res.z;
@@ -465,6 +468,7 @@ export class AttractGpu {
   private readonly modelSampler: GPUSampler;
   private model: SkinnedModel | null = null;
   private usingModel = false; // set per frame by renderModel()
+  private flatBg = false; // ?dancerFlat dev aid: flat neutral bg for inspecting the dancer
   private padFrame: ReturnType<AttractDancer['build']> | null = null; // for the pad-under-avatar draw
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
   private readonly dancerUniform: GPUBuffer;
@@ -597,6 +601,10 @@ export class AttractGpu {
         : Math.floor(Math.random() * AttractDancer.CLIP_COUNT);
     this.dancer = new AttractDancer(v, clipIdx);
     this.dancer.setSteps(cfg.steps ?? []);
+    // `?dancerFlat` renders a flat neutral background instead of the neon tunnel —
+    // a dev aid for inspecting the dancer's silhouette/geometry without the busy
+    // scene hiding rig issues (does not affect the shipped scene).
+    this.flatBg = new URLSearchParams(location.search).has('dancerFlat');
     // The heavy textured avatar is single-player only (two of them starve the
     // field in 2-player) — kick off its load lazily here. When it's off, the
     // light procedural dancer carries the whole show.
@@ -742,7 +750,7 @@ export class AttractGpu {
     d[44] = 0.05 * Math.sin(now * 0.16) + 0.018 * Math.sin(now * 0.37 + 1.0); // panX
     d[45] = 0.02 * Math.sin(now * 0.13 + 0.5); // panY (tracks the crane)
     d[46] = 1 + 0.06 * Math.sin(now * 0.11) + 0.05 * kick; // zoom breathe + beat push
-    d[47] = 0;
+    d[47] = this.flatBg ? 1 : 0; // dev flat-background flag (see setConfig / bg shader)
     // Dance-pad arrow flash (L,D,U,R) — drawn on the shader floor so the pad
     // shows under EVERY dancer, including the 3D avatars.
     if (this.dancer) this.dancer.padFlashInto(b, this.data.subarray(48, 52));
