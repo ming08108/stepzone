@@ -1755,6 +1755,33 @@ export class AttractDancer {
     this.padEdge(pp[4], pp[5], pp[6], pp[7], 0.8, rr, rg, rb);
     this.padEdge(pp[6], pp[7], pp[0], pp[1], 0.8, rr, rg, rb);
 
+    // Contact shadow: a small dark ellipse on the deck under each foot so she
+    // reads as PLANTED, not hovering. Opaque (no soft edge in this pipeline), so
+    // keep it subtle — a touch darker than the slab, foot-sized, projected on the
+    // floor plane directly under the ankle.
+    const s3 = this.skel3;
+    const sr = (gb[0] / 255) * 0.28;
+    const sg = (gb[1] / 255) * 0.28;
+    const sb = (gb[2] / 255) * 0.28;
+    for (const fi of [FTL, FTR]) {
+      const fx = s3[fi * 3];
+      const fz = s3[fi * 3 + 2];
+      if (!Number.isFinite(fx) || !Number.isFinite(fz)) continue;
+      this.projFloor(fx, fz, pts, 0); // ellipse centre → pts[0],pts[1]
+      const cxp = pts[0];
+      const cyp = pts[1];
+      const N = 10;
+      let prevX = 0;
+      let prevY = 0;
+      for (let i = 0; i <= N; i++) {
+        const a = (i / N) * Math.PI * 2;
+        this.projFloor(fx + Math.cos(a) * 0.06 * B, fz + Math.sin(a) * 0.045 * B, pts, 2);
+        if (i > 0) this.solidTri(cxp, cyp, prevX, prevY, pts[2], pts[3], sr, sg, sb);
+        prevX = pts[2];
+        prevY = pts[3];
+      }
+    }
+
     for (let oi = 0; oi < 4; oi++) {
       const panel = PAD_ORDER[oi];
       const cx = PAD_CX[panel];
