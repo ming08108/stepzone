@@ -392,7 +392,21 @@ export class ThreeVrmDancer {
     this.bodyShift.lerp(this.desiredShift, 0.14);
     vrm.scene.position.x = this.bodyShift.x;
     vrm.scene.position.z = this.bodyShift.z;
-    const targetYaw = THREE.MathUtils.clamp(-comX * 0.9, -0.5, 0.5);
+    // Body facing: gently track the working side, but when the feet actually CROSS the
+    // centreline (foot 0's target ends up right of foot 1's, or vice-versa) pivot the
+    // whole body toward the crossing so the reaching leg rotates around instead of
+    // scissoring stiffly through the torso — like a real crossover step.
+    const cross = this.footPos[0].x - this.footPos[1].x; // >0 ⇒ feet crossed (0 left of 1)
+    let crossDir = 0;
+    if (Math.abs(cross) > 0.04) {
+      // The foot furthest from centre leads the turn, toward the side it reached.
+      crossDir =
+        Math.abs(this.footPos[0].x) > Math.abs(this.footPos[1].x)
+          ? Math.sign(this.footPos[0].x)
+          : Math.sign(this.footPos[1].x);
+      if (cross < 0) crossDir = 0; // not actually crossed, just a wide non-crossing stance
+    }
+    const targetYaw = THREE.MathUtils.clamp(-(comX * 0.6 + crossDir * 0.3), -0.55, 0.55);
     this.yaw += (targetYaw - this.yaw) * 0.1;
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
     vrm.scene.updateMatrixWorld(true);
@@ -439,30 +453,39 @@ export class ThreeVrmDancer {
     }
   }
 
-  /** Placeholder groove when no chart: alternate feet through the panels, w/ occasional jump. */
+  /** Placeholder groove when no chart: alternating steps that include deliberate
+   *  crossovers (left foot → right panel, right foot → left panel) and a jump, so the
+   *  crossover-pivot and jump read even without a chart. Panels: 0=L,1=D,2=U,3=R. */
   private synth(beat: number): void {
     const ib = Math.floor(beat);
     if (ib <= this.lastSynthBeat) return;
     this.lastSynthBeat = ib;
-    const PATTERN = [0, 3, 2, 1, 3, 0, 1, 2]; // L R U D R L D U (panels)
-    const idx = ((ib % PATTERN.length) + PATTERN.length) % PATTERN.length;
-    if (idx === 4) {
-      // a jump every 8 beats
+    const SYNTH: ({ foot: 0 | 1; panel: number } | 'jump')[] = [
+      { foot: 0, panel: 0 }, // left foot → L (normal)
+      { foot: 1, panel: 3 }, // right foot → R (normal)
+      { foot: 0, panel: 3 }, // left foot → R (CROSSOVER)
+      { foot: 1, panel: 0 }, // right foot → L (CROSSOVER)
+      'jump',
+      { foot: 0, panel: 2 }, // left foot → U
+      { foot: 1, panel: 0 }, // right foot → L (CROSSOVER)
+      { foot: 0, panel: 3 }, // left foot → R (CROSSOVER)
+    ];
+    const step = SYNTH[((ib % SYNTH.length) + SYNTH.length) % SYNTH.length];
+    if (step === 'jump') {
       this.assignFoot(0, 0, ib, ib + 1);
       this.assignFoot(1, 3, ib, ib + 1);
       this.jumpWin.t0 = ib;
       this.jumpWin.t1 = ib + 1;
-    } else {
-      const foot = (ib % 2) as 0 | 1;
-      this.assignFoot(foot, PATTERN[idx], ib, ib + 1);
-      // the other foot recovers toward home (keeps the stance narrow → clean skirt)
-      const other = (1 - foot) as 0 | 1;
-      const st = this.feet[other];
-      st.from.copy(st.plant);
-      st.to.copy(HOME[other]);
-      st.t0 = ib;
-      st.t1 = ib + 1;
+      return;
     }
+    this.assignFoot(step.foot, step.panel, ib, ib + 1);
+    // the other foot recovers toward home (keeps the stance narrow → clean skirt)
+    const other = (1 - step.foot) as 0 | 1;
+    const st = this.feet[other];
+    st.from.copy(st.plant);
+    st.to.copy(HOME[other]);
+    st.t0 = ib;
+    st.t1 = ib + 1;
   }
 
   private assignFoot(foot: 0 | 1, panel: number, t0: number, t1: number): void {
