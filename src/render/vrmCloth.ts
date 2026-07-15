@@ -54,10 +54,10 @@ export function buildClothPhysics(vrm: VRM): void {
   const clean = (a: (VRMSpringBoneCollider | null)[]) =>
     a.filter((c): c is VRMSpringBoneCollider => !!c);
 
-  const thighL = capsule('leftUpperLeg', 0.062);
-  const thighR = capsule('rightUpperLeg', 0.062);
-  const shinL = capsule('leftLowerLeg', 0.045);
-  const shinR = capsule('rightLowerLeg', 0.045);
+  const thighL = capsule('leftUpperLeg', 0.072);
+  const thighR = capsule('rightUpperLeg', 0.072);
+  const shinL = capsule('leftLowerLeg', 0.05);
+  const shinR = capsule('rightLowerLeg', 0.05);
   // Small, LOW collider fills the crotch gap without poofing the skirt (on many rigs
   // the `hips` bone sits low near the crotch; fall back to `spine`).
   const pelvis = sphere('hips', 0.07) ?? sphere('spine', 0.07);
@@ -104,7 +104,7 @@ export function buildClothPhysics(vrm: VRM): void {
         gravityPower: 0.55,
         gravityDir: down,
         dragForce: 0.5,
-        hitRadius: 0.03,
+        hitRadius: 0.04,
       };
     },
     [legGroup],

@@ -51,6 +51,10 @@ const PANEL = [
 ];
 const PANEL_COL = [0xff3fa0, 0x8f6bff, 0x4fd6ff, 0xffa63f];
 const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05)]; // L/R rest
+// A step is a QUICK move at the end of the beat, not a slow glide across the whole beat
+// — the foot HOLDS its arrow, then steps and plants on the beat (a real step, not a
+// floaty drift). Beats of swing before the landing beat.
+const SWING_BEATS = 0.42;
 
 const SAMBA_URL = '/threejs-demo/samba.fbx';
 
@@ -479,7 +483,7 @@ export class ThreeVrmDancer {
       if ((row.lCol ?? -1) >= 0) this.assignFoot(0, row.lCol as number, land, beat);
       if ((row.rCol ?? -1) >= 0) this.assignFoot(1, row.rCol as number, land, beat);
       if (jump) {
-        this.jumpWin.t0 = Math.max(beat, land - 1);
+        this.jumpWin.t0 = Math.max(beat, land - SWING_BEATS);
         this.jumpWin.t1 = land;
       }
     }
@@ -506,7 +510,7 @@ export class ThreeVrmDancer {
     if (step === 'jump') {
       this.assignFoot(0, 0, ib + 1, beat);
       this.assignFoot(1, 3, ib + 1, beat);
-      this.jumpWin.t0 = beat;
+      this.jumpWin.t0 = Math.max(beat, ib + 1 - SWING_BEATS);
       this.jumpWin.t1 = ib + 1;
       return;
     }
@@ -523,7 +527,7 @@ export class ThreeVrmDancer {
     const st = this.feet[foot];
     st.from.copy(this.footPos[foot]);
     st.to.copy(PANEL[panel]).setY(this.ankleY);
-    st.t0 = Math.max(nowBeat, land - 1);
+    st.t0 = Math.max(nowBeat, land - SWING_BEATS);
     st.t1 = Math.max(st.t0 + 0.05, land);
     this.litPanel[panel] = land;
   }
