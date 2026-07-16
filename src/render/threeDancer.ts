@@ -55,6 +55,10 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 // — the foot HOLDS its arrow, then steps and plants on the beat (a real step, not a
 // floaty drift). Beats of swing before the landing beat.
 const SWING_BEATS = 0.55;
+// How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
+// slightly turned-out stance keeps the two thighs from converging and clipping when the
+// feet come close or cross — real legs don't bend in perfectly parallel planes.
+const KNEE_OUT = 0.34;
 
 const SAMBA_URL = '/threejs-demo/samba.fbx';
 
@@ -465,8 +469,9 @@ export class ThreeVrmDancer {
     const b = Number.isFinite(beat) ? beat : now * 1.4;
     const elapsed = now < 0 ? 0 : now;
 
-    // Calm groove drives the upper body (slowed); humanoid maps normalized → raw.
-    this.mixer.setTime((elapsed * 0.28) % this.clipDur);
+    // The groove clip drives the upper body; humanoid maps normalized → raw. Kept lively
+    // (not slo-mo) so the arms read as dancing rather than drifting.
+    this.mixer.setTime((elapsed * 0.42) % this.clipDur);
     vrm.humanoid?.update();
 
     // Schedule footwork from the chart (or synth), producing this frame's foot targets.
@@ -478,7 +483,7 @@ export class ThreeVrmDancer {
     // (foot 0 drives the VRM right leg → −x, foot 1 the left → +x) so they sit side by side
     // instead of intersecting. Only fires when genuinely close; a real cross to opposite
     // panels stays wide and is handled by the body pivot below.
-    const FOOT_GAP = 0.12;
+    const FOOT_GAP = 0.16;
     const sepX = this.footPos[1].x - this.footPos[0].x;
     const sep = Math.hypot(sepX, this.footPos[1].z - this.footPos[0].z);
     if (sep < FOOT_GAP) {
@@ -512,12 +517,16 @@ export class ThreeVrmDancer {
     // hovering between both. Foot-IK re-plants afterwards, so the feet stay put while the
     // pelvis rides over them.
     this.hips.quaternion.slerp(this.hipsRestQuat, 0.82);
-    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.05, 0, this.weight * 0.12);
+    // Continuous side-to-side hip rock (one cycle/beat) keeps the pelvis alive even between
+    // steps, so she's never a statue holding an IK pose. It rides ON TOP of the weight-
+    // driven contrapposto; the feet stay planted while the hips groove over them.
+    const hipGroove = 0.05 * Math.sin(2 * Math.PI * bp);
+    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.05, 0, this.weight * 0.12 + hipGroove);
     this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
-    // Torso counter-sway: the shoulders resist the hip tilt (the classic S-curve) and turn
-    // a touch into the weight — flow through the spine instead of a rigid plank.
+    // Torso counter-sway: the shoulders resist both the weight tilt and the hip rock (the
+    // classic S-curve) — flow through the spine instead of a rigid plank.
     if (this.upperChest) {
-      this.eChest.set(0.02 * dip, -this.weight * 0.05, -this.weight * 0.06);
+      this.eChest.set(0.02 * dip, -this.weight * 0.05, -this.weight * 0.06 - 0.5 * hipGroove);
       this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
     vrm.scene.updateMatrixWorld(true);
@@ -552,8 +561,9 @@ export class ThreeVrmDancer {
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
     vrm.scene.updateMatrixWorld(true);
 
-    this.solveLeg(this.footLeg[0], this.footPos[0]);
-    this.solveLeg(this.footLeg[1], this.footPos[1]);
+    // footLeg[0] = VRM right leg (hip on −x) → splay its knee toward −x; [1] = left → +x.
+    this.solveLeg(this.footLeg[0], this.footPos[0], -KNEE_OUT);
+    this.solveLeg(this.footLeg[1], this.footPos[1], KNEE_OUT);
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
@@ -643,7 +653,11 @@ export class ThreeVrmDancer {
         const u = (beat - st.t0) / (st.t1 - st.t0 || 1);
         this.footPos[f].copy(st.from).lerp(st.to, this.minJerk(u));
         const arc = Math.sin(u * Math.PI);
-        this.footPos[f].y += arc * (inJump ? 0.12 : 0.05);
+        this.footPos[f].y += arc * (inJump ? 0.14 : 0.085); // pick the foot up (less shuffle)
+        // A crossing step — foot heading to the opposite side of its own hip — swings IN
+        // FRONT of the standing leg (a +z bulge) instead of straight through it.
+        const crossing = f === 0 ? st.to.x > 0.05 : st.to.x < -0.05;
+        if (crossing) this.footPos[f].z += arc * 0.2;
         this.support[f] = 1 - 0.85 * arc;
       }
     }
@@ -681,7 +695,7 @@ export class ThreeVrmDancer {
     bone.quaternion.copy(this.qP.invert().multiply(this.qW));
   }
 
-  private solveLeg(leg: Leg, targetWorld: THREE.Vector3): void {
+  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number): void {
     leg.hip.updateWorldMatrix(true, false);
     leg.hip.getWorldPosition(this.hipPos);
     const toT = this.sToT.copy(targetWorld).sub(this.hipPos);
@@ -697,7 +711,10 @@ export class ThreeVrmDancer {
       1,
     );
     const hipAngle = Math.acos(cosHip);
-    const pole = this.sPole.copy(this.FWD).addScaledVector(n, -this.FWD.dot(n));
+    // Pole = forward + a per-leg OUTWARD bias, so the knee bends forward-and-out (a natural,
+    // faintly turned-out stance) rather than straight forward — stops the thighs converging.
+    const pole = this.sPole.set(outX, 0, 1);
+    pole.addScaledVector(n, -pole.dot(n));
     if (pole.lengthSq() < 1e-6) pole.set(0, 0, 1);
     pole.normalize();
     const axis = this.sAxis.crossVectors(n, pole).normalize();
