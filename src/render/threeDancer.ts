@@ -64,9 +64,6 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 const PELVIS_ROLL_SIGN = 1;
 const LEAN_ROLL_SIGN = 1;
 const LEAN_PITCH_SIGN = 1;
-// Weight of the double-cross turn term vs. the single-cross one (higher = a fuller pivot when
-// BOTH legs are crossed). ~3 lets a full double-cross saturate the yaw to its tunable max.
-const CROSS_TURN = 3;
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
 // slightly turned-out stance keeps the two thighs from converging and clipping when the
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
@@ -170,7 +167,10 @@ export class ThreeVrmDancer {
   private footPos = [new THREE.Vector3(), new THREE.Vector3()];
   private footPitch = [0, 0]; // per-foot ankle pitch (toe articulation) — from the sampler
   private qFoot = new THREE.Quaternion();
+  private qFootYaw = new THREE.Quaternion();
+  private footYaw = [0, 0]; // per-foot world yaw; only eases toward the body facing while AIRBORNE
   private readonly footAxis = new THREE.Vector3(1, 0, 0);
+  private readonly upAxis = new THREE.Vector3(0, 1, 0);
   private yaw = 0;
   private springAccum = 0; // spring-bone physics runs at a fixed cap, not the full refresh
 
@@ -184,7 +184,10 @@ export class ThreeVrmDancer {
   tune = {
     clipBeats: 39,
     clipTwist: 0, // how much of the clip's own Y-rotation to keep (0 = no samba spin; 1 = full)
-    yawAmp: 0.7, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
+    clipLean: 0.5, // how much of the clip's torso LEAN (roll/pitch tilt) to keep (0 = none)
+    yawAmp: 0.5, // turn on a SINGLE cross (one leg over the line)
+    crossTurn: 1.8, // turn on a FULL double-cross (both feet swapped) — up to π = a full spin around
+    yawSign: 1, // which way the crossover pivot turns (±1) — flip on the VRM0-mirrored rig
     yawRate: 6, // turn snappiness — drives the yaw spring stiffness AND the teleport-backstop cap
     commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
     commitZ: 0.5, // fore/aft weight shift
@@ -526,9 +529,8 @@ export class ThreeVrmDancer {
   private qSwing = new THREE.Quaternion();
   private qScaled = new THREE.Quaternion();
 
-  /** Scale a bone's Y-axis twist (facing rotation) to `keep`× the clip's, leaving roll/pitch
-   *  untouched (swing-twist decomposition). Used to tame the samba clip's fast UPPER-body
-   *  spin — the "instant twisting" seen from the side — without flattening the torso sway. */
+  /** Scale a bone's Y-axis TWIST (facing rotation) to `keep`× the clip's, leaving roll/pitch.
+   *  Tames the samba clip's fast upper-body spin (the "instant twist") without flattening sway. */
   private dampTwist(bone: THREE.Object3D | null, keep: number): void {
     if (!bone || keep >= 0.999) return;
     const q = bone.quaternion;
@@ -536,6 +538,17 @@ export class ThreeVrmDancer {
     this.qSwing.copy(this.qTwist).invert().premultiply(q); // swing S = q · T⁻¹  (roll/pitch only)
     this.qScaled.identity().slerp(this.qTwist, keep); // scaled twist
     q.copy(this.qSwing).multiply(this.qScaled); // S · (keep·T)
+  }
+
+  /** Scale a bone's SWING (roll/pitch = the LEAN/tilt) to `keep`× the clip's, leaving the twist.
+   *  Cancels the samba clip's torso lean, which can read oddly against the balance model's lean. */
+  private dampSwing(bone: THREE.Object3D | null, keep: number): void {
+    if (!bone || keep >= 0.999) return;
+    const q = bone.quaternion;
+    this.qTwist.set(0, q.y, 0, q.w).normalize(); // Y-twist T
+    this.qSwing.copy(this.qTwist).invert().premultiply(q); // swing S = q · T⁻¹
+    this.qScaled.identity().slerp(this.qSwing, keep); // scaled swing S^keep
+    q.copy(this.qScaled).multiply(this.qTwist); // (keep·S) · T
   }
 
   /** One semi-implicit spring step for a [position, velocity] pair. dt-correct (identical
@@ -604,10 +617,16 @@ export class ThreeVrmDancer {
     // scene-yaw crossover pivot instead; the clip keeps only its roll/pitch sway (swing-twist
     // decomposition leaves those). clipTwist>0 dials the samba rotation back in if wanted.
     const tt = this.tune.clipTwist;
+    const cl = this.tune.clipLean;
     this.dampTwist(this.hips, tt);
     this.dampTwist(this.spine, tt);
     this.dampTwist(this.chest, tt);
     this.dampTwist(this.upperChest, tt);
+    // Cancel/scale the clip's torso LEAN (roll/pitch) on the spine — it can read oddly against the
+    // balance model's own lean. (Hips keep their sway; only the upper torso tilt is scaled.)
+    this.dampSwing(this.spine, cl);
+    this.dampSwing(this.chest, cl);
+    this.dampSwing(this.upperChest, cl);
 
     // ---- Feet: pure function of beat (never freezes across a loop/seek) ----
     const tl = this.chartTl ?? this.synthTl!;
@@ -777,16 +796,15 @@ export class ThreeVrmDancer {
     vrm.scene.position.z = this.sComZ[0];
 
     // ---- Crossedness, measured in the BODY frame ----
-    // A leg is "crossed" when its foot is past the body's own centreline — which MOVES with the
-    // CoM translation and body yaw. Measuring in world x (as before) got the answer wrong exactly
-    // when the body was shifted/turned, i.e. during the deep crossovers where it matters most.
-    // Rotate each foot's offset-from-body by −yaw (last frame's yaw; it's rate-limited, so stable).
-    const cy = Math.cos(this.yaw);
-    const sy = Math.sin(this.yaw);
+    // A leg is "crossed" when its foot is past the body's own centreline — measured relative to
+    // the CoM TRANSLATION only (footPos.x − comX), NOT rotated by the current yaw. Rotating by yaw
+    // fed back on itself: with the body turned and a foot on the U/D pad (fore/aft), the rotation
+    // term made that foot falsely read as crossed, pushing the yaw further the SAME way — she
+    // turned the wrong way. Translation-only has no feedback: a U/D step reads c≈0 (no turn), an
+    // L/R crossover reads a clean ±0.3.
     const bodyX = this.sComX[0];
-    const bodyZ = this.sComZ[0];
-    const lx0 = cy * (this.footPos[0].x - bodyX) - sy * (this.footPos[0].z - bodyZ);
-    const lx1 = cy * (this.footPos[1].x - bodyX) - sy * (this.footPos[1].z - bodyZ);
+    const lx0 = this.footPos[0].x - bodyX;
+    const lx1 = this.footPos[1].x - bodyX;
     const c0 = Math.max(0, lx0); // VRM right leg (hip −x) reaching past centre to +x
     const c1 = Math.max(0, -lx1); // VRM left leg (hip +x) reaching past centre to −x
 
@@ -799,8 +817,19 @@ export class ThreeVrmDancer {
     //    magnitude min(c0,c1) (how double-crossed she is) whose DIRECTION is the front-foot choice
     //    sSep (continuous, from the swing destination), so she pivots ~90° to send one leg front
     //    and the other back instead of scissoring. min() and sSep are both continuous → no snap.
-    const dbl = this.sSep[0] * Math.min(c0, c1);
-    const yawTarget = this.tune.yawAmp * Math.tanh((c0 - c1 + CROSS_TURN * dbl) / 0.18);
+    // SINGLE-cross turn (moderate) + DOUBLE-cross turn (up to a full spin). Both C¹, summed then
+    // clamped to ±π. The double term ramps with how double-crossed she is, its direction the
+    // continuous front-foot choice sSep — so a full swap sends her turning right around and the
+    // legs come fully undone instead of scissoring.
+    const single = Math.tanh((c0 - c1) / 0.18);
+    const dblT = this.sSep[0] * Math.min(1, Math.min(c0, c1) / 0.22);
+    const yawTarget =
+      this.tune.yawSign *
+      THREE.MathUtils.clamp(
+        this.tune.yawAmp * single + this.tune.crossTurn * dblT,
+        -Math.PI,
+        Math.PI,
+      );
     const yPrev = this.sYaw[0];
     // yawRate drives BOTH the spring stiffness (the real bottleneck on turn speed) and the hard
     // per-frame cap, so the "Turn speed" knob genuinely controls snappiness. The cap is kept a bit
@@ -869,8 +898,29 @@ export class ThreeVrmDancer {
       0.3,
       1 + 4.5 * c1 + ks * sepAmt * (1 - front) - 0.55 * ks * sepAmt * front,
     );
-    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, poleZ0, this.footPitch[0]);
-    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, poleZ1, this.footPitch[1]);
+    // Foot facing: a PLANTED foot can't rotate on the ground (that looked unphysical), so only a
+    // foot in the AIR eases its yaw toward the body's current facing — it turns mid-swing and is
+    // aligned by the time it lands. Planted feet hold whatever yaw they landed with.
+    for (let f = 0; f < 2; f++) {
+      const u = S.swingU[f];
+      if (u > 0.01) this.footYaw[f] += (this.yaw - this.footYaw[f]) * Math.min(1, u * 1.5);
+    }
+    this.solveLeg(
+      this.footLeg[0],
+      this.footPos[0],
+      splay0,
+      poleZ0,
+      this.footPitch[0],
+      this.footYaw[0],
+    );
+    this.solveLeg(
+      this.footLeg[1],
+      this.footPos[1],
+      splay1,
+      poleZ1,
+      this.footPitch[1],
+      this.footYaw[1],
+    );
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
@@ -1029,7 +1079,14 @@ export class ThreeVrmDancer {
     bone.quaternion.copy(this.qP.invert().multiply(this.qW));
   }
 
-  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number, fwdZ = 1, pitch = 0): void {
+  private solveLeg(
+    leg: Leg,
+    targetWorld: THREE.Vector3,
+    outX: number,
+    fwdZ = 1,
+    pitch = 0,
+    footYaw = 0,
+  ): void {
     leg.hip.updateWorldMatrix(true, false);
     leg.hip.getWorldPosition(this.hipPos);
     const toT = this.sToT.copy(targetWorld).sub(this.hipPos);
@@ -1065,12 +1122,14 @@ export class ThreeVrmDancer {
       this.sAim.copy(targetWorld).sub(this.kneePos),
     );
     leg.knee.updateWorldMatrix(true, false);
-    // Ankle holds flat in world (footBind), then articulates by `pitch` about its own axis —
-    // toe leading a swing / rolling on the beat — so the foot reads as a foot, not a slab.
+    // Ankle holds flat in world (footBind) but TURNS with the body yaw so the toes follow her
+    // facing (she can spin right around on a full crossover and her feet come with her), then
+    // articulates by `pitch` about its own axis — toe leading a swing / rolling on the beat.
     leg.ankle.parent!.getWorldQuaternion(this.qP);
     leg.ankle.quaternion.copy(
       this.qP
         .invert()
+        .multiply(this.qFootYaw.setFromAxisAngle(this.upAxis, footYaw))
         .multiply(leg.footBind)
         .multiply(this.qFoot.setFromAxisAngle(this.footAxis, pitch)),
     );

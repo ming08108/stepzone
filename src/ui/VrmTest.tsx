@@ -22,7 +22,9 @@ const MODELS: Record<string, string> = {
 type Knob = { key: string; label: string; min: number; max: number; step: number };
 const KNOBS: Knob[] = [
   { key: 'clipTwist', label: 'Clip rotation (samba spin)', min: 0, max: 1, step: 0.02 },
-  { key: 'yawAmp', label: 'Body turn into crossover', min: 0, max: 1.6, step: 0.02 },
+  { key: 'clipLean', label: 'Clip torso lean', min: 0, max: 1, step: 0.02 },
+  { key: 'yawAmp', label: 'Turn on single cross', min: 0, max: 1.6, step: 0.02 },
+  { key: 'crossTurn', label: 'Turn on full cross (→π spin)', min: 0, max: 3.14, step: 0.05 },
   { key: 'yawRate', label: 'Turn snappiness', min: 1, max: 30, step: 0.5 },
   { key: 'commitX', label: 'Weight shift  ← →', min: 0, max: 1, step: 0.02 },
   { key: 'commitZ', label: 'Weight shift  fore/aft', min: 0, max: 1, step: 0.02 },
@@ -36,7 +38,9 @@ const KNOBS: Knob[] = [
 ];
 const DEFAULTS: Record<string, number> = {
   clipTwist: 0,
-  yawAmp: 0.7,
+  clipLean: 0.5,
+  yawAmp: 0.5,
+  crossTurn: 1.8,
   yawRate: 6,
   commitX: 0.6,
   commitZ: 0.5,
@@ -55,12 +59,14 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
   const readoutRef = useRef<HTMLDivElement>(null);
   const skelRef = useRef(false);
   const notesRef = useRef(false);
+  const flipRef = useRef(false);
   const speedRef = useRef(1);
   const [tune, setTune] = useState<Record<string, number>>({ ...DEFAULTS });
   const [speed, setSpeed] = useState(1);
   const [show, setShow] = useState(true);
   const [skel, setSkel] = useState(false);
   const [notes, setNotes] = useState(false);
+  const [flip, setFlip] = useState(false);
   const [model, setModel] = useState(
     () => new URLSearchParams(location.search).get('model')?.toLowerCase() ?? 'miku4',
   );
@@ -93,6 +99,7 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
       if (clipBeats > 0) d.tune.clipBeats = clipBeats;
       d.showSkeleton(skelRef.current);
       d.setShowNotes(notesRef.current);
+      d.tune.yawSign = flipRef.current ? -1 : 1;
       controls = new OrbitControls(d.cam, canvas);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
@@ -155,6 +162,12 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     dancerRef.current?.setShowNotes(notes);
   }, [notes]);
 
+  useEffect(() => {
+    flipRef.current = flip;
+    const d = dancerRef.current;
+    if (d) d.tune.yawSign = flip ? -1 : 1;
+  }, [flip]);
+
   const set = (k: string, v: number) => {
     setTune((t) => ({ ...t, [k]: v }));
     const d = dancerRef.current;
@@ -203,6 +216,10 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
             <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={notes} onChange={(e) => setNotes(e.target.checked)} />
               notes
+            </label>
+            <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={flip} onChange={(e) => setFlip(e.target.checked)} />
+              flip turn
             </label>
           </div>
           <label style={row}>
