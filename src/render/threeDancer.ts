@@ -346,10 +346,13 @@ export class ThreeVrmDancer {
     this.frameCamera(w, h);
     // We drive the VRM's world matrices manually every frame (the pose pipeline ends with an
     // updateMatrixWorld before the spring bones, which themselves keep their chains current).
-    // Turn OFF the renderer's automatic per-frame scene sweep so it doesn't redundantly
-    // re-traverse all ~240 VRM nodes on top of ours. The pad/lights are static (updated once).
+    // Turn OFF the renderer's automatic per-frame sweep at the ROOT scene so it doesn't
+    // redundantly re-traverse all ~240 VRM nodes on top of ours. The pad/lights are static
+    // (updated once). NOTE: the flag must be on the ROOT, not vrm.scene — with it on vrm.scene,
+    // `vrm.scene.updateMatrixWorld(true)` skips recomputing vrm.scene's OWN world matrix, so
+    // `vrm.scene.position` (the whole-body CoM translation) never reached the rendered bones.
     this.scene.updateMatrixWorld(true);
-    vrm.scene.matrixWorldAutoUpdate = false;
+    this.scene.matrixWorldAutoUpdate = false;
     this.ready = true;
   }
 
@@ -566,12 +569,12 @@ export class ThreeVrmDancer {
       tgtX = this.footPos[act].x;
       tgtZ = this.footPos[act].z;
     }
-    // FULL commit (the mass goes over the support), Z at 0.9 (on-camera fore/aft is foreshortened,
-    // the pitch-lean carries it). A SOFTER spring (ω≈9) than before so the pelvis FLOWS foot to
-    // foot instead of snapping to each new target — the stepwise target through a stiff spring was
-    // what jerked the hips side to side. ζ=0.75 keeps a small settle.
-    const comTgtX = tgtX;
-    const comTgtZ = tgtZ * 0.9;
+    // PARTIAL commit (~0.6): the pelvis leans TOWARD the weight foot without stacking directly
+    // over it — full commit read as over-exaggerated once the translation actually rendered. She
+    // stays inside her support base (both feet), so it's a natural weight shift, not a topple.
+    // Soft spring (ω≈9) so the pelvis FLOWS foot to foot instead of snapping. ζ=0.75 settles.
+    const comTgtX = tgtX * 0.6;
+    const comTgtZ = tgtZ * 0.5;
     this.sp2(this.sComX, comTgtX, 9 * tempo, 0.75, dt, cut);
     this.sp2(this.sComZ, comTgtZ, 9 * tempo, 0.75, dt, cut);
 
@@ -703,7 +706,7 @@ export class ThreeVrmDancer {
     // then a HARD per-frame cap: |Δyaw| ≤ 1.3 rad/s·dt. The turn is small (±0.28 rad) and slow now
     // that the knee DEPTH-split does the crossover separation — a big/fast yaw read as the body
     // snapping left↔right during crossover runs. A symmetric double-cross gives (c0−c1)=0 → no turn.
-    const yawTarget = 0.16 * Math.tanh((c0 - c1) / 0.18);
+    const yawTarget = 0.06 * Math.tanh((c0 - c1) / 0.18);
     const yPrev = this.sYaw[0];
     this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
     if (!cut) {
