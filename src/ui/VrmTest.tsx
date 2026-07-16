@@ -11,11 +11,13 @@ import { useEffect, useRef, useState } from 'react';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ThreeVrmDancer } from '../render/threeDancer';
 
+// AvatarSample_B and _C are dropped from the picker: they genuinely ship with long coats/dresses
+// (confirmed in bind pose and with spring physics disabled — not a bug), which don't suit the
+// pad dance and aren't removable without leaving the model undressed. _A stays: its "skirt" was a
+// real bug (a short cardigan flung by the spring solver, now fixed) — it wears cardigan + pants.
 const MODELS: Record<string, string> = {
   miku4: '/models/Miku4.vrm',
   a: '/models/AvatarSample_A.vrm',
-  b: '/models/AvatarSample_B.vrm',
-  c: '/models/AvatarSample_C.vrm',
   ps1: '/models/PS1Miku.vrm',
 };
 
