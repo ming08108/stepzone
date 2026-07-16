@@ -265,6 +265,17 @@ export class ThreeVrmDancer {
     // Only build cloth physics if the model shipped none (MMD→VRM conversions);
     // proper VRM/VRoid exports already carry their own spring bones.
     if (!vrm.springBoneManager || vrm.springBoneManager.joints.size === 0) buildClothPhysics(vrm);
+    // Give every spring bone the scene root as its CENTER, so the physics is computed relative to
+    // the moving body and IGNORES whole-body travel. Without this, the ~2 m/s weight-shift
+    // translation (which only started rendering once the matrixWorldAutoUpdate bug was fixed) hit
+    // the solver as huge acceleration and flung the cloth bones down — the a/b/c samples' short
+    // cardigan drooped into a fake floor-length "skirt". Cloth now only reacts to the LOCAL dance.
+    if (vrm.springBoneManager) {
+      for (const joint of vrm.springBoneManager.joints) {
+        (joint as unknown as { center: THREE.Object3D | null }).center = vrm.scene;
+      }
+      vrm.springBoneManager.setInitState(); // re-seed verlet state in the new (centre) space
+    }
 
     // Lights (mutated by setTint/setEnv to match the scene in-game).
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x334433, 2.2);
