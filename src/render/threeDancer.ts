@@ -541,26 +541,39 @@ export class ThreeVrmDancer {
       this.footPos[1].x += push;
     }
 
-    // ---- Centre of mass / balance: one physical state the whole body follows ----
-    // Anticipation: a SWINGING foot pulls weight toward where it's GOING (dest), weighted by
-    // swing progress² so the commit builds through the step and is ~¾ done at the land. This is
-    // what makes the body LEAD the feet instead of lagging behind them.
+    // ---- Centre of mass / balance: the pelvis ROCKS onto the weight-bearing foot ----
+    // A dancer's hips sit OVER the foot they're standing on and transfer to the next as they step
+    // — they do not hover at the midpoint. Targeting the support-weighted centroid did exactly
+    // that: with the feet on opposite panels the centroid IS the centre, so the pelvis looked
+    // stuck there. Instead target the ACTIVE foot: during a step, transfer from the planted
+    // (stance) foot to the swinging foot's destination (commit late, u²); between steps hold over
+    // the most-recently-landed foot; on a jump aim for the midpoint of the two landing spots.
     const u0 = S.swingU[0];
     const u1 = S.swingU[1];
-    const w0 = u0 > 0 ? 0.25 + 0.75 * u0 * u0 : 1;
-    const w1 = u1 > 0 ? 0.25 + 0.75 * u1 * u1 : 1;
-    const wsum = w0 + w1 || 1;
-    const tgtX = (w0 * S.dest[0].x + w1 * S.dest[1].x) / wsum;
-    const tgtZ = (w0 * S.dest[0].z + w1 * S.dest[1].z) / wsum;
-    // Horizontal CoM — FULL commit: the mass goes where the support is, in every stance. A
-    // partial gain here was a systematic balance error (body inside the feet → "about to fall
-    // over" when both feet went to one side). Style lives in the lean below, not in under-
-    // translating. ζ=0.8 keeps the ~4% overshoot-and-settle ("weight arrived"). Z at 0.9 because
-    // on-camera fore/aft is foreshortened and the pitch-lean carries that axis visually.
+    let tgtX: number;
+    let tgtZ: number;
+    if (u0 > 0.05 && u1 > 0.05) {
+      tgtX = 0.5 * (S.dest[0].x + S.dest[1].x); // jump — fly toward the landing midpoint
+      tgtZ = 0.5 * (S.dest[0].z + S.dest[1].z);
+    } else if (u0 > 0.05 || u1 > 0.05) {
+      const sw = u0 >= u1 ? 0 : 1; // the swinging foot
+      const st = sw === 0 ? 1 : 0; // the planted stance foot bearing weight
+      const k = S.swingU[sw] * S.swingU[sw]; // commit late — weight arrives ~at the land
+      tgtX = this.footPos[st].x * (1 - k) + S.dest[sw].x * k;
+      tgtZ = this.footPos[st].z * (1 - k) + S.dest[sw].z * k;
+    } else {
+      const act = b - S.landBeat[0] <= b - S.landBeat[1] ? 0 : 1; // most-recently-landed foot
+      tgtX = this.footPos[act].x;
+      tgtZ = this.footPos[act].z;
+    }
+    // FULL commit (the mass goes over the support), Z at 0.9 (on-camera fore/aft is foreshortened,
+    // the pitch-lean carries it). A SOFTER spring (ω≈9) than before so the pelvis FLOWS foot to
+    // foot instead of snapping to each new target — the stepwise target through a stiff spring was
+    // what jerked the hips side to side. ζ=0.75 keeps a small settle.
     const comTgtX = tgtX;
     const comTgtZ = tgtZ * 0.9;
-    this.sp2(this.sComX, comTgtX, 13 * tempo, 0.8, dt, cut);
-    this.sp2(this.sComZ, comTgtZ, 13 * tempo, 0.8, dt, cut);
+    this.sp2(this.sComX, comTgtX, 9 * tempo, 0.75, dt, cut);
+    this.sp2(this.sComZ, comTgtZ, 9 * tempo, 0.75, dt, cut);
 
     // Lean-and-catch: the upper body leans INTO the travel (velocity) and toward the not-yet-
     // reached target (error), then settles as the CoM arrives — a fast shift reads as a committed
@@ -690,7 +703,7 @@ export class ThreeVrmDancer {
     // then a HARD per-frame cap: |Δyaw| ≤ 1.3 rad/s·dt. The turn is small (±0.28 rad) and slow now
     // that the knee DEPTH-split does the crossover separation — a big/fast yaw read as the body
     // snapping left↔right during crossover runs. A symmetric double-cross gives (c0−c1)=0 → no turn.
-    const yawTarget = 0.4 * Math.tanh((c0 - c1) / 0.18);
+    const yawTarget = 0.16 * Math.tanh((c0 - c1) / 0.18);
     const yPrev = this.sYaw[0];
     this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
     if (!cut) {
