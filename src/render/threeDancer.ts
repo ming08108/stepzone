@@ -524,8 +524,11 @@ export class ThreeVrmDancer {
     const bp = b - Math.floor(b);
     const dip = Math.pow(0.5 + 0.5 * Math.cos(2 * Math.PI * bp), 0.7); // 1 on beat, 0 mid
     const transfer = 1 - Math.min(support[0], support[1]); // 0 both planted → ~0.85 mid-swing
+    // Deeper settle so she visibly SINKS onto each step (knees absorb) and rises between —
+    // this is what couples the torso to the footwork; too shallow and the body floats at a
+    // constant height while the legs move underneath it.
     const groove =
-      this.legLen * (0.045 * dip * (1 + 0.5 * transfer) + 0.012 * Math.sin(4 * Math.PI * bp));
+      this.legLen * (0.07 * dip * (1 + 0.6 * transfer) + 0.012 * Math.sin(4 * Math.PI * bp));
 
     // Pelvis: stabilise toward rest (keeps the IK sane), then add contrapposto — raise the
     // loaded-side hip and lean slightly into the weight, so she stands ON a leg rather than
@@ -534,7 +537,7 @@ export class ThreeVrmDancer {
     // Only PARTLY stabilise toward rest — enough to keep the IK sane, but leaving most of
     // the clip's hip/pelvis sway so the body actually dances (a hard slerp-to-rest froze the
     // core into a rigid plank). The foot-IK re-plants afterwards, so the hips can swing freely.
-    this.hips.quaternion.slerp(this.hipsRestQuat, 0.45);
+    this.hips.quaternion.slerp(this.hipsRestQuat, 0.6);
     // Continuous core motion on TOP of the clip + weight-driven contrapposto: a side-to-side
     // hip rock AND a pelvis twist (one cycle/beat) so the whole torso rolls, not just tilts.
     const gp = 2 * Math.PI * bp;
@@ -568,8 +571,15 @@ export class ThreeVrmDancer {
     // hovering near centre looking about to topple.
     this.desiredShift.set(comX * 0.55, 0, comZ * 0.36);
     this.bodyShift.lerp(this.desiredShift, 0.2);
-    vrm.scene.position.x = this.bodyShift.x;
-    vrm.scene.position.z = this.bodyShift.z;
+    // Continuous groove TRANSLATION on top of the weight shift: the whole body sways side to
+    // side (and a slight fore/aft figure-8) with the beat, so she TRAVELS instead of staying
+    // rooted to one spot (the samba retarget drops the clip's hip-position track, so without
+    // this she never moves her centre). Added after the lerp so it keeps full amplitude; the
+    // feet stay IK'd to the arrows, so the body drifts over them.
+    const swayX = 0.06 * Math.sin(gp);
+    const swayZ = 0.025 * Math.sin(2 * gp);
+    vrm.scene.position.x = this.bodyShift.x + swayX;
+    vrm.scene.position.z = this.bodyShift.z + swayZ;
     // Body yaw: pivot INTO crossovers so a leg reaching across the centreline swings AROUND
     // the other instead of scissoring through it. A leg is "crossed" when its foot is on the
     // opposite side from its hip (not merely when foot 0 passes foot 1). footPos[0] drives
@@ -580,13 +590,19 @@ export class ThreeVrmDancer {
     const leftCross = Math.max(0, -this.footPos[1].x); // VRM left leg reaching to −x
     let pivot = rightCross - leftCross;
     // Full double-cross (both legs over the line, an X): the difference cancels but the legs
-    // are MOST tangled — turn hard toward the deeper-reaching leg so they go front/back.
-    if (rightCross > 0.06 && leftCross > 0.06)
-      pivot = (rightCross + leftCross) * (rightCross >= leftCross ? 1 : -1);
-    // Strong turn: brings the crossing leg's hip well forward so the leg passes in front
-    // (the feet are pinned at z≈0, so depth separation has to come from turning the hips).
-    const targetYaw = THREE.MathUtils.clamp(pivot * 3.2, -0.95, 0.95);
-    this.yaw += (targetYaw - this.yaw) * 0.18;
+    // are MOST tangled — turn toward one side to send them front/back. Pick the side
+    // CONTINUOUSLY: keep turning the way she's already going. A hard `rightCross >= leftCross`
+    // sign flips the instant the two crossings swap dominance — that snap read as the body
+    // teleporting -180→180. Hysteresis on the current yaw removes the discontinuity.
+    if (rightCross > 0.06 && leftCross > 0.06) {
+      const dir =
+        Math.abs(this.yaw) > 0.06 ? Math.sign(this.yaw) : rightCross >= leftCross ? 1 : -1;
+      pivot = (rightCross + leftCross) * dir;
+    }
+    // Moderate turn + a slower ease so a crossover reads as a smooth pivot, not a snap. The
+    // reduced yaw leans on the stronger knee-forward push (below) for depth separation.
+    const targetYaw = THREE.MathUtils.clamp(pivot * 2.4, -0.72, 0.72);
+    this.yaw += (targetYaw - this.yaw) * 0.1;
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
     // (No full updateMatrixWorld here — solveLeg below updates each leg's hip chain from its
     // ancestors, so it already sees the new scene position/rotation. One fewer 240-node sweep.)
@@ -601,8 +617,8 @@ export class ThreeVrmDancer {
     const c1 = Math.max(0, -this.footPos[1].x); // VRM left-leg crossedness
     const splay0 = -KNEE_OUT * Math.max(0, 1 - c0 / 0.1);
     const splay1 = KNEE_OUT * Math.max(0, 1 - c1 / 0.1);
-    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 4, this.footPitch[0]);
-    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 4, this.footPitch[1]);
+    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 5.5, this.footPitch[0]);
+    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 5.5, this.footPitch[1]);
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
