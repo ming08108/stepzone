@@ -291,6 +291,19 @@ export class ThreeVrmDancer {
       this.arrowMats[p] = mat;
     }
     this.scene.add(pad);
+    // Upcoming-step markers (?vrm debug): one per foot, a glowing tile that DESCENDS onto the pad
+    // it's about to hit, landing on the beat — foot 0 cyan, foot 1 pink. Hidden by default.
+    for (let f = 0; f < 2; f++) {
+      const mat = new THREE.MeshBasicNodeMaterial({
+        color: f === 0 ? 0x4fd6ff : 0xff5fb0,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const mk = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.22), mat);
+      mk.visible = false;
+      this.scene.add(mk);
+      this.noteMarks.push(mk);
+    }
     this.scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
 
@@ -487,6 +500,14 @@ export class ThreeVrmDancer {
   private cachedTex: GPUTexture | null = null;
   private cachedView: GPUTextureView | null = null;
   private skelHelper: THREE.SkeletonHelper | null = null;
+  private noteMarks: THREE.Mesh[] = [];
+  private showNotes = false;
+
+  /** Toggle the descending upcoming-step markers (?vrm debug aid). */
+  setShowNotes(on: boolean): void {
+    this.showNotes = on;
+    if (!on) for (const m of this.noteMarks) m.visible = false;
+  }
 
   /** Toggle a bone-skeleton overlay (drawn over the mesh) — a ?vrm debug aid to see the twist. */
   showSkeleton(on: boolean): void {
@@ -875,6 +896,27 @@ export class ThreeVrmDancer {
       const dbl = b - this.litPanel[p];
       const lit = dbl >= 0 && dbl < 1 ? Math.exp(-3 * dbl) : 0;
       this.arrowMats[p].opacity = 0.28 + 0.7 * lit;
+    }
+
+    // Upcoming-step markers: descend onto the target pad over the ~2 beats before the hit, landing
+    // on the beat (root scene has auto-sweep off, so place + updateMatrixWorld manually).
+    if (this.showNotes) {
+      const LOOK = 2;
+      for (let f = 0; f < 2; f++) {
+        const mk = this.noteMarks[f];
+        if (!mk) continue;
+        const p = S.nextPanel[f];
+        const ahead = S.nextLand[f] - b;
+        if (p >= 0 && ahead >= -0.05 && ahead < LOOK) {
+          const a = Math.max(0, ahead);
+          mk.visible = true;
+          mk.position.set(PANEL[p].x, 0.02 + a * 0.5, PANEL[p].z);
+          (mk.material as THREE.MeshBasicNodeMaterial).opacity = 0.9 * (1 - a / LOOK) + 0.15;
+          mk.updateMatrixWorld(true);
+        } else {
+          mk.visible = false;
+        }
+      }
     }
   }
 

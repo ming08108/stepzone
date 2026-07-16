@@ -54,9 +54,13 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
   const dancerRef = useRef<ThreeVrmDancer | null>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
   const skelRef = useRef(false);
+  const notesRef = useRef(false);
+  const speedRef = useRef(1);
   const [tune, setTune] = useState<Record<string, number>>({ ...DEFAULTS });
+  const [speed, setSpeed] = useState(1);
   const [show, setShow] = useState(true);
   const [skel, setSkel] = useState(false);
+  const [notes, setNotes] = useState(false);
   const [model, setModel] = useState(
     () => new URLSearchParams(location.search).get('model')?.toLowerCase() ?? 'miku4',
   );
@@ -74,7 +78,6 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     let raf = 0;
     let controls: OrbitControls | null = null;
     let lastT = performance.now();
-    const t0 = performance.now();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onExit();
@@ -89,32 +92,32 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
       Object.assign(d.tune, tune);
       if (clipBeats > 0) d.tune.clipBeats = clipBeats;
       d.showSkeleton(skelRef.current);
+      d.setShowNotes(notesRef.current);
       controls = new OrbitControls(d.cam, canvas);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       const [tx, ty, tz] = d.orbitTarget;
       controls.target.set(tx, ty, tz);
       controls.update();
-      let frame = 0;
+      // A scaled clock: advance danceTime by dt·speed each frame so the WHOLE motion (clip,
+      // springs, footwork) slows uniformly — true slow-mo, not just slower arms.
+      let danceTime = 0;
       let cutCount = 0;
       let prevYawDeg = 0;
       let maxJump = 0;
       const loop = () => {
         raf = requestAnimationFrame(loop);
-        let elapsed: number;
-        let dt: number;
+        let sdt: number;
         if (fixedFps > 0) {
-          dt = 1 / fixedFps;
-          elapsed = frame * dt;
-          frame++;
+          sdt = (1 / fixedFps) * speedRef.current;
         } else {
           const now = performance.now();
-          dt = Math.min((now - lastT) / 1000, 1 / 30);
+          sdt = Math.min((now - lastT) / 1000, 1 / 30) * speedRef.current;
           lastT = now;
-          elapsed = (now - t0) / 1000;
         }
-        const beat = (elapsed * 128) / 60;
-        d.build(elapsed, beat, dt);
+        danceTime += sdt;
+        const beat = (danceTime * 128) / 60;
+        d.build(danceTime, beat, sdt);
         controls?.update();
         d.render();
         const el = readoutRef.current;
@@ -147,6 +150,11 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     dancerRef.current?.showSkeleton(skel);
   }, [skel]);
 
+  useEffect(() => {
+    notesRef.current = notes;
+    dancerRef.current?.setShowNotes(notes);
+  }, [notes]);
+
   const set = (k: string, v: number) => {
     setTune((t) => ({ ...t, [k]: v }));
     const d = dancerRef.current;
@@ -156,6 +164,10 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     setTune({ ...DEFAULTS });
     const d = dancerRef.current;
     if (d) Object.assign(d.tune, DEFAULTS);
+  };
+  const setSpd = (v: number) => {
+    setSpeed(v);
+    speedRef.current = v;
   };
 
   return (
@@ -186,9 +198,28 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
             </select>
             <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={skel} onChange={(e) => setSkel(e.target.checked)} />
-              skeleton
+              skel
+            </label>
+            <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={notes} onChange={(e) => setNotes(e.target.checked)} />
+              notes
             </label>
           </div>
+          <label style={row}>
+            <span style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Playback speed</span>
+              <span style={{ opacity: 0.7 }}>{speed.toFixed(2)}×</span>
+            </span>
+            <input
+              type="range"
+              min={0.1}
+              max={1.5}
+              step={0.05}
+              value={speed}
+              onChange={(e) => setSpd(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </label>
           {KNOBS.map((k) => (
             <label key={k.key} style={row}>
               <span style={{ display: 'flex', justifyContent: 'space-between' }}>

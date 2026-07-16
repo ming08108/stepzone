@@ -46,6 +46,8 @@ export interface SampledFeet {
   stepDist: [number, number]; // distance of the step that produced the current plant
   jumpLift: number; // normalized whole-body hop (× legLen by the caller)
   litPanel: [number, number, number, number]; // most-recent land beat per panel (or -9)
+  nextLand: [number, number]; // beat of each foot's UPCOMING step (Infinity if none) — for note markers
+  nextPanel: [number, number]; // panel of each foot's upcoming step (-1 if none)
 }
 
 export function makeSampledFeet(): SampledFeet {
@@ -59,6 +61,8 @@ export function makeSampledFeet(): SampledFeet {
     stepDist: [0, 0],
     jumpLift: 0,
     litPanel: [-9, -9, -9, -9],
+    nextLand: [Infinity, Infinity],
+    nextPanel: [-1, -1],
   };
 }
 
@@ -268,11 +272,15 @@ export function sampleFeet(tl: FootTimeline, b: number, out: SampledFeet): Sampl
       out.support[f] = 1;
       out.pitch[f] = 0.035 * Math.sin(2 * Math.PI * gbp + f * Math.PI);
       out.swingU[f] = 0;
+      out.nextLand[f] = Infinity;
+      out.nextPanel[f] = -1;
       continue;
     }
 
     const next = placeOf(A, period, jPrev + 1);
     const nextLand = landOf(A, period, jPrev + 1);
+    out.nextLand[f] = nextLand; // the upcoming step — for the note markers
+    out.nextPanel[f] = next.panel;
     // Swing starts SWING_BEATS before the land, but never before the previous plant — closely
     // spaced steps (8th notes < 0.55 beat apart) just swing for the whole gap. Continuous either way.
     const t0 = Math.max(nextLand - SWING_BEATS, prevLand);
