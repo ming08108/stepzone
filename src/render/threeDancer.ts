@@ -206,6 +206,9 @@ export class ThreeVrmDancer {
     gaze: 0.5, // head leads toward the foot she's about to step
     breath: 0.5, // slow breathing rise/fall (strongest during holds)
     idleSway: 0.5, // subtle non-repeating body drift when she's not busy stepping
+    kneeSoft: 0.5, // plié — she sinks onto the weight-bearing leg (knees soften under load)
+    preLoad: 0.5, // a small anticipatory dip just before she launches into a step
+    footRoll: 1.0, // heel-toe articulation of the swinging foot (push off the ball, heel-strike)
   };
   private prevBeat = 0;
   private bps = 2.13; // smoothed tempo (beats/sec ≈ 128 BPM) — scales the spring stiffness
@@ -659,7 +662,7 @@ export class ThreeVrmDancer {
     for (let f = 0; f < 2; f++) {
       this.footPos[f].copy(S.pos[f]);
       this.support[f] = S.support[f];
-      this.footPitch[f] = S.pitch[f];
+      this.footPitch[f] = S.pitch[f] * this.tune.footRoll; // heel-toe articulation strength
     }
     this.litPanel = S.litPanel;
     const jumpLift = S.jumpLift * this.legLen;
@@ -764,7 +767,27 @@ export class ThreeVrmDancer {
     // which gives the depth-split poles more travel to separate them — so the pelvis can groove
     // freely (hip clip at full) without the busier hips tightening the legs into a clip.
     const crouch = this.legLen * 0.07 * this.sepAmtPrev;
-    this.sp2(this.sComY, -pumpAmp * pulse(phi + 0.12) - crouch, 22, 0.55, dt, cut);
+    // Plié: sink onto the weight-bearing leg (knees soften under load). Uses last frame's loadLP.
+    const kneeSoft = this.tune.kneeSoft * Math.abs(this.loadLP) * this.legLen * 0.05;
+    // Anticipatory pre-load: a small dip just BEFORE a planted foot launches into its step (a
+    // dancer loads the support leg to push off). Peaks ~0.6 beat ahead, gone by the swing.
+    let imminent = 0;
+    for (let f = 0; f < 2; f++) {
+      if (S.swingU[f] < 0.01) {
+        const ttl = S.nextLand[f] - b;
+        if (ttl > 0 && ttl < 1)
+          imminent = Math.max(imminent, Math.max(0, 1 - Math.abs(ttl - 0.62) / 0.22));
+      }
+    }
+    const preLoad = this.tune.preLoad * imminent * this.legLen * 0.03;
+    this.sp2(
+      this.sComY,
+      -pumpAmp * pulse(phi + 0.12) - crouch - kneeSoft - preLoad,
+      22,
+      0.55,
+      dt,
+      cut,
+    );
     const comY = this.sComY[0];
 
     // Loadedness: which leg carries the weight (support-weighted), smoothed. Drives contrapposto.

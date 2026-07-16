@@ -308,7 +308,12 @@ export function sampleFeet(tl: FootTimeline, b: number, out: SampledFeet): Sampl
       const crossing = f === 0 ? next.pos.x > 0.05 : next.pos.x < -0.05;
       if (crossing) out.pos[f].z += arc * 0.2;
       out.dest[f].copy(next.pos);
-      out.pitch[f] = arc * 0.6 * vv; // toe leads the swing
+      // Heel-toe roll: PUSH OFF the ball early (strong toe-down as she leaves the ground), swing
+      // through toe-leading, then bring the HEEL down just before the landing — a real foot roll
+      // rather than a flat slab gliding. (Caller scales this by tune.footRoll.)
+      const pushoff = u < 0.28 ? (0.28 - u) * 2.1 : 0; // toe-down kick off the ball
+      const heelStrike = u > 0.72 ? (u - 0.72) * 1.4 : 0; // heel leads down into the plant
+      out.pitch[f] = (arc * 0.5 + pushoff - heelStrike) * vv;
       out.support[f] = 1 - 0.85 * arc;
       out.swingU[f] = u;
       if (f === 0) {

@@ -40,6 +40,9 @@ const KNOBS: Knob[] = [
   { key: 'gaze', label: 'Look toward next step', min: 0, max: 1.5, step: 0.05 },
   { key: 'breath', label: 'Breathing', min: 0, max: 1.5, step: 0.05 },
   { key: 'idleSway', label: 'Idle micro-sway', min: 0, max: 1.5, step: 0.05 },
+  { key: 'kneeSoft', label: 'Plié (sink on loaded leg)', min: 0, max: 1.5, step: 0.05 },
+  { key: 'preLoad', label: 'Pre-step wind-up dip', min: 0, max: 1.5, step: 0.05 },
+  { key: 'footRoll', label: 'Heel-toe foot roll', min: 0, max: 1.5, step: 0.05 },
   { key: 'clipBeats', label: 'Arm speed (beats/loop)', min: 12, max: 80, step: 1 },
 ];
 const DEFAULTS: Record<string, number> = {
@@ -60,6 +63,9 @@ const DEFAULTS: Record<string, number> = {
   gaze: 0.5,
   breath: 0.5,
   idleSway: 0.5,
+  kneeSoft: 0.5,
+  preLoad: 0.5,
+  footRoll: 1.0,
   clipBeats: 39,
 };
 
