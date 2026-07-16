@@ -64,6 +64,9 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 const PELVIS_ROLL_SIGN = 1;
 const LEAN_ROLL_SIGN = 1;
 const LEAN_PITCH_SIGN = 1;
+// Weight of the double-cross turn term vs. the single-cross one (higher = a fuller pivot when
+// BOTH legs are crossed). ~3 lets a full double-cross saturate the yaw to its tunable max.
+const CROSS_TURN = 3;
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
 // slightly turned-out stance keeps the two thighs from converging and clipping when the
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
@@ -181,7 +184,7 @@ export class ThreeVrmDancer {
   tune = {
     clipBeats: 39,
     clipTwist: 0, // how much of the clip's own Y-rotation to keep (0 = no samba spin; 1 = full)
-    yawAmp: 0.45, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
+    yawAmp: 0.7, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
     yawRate: 1.3, // max turn speed (rad/s) — the smoothness knob
     commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
     commitZ: 0.5, // fore/aft weight shift
@@ -766,12 +769,17 @@ export class ThreeVrmDancer {
     const c0 = Math.max(0, lx0); // VRM right leg (hip −x) reaching past centre to +x
     const c1 = Math.max(0, -lx1); // VRM left leg (hip +x) reaching past centre to −x
 
-    // ---- Body yaw: a GENTLE pivot into crossovers, provably continuous + rate-limited ----
-    // tanh of the crossedness (C¹, soft-saturating — no thresholds), a critically-damped spring,
-    // then a HARD per-frame cap: |Δyaw| ≤ 1.3 rad/s·dt. The turn is small (±0.28 rad) and slow now
-    // that the knee DEPTH-split does the crossover separation — a big/fast yaw read as the body
-    // snapping left↔right during crossover runs. A symmetric double-cross gives (c0−c1)=0 → no turn.
-    const yawTarget = this.tune.yawAmp * Math.tanh((c0 - c1) / 0.18);
+    // ---- Body yaw: pivot INTO crossovers, provably continuous + rate-limited ----
+    // Two terms, both C¹ (no thresholds), summed inside one tanh so the whole thing is smooth and
+    // soft-saturating; a hard per-frame cap makes teleporting impossible:
+    //  • SINGLE cross (one leg over the line): (c0−c1) turns toward the crossed side.
+    //  • DOUBLE cross (BOTH legs swapped — left foot on the right pad and vice-versa): (c0−c1)≈0
+    //    so the first term does nothing and she'd stay forward-facing in a full X. Add a term of
+    //    magnitude min(c0,c1) (how double-crossed she is) whose DIRECTION is the front-foot choice
+    //    sSep (continuous, from the swing destination), so she pivots ~90° to send one leg front
+    //    and the other back instead of scissoring. min() and sSep are both continuous → no snap.
+    const dbl = this.sSep[0] * Math.min(c0, c1);
+    const yawTarget = this.tune.yawAmp * Math.tanh((c0 - c1 + CROSS_TURN * dbl) / 0.18);
     const yPrev = this.sYaw[0];
     this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
     if (!cut) {
