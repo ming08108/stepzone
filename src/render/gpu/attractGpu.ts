@@ -13,9 +13,15 @@
  * the palettes and layer design mirror it 1:1.
  */
 
-import { ThreeVrmDancer, type DancerStep } from '../threeDancer';
+import { ThreeVrmDancer, type DancerStep, type DancerCamera } from '../threeDancer';
 import { dancerModelUrl } from '../dancerModels';
 import { loadSettings } from '../../app/settings';
+
+/** Cheap stable pseudo-random 0..1 for the beat-cut camera (keyed by shot index). */
+const camHash = (n: number): number => {
+  const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return s - Math.floor(s);
+};
 
 // Composite pass: draw the three.js VRM dancer's offscreen render (a real 3D
 // character that dances the chart) over the background as a full-canvas quad.
@@ -404,6 +410,15 @@ export class AttractGpu {
   private usingModel = false; // set per frame by renderModel()
   private flatBg = false; // ?dancerFlat dev aid: flat neutral bg for inspecting the dancer
   private camAz: number | null = null; // ?dancerCam=<rad> dev aid: lock the camera azimuth
+  // Reused per frame so the beat-cut camera + tint cycle allocate nothing in the hot loop.
+  private camEye: [number, number, number] = [0, 0, 0];
+  private camTarget: [number, number, number] = [0, 0, 0];
+  private camScratch: DancerCamera = { fovY: 0.62, eye: this.camEye, target: this.camTarget };
+  private accScratch: (readonly [number, number, number])[] = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
   // The three.js VRM dancer (loaded async, single-player only). Renders offscreen; its
   // colorView is composited over the neon background. Null until the model loads.
@@ -564,7 +579,10 @@ export class AttractGpu {
       // Keep her vivid and lit BY the tunnel: a slight over-bright tint + a rim that
       // cycles the same neon the hexagon rings sweep (accentA→B→D on the beat pump).
       d.setTint(1.22, 1.19, 1.26);
-      const acc = [this.pal.accentA, this.pal.accentB, this.pal.accentD];
+      const acc = this.accScratch;
+      acc[0] = this.pal.accentA;
+      acc[1] = this.pal.accentB;
+      acc[2] = this.pal.accentD;
       const cyc = (((b * 0.5) % 3) + 3) % 3;
       const seg = Math.floor(cyc);
       const f = cyc - seg;
@@ -588,36 +606,32 @@ export class AttractGpu {
       const phase = b - Math.floor(b);
       const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
       const fixed = this.camAz !== null;
-      const hash = (n: number) => {
-        const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
-        return s - Math.floor(s);
-      };
       // Cut cadence: mostly every 4 beats (a bar), but some shots hold only 2 for punch.
       const bar = Math.floor(b / 4);
-      const cutBeats = hash(bar + 0.5) < 0.4 ? 2 : 4;
+      const cutBeats = camHash(bar + 0.5) < 0.4 ? 2 : 4;
       const shot = Math.floor(b / cutBeats);
       const tShot = b / cutBeats - shot; // 0..1 through the current shot
       // Azimuth spread ±~68° around the front; drift eases out and back (0 at the cut).
-      const shotAz = (hash(shot) - 0.5) * 2.4;
-      const drift = 0.16 * Math.sin(tShot * Math.PI) * (hash(shot + 1.9) - 0.5) * 2;
+      const shotAz = (camHash(shot) - 0.5) * 2.4;
+      const drift = 0.16 * Math.sin(tShot * Math.PI) * (camHash(shot + 1.9) - 0.5) * 2;
       const orbit = fixed ? (this.camAz as number) : shotAz + drift;
       // Eye height: low (looking up, dramatic) → high (looking down).
-      const heightMul = fixed ? 0.22 : -0.1 + hash(shot + 4.7) * 0.68;
+      const heightMul = fixed ? 0.22 : -0.1 + camHash(shot + 4.7) * 0.68;
       // Distance: close-up → wide, with a slow push-in through the shot + a beat dolly punch.
-      const zoomMul = fixed ? 1 : 0.8 + hash(shot + 8.3) * 0.55;
+      const zoomMul = fixed ? 1 : 0.8 + camHash(shot + 8.3) * 0.55;
       const dolly = fixed ? 1 : zoomMul * (1 - 0.07 * tShot) * (1 - 0.05 * kick);
       const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
       // On low shots, tilt the look-at up so her head isn't cropped.
       const lowTilt = !fixed && heightMul < 0.12 ? 0.1 * r : 0;
-      d.render({
-        fovY,
-        eye: [
-          c[0] + Math.sin(orbit) * dist,
-          c[1] + heightMul * r + 0.04 * r,
-          c[2] + Math.cos(orbit) * dist,
-        ],
-        target: [c[0], c[1] + 0.06 * r + lowTilt, c[2]],
-      });
+      const cam = this.camScratch;
+      cam.fovY = fovY;
+      this.camEye[0] = c[0] + Math.sin(orbit) * dist;
+      this.camEye[1] = c[1] + heightMul * r + 0.04 * r;
+      this.camEye[2] = c[2] + Math.cos(orbit) * dist;
+      this.camTarget[0] = c[0];
+      this.camTarget[1] = c[1] + 0.06 * r + lowTilt;
+      this.camTarget[2] = c[2];
+      d.render(cam);
     } catch {
       // A three.js hiccup (device loss, a bad resource, a transient NaN) must NEVER
       // crash the game's render loop — swallow it and keep compositing her last good
