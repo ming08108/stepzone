@@ -281,9 +281,13 @@ export function sampleFeet(tl: FootTimeline, b: number, out: SampledFeet): Sampl
     const nextLand = landOf(A, period, jPrev + 1);
     out.nextLand[f] = nextLand; // the upcoming step — for the note markers
     out.nextPanel[f] = next.panel;
-    // Swing starts SWING_BEATS before the land, but never before the previous plant — closely
-    // spaced steps (8th notes < 0.55 beat apart) just swing for the whole gap. Continuous either way.
-    const t0 = Math.max(nextLand - SWING_BEATS, prevLand);
+    // Swing duration: SWING_BEATS, but capped to 70% of the gap so there's always a brief PLANT
+    // between steps. Fast/dense footwork (8th-16th notes) used to fill the whole gap with one
+    // continuous swing — the foot never settled, so quick sections read as a floaty glide instead
+    // of crisp steps. Leaving ~30% of the gap planted makes fast transitions snap.
+    const gap = nextLand - prevLand;
+    const swingDur = Math.min(SWING_BEATS, 0.7 * gap);
+    const t0 = nextLand - swingDur;
 
     if (b < t0) {
       // Planted, holding the arrow; a small ankle roll keeps the standing leg alive.
