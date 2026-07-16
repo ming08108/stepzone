@@ -173,7 +173,6 @@ export class ThreeVrmDancer {
   private readonly footAxis = new THREE.Vector3(1, 0, 0);
   private readonly upAxis = new THREE.Vector3(0, 1, 0);
   private yaw = 0;
-  private springAccum = 0; // spring-bone physics runs at a fixed cap, not the full refresh
 
   // ---- Centre-of-mass / balance state — the ONE physical system the whole body follows.
   // Every visible motion (pelvis shift/roll/pitch/yaw, torso S-curve, head, bounce, travel) is
@@ -939,15 +938,11 @@ export class ThreeVrmDancer {
     vrm.lookAt?.update(dt);
     vrm.expressionManager?.update();
     vrm.nodeConstraintManager?.update();
-    // Skirt/hair physics: cap to ~72 Hz (accumulate dt, step at the cap). Cloth is slow and
-    // reads identically at 72 vs 144 Hz — but this halves the priciest CPU phase at high
-    // refresh. The spring manager updates its chains' world matrices, so a skipped frame just
-    // renders the last settled skirt (the full sweep above already placed every other bone).
-    this.springAccum += dt;
-    if (this.springAccum >= 1 / 72) {
-      vrm.springBoneManager?.update(this.springAccum);
-      this.springAccum = 0;
-    }
+    // Skirt/hair physics: step EVERY frame with a small, clamped dt. The old ~72 Hz accumulate
+    // handed the solver steps up to 1/20 s, and VRM spring bones overshoot on a big step — which
+    // ballooned long skirts (the a/b/c samples) out into a bell. A fixed small sub-step is the
+    // stable, standard way; capped at 1/60 so a frame hitch can't blow the cloth up.
+    vrm.springBoneManager?.update(Math.min(dt, 1 / 60));
     // The skeleton overlay (debug) doesn't get the renderer's auto-sweep (root scene has it off),
     // so refresh its bone lines from the now-current bone world matrices.
     if (this.skelHelper?.visible) this.skelHelper.updateMatrixWorld(true);
