@@ -278,17 +278,6 @@ export class ThreeVrmDancer {
     // Only build cloth physics if the model shipped none (MMD→VRM conversions);
     // proper VRM/VRoid exports already carry their own spring bones.
     if (!vrm.springBoneManager || vrm.springBoneManager.joints.size === 0) buildClothPhysics(vrm);
-    // Give every spring bone the scene root as its CENTER, so the physics is computed relative to
-    // the moving body and IGNORES whole-body travel. Without this, the ~2 m/s weight-shift
-    // translation (which only started rendering once the matrixWorldAutoUpdate bug was fixed) hit
-    // the solver as huge acceleration and flung the cloth bones down — the a/b/c samples' short
-    // cardigan drooped into a fake floor-length "skirt". Cloth now only reacts to the LOCAL dance.
-    if (vrm.springBoneManager) {
-      for (const joint of vrm.springBoneManager.joints) {
-        (joint as unknown as { center: THREE.Object3D | null }).center = vrm.scene;
-      }
-      vrm.springBoneManager.setInitState(); // re-seed verlet state in the new (centre) space
-    }
 
     // Lights (mutated by setTint/setEnv to match the scene in-game).
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x334433, 2.2);
@@ -335,6 +324,42 @@ export class ThreeVrmDancer {
     }
     this.scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
+
+    // ---- Spring-bone stabilisation (two independent fixes; done here so the world matrices are
+    // current for setInitState) ----
+    if (vrm.springBoneManager) {
+      for (const joint of vrm.springBoneManager.joints) {
+        const j = joint as unknown as {
+          bone: THREE.Object3D;
+          center: THREE.Object3D | null;
+          settings: { dragForce: number; stiffness: number };
+        };
+        // (1) CENTER = scene root: physics relative to the moving body, so the ~2 m/s weight-shift
+        //     travel + crossover yaw don't fling TORSO/HEAD-anchored cloth (that flung A's cardigan
+        //     hem into a fake floor-length skirt). Leg-anchored cloth is deliberately NOT absorbed.
+        j.center = vrm.scene;
+        // (2) DRAG FLOOR everywhere: VRoid ships several chains with dragForce 0 (undamped); a floor
+        //     is inert at rest, it just lets cloth settle instead of ringing. (VRoid's own hair ≈0.4.)
+        j.settings.dragForce = Math.max(j.settings.dragForce, 0.35);
+        // (3) PIN leg-anchored cloth. VRoid parents the coat-tail chains (J_Sec_*_CoatSkirt*) to the
+        //     LOWER-LEG bones with drag 0 — and the foot-IK pumps the knees every beat, driving them
+        //     to a ~176° flail = a floor-length fake "skirt" (AvatarSample_C, and A's residual). The
+        //     centre can't help (the excitation is leg-local). Measured: at 165° flail it's a full
+        //     bell; even stiffness 8/drag 0.9 leaves ~35° (still a skirt) — it only reads as PANTS
+        //     when the panels hang near-flush (rigid, following the leg). Detect by walking up to a
+        //     leg bone and pin hard so the coat rides the shin instead of resonating. Hair
+        //     (head/neck-anchored) is untouched.
+        let anc: THREE.Object3D | null = joint.bone?.parent ?? null;
+        for (let k = 0; k < 6 && anc; k++, anc = anc.parent) {
+          if (/(?:upper|lower)?leg|knee|shin|thigh/i.test(anc.name)) {
+            j.settings.stiffness = Math.max(j.settings.stiffness, 40);
+            j.settings.dragForce = Math.max(j.settings.dragForce, 0.96);
+            break;
+          }
+        }
+      }
+      vrm.springBoneManager.setInitState(); // seed verlet state in centre space, matrices current
+    }
 
     // Retarget the groove onto the VRM humanoid with a per-bone GAIN map. The clip drives the
     // arms/hands and the SPINE/CHEST at full strength — that authored samba torso sway is what
