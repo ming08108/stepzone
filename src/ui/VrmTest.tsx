@@ -1,11 +1,11 @@
 /**
  * three.js dancer proving ground (`?vrm`) — a thin wrapper around ThreeVrmDancer
  * (src/render/threeDancer.ts), the same class the in-game attract dancer uses.
- * `?model=` picks the avatar: miku4 (default), a|b|c (VRoid samples), ps1.
  *
- * Click-drag to orbit, scroll to zoom. The panel exposes the dancer's live `tune` knobs so
- * the motion can be dialed in without a rebuild (each slider writes straight into d.tune,
- * which build() reads every frame).
+ * Click-drag to orbit, scroll to zoom. The panel switches models, toggles a bone-skeleton
+ * overlay, and exposes the dancer's live `tune` knobs so the motion can be dialed in without a
+ * rebuild (each slider writes straight into d.tune, which build() reads every frame). The
+ * bottom readout shows the whole-body TURN vs the clip's TORSO twist so we can tell them apart.
  */
 import { useEffect, useRef, useState } from 'react';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -21,6 +21,7 @@ const MODELS: Record<string, string> = {
 
 type Knob = { key: string; label: string; min: number; max: number; step: number };
 const KNOBS: Knob[] = [
+  { key: 'clipTwist', label: 'Clip rotation (samba spin)', min: 0, max: 1, step: 0.02 },
   { key: 'yawAmp', label: 'Body turn into crossover', min: 0, max: 1, step: 0.01 },
   { key: 'yawRate', label: 'Turn speed (rad/s)', min: 0.3, max: 6, step: 0.1 },
   { key: 'commitX', label: 'Weight shift  ← →', min: 0, max: 1, step: 0.02 },
@@ -34,6 +35,7 @@ const KNOBS: Knob[] = [
   { key: 'clipBeats', label: 'Arm speed (beats/loop)', min: 12, max: 80, step: 1 },
 ];
 const DEFAULTS: Record<string, number> = {
+  clipTwist: 0,
   yawAmp: 0.45,
   yawRate: 1.3,
   commitX: 0.6,
@@ -50,15 +52,20 @@ const DEFAULTS: Record<string, number> = {
 export function VrmTest({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dancerRef = useRef<ThreeVrmDancer | null>(null);
+  const readoutRef = useRef<HTMLDivElement>(null);
+  const skelRef = useRef(false);
   const [tune, setTune] = useState<Record<string, number>>({ ...DEFAULTS });
   const [show, setShow] = useState(true);
+  const [skel, setSkel] = useState(false);
+  const [model, setModel] = useState(
+    () => new URLSearchParams(location.search).get('model')?.toLowerCase() ?? 'miku4',
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const params = new URLSearchParams(location.search);
-    const key = params.get('model')?.toLowerCase() ?? 'miku4';
-    const modelUrl = MODELS[key] ?? MODELS.miku4;
+    const modelUrl = MODELS[model] ?? MODELS.miku4;
     const clipBeats = Number(params.get('clipBeats'));
     // Deterministic driver (?fixed=<fps>): advance a synthetic 128-BPM beat at a FIXED dt so a
     // headless run is reproducible (dt-correctness + metric logging without rAF jitter).
@@ -78,8 +85,10 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     dancerRef.current = d;
     (window as unknown as { __dancer?: ThreeVrmDancer }).__dancer = d;
     void d.init().then(() => {
+      // Apply the current tune (survives a model switch) and skeleton toggle.
+      Object.assign(d.tune, tune);
       if (clipBeats > 0) d.tune.clipBeats = clipBeats;
-      // Orbit: click-drag rotates, wheel zooms. Attached to the canvas, so the panel doesn't grab it.
+      d.showSkeleton(skelRef.current);
       controls = new OrbitControls(d.cam, canvas);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
@@ -87,6 +96,9 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
       controls.target.set(tx, ty, tz);
       controls.update();
       let frame = 0;
+      let cutCount = 0;
+      let prevYawDeg = 0;
+      let maxJump = 0;
       const loop = () => {
         raf = requestAnimationFrame(loop);
         let elapsed: number;
@@ -105,6 +117,18 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
         d.build(elapsed, beat, dt);
         controls?.update();
         d.render();
+        const el = readoutRef.current;
+        if (el) {
+          const dbg = d.debug();
+          if (dbg.cut) cutCount++;
+          const jump = Math.abs(dbg.yawDeg - prevYawDeg);
+          if (jump > maxJump) maxJump = jump;
+          prevYawDeg = dbg.yawDeg;
+          el.textContent =
+            `body turn ${dbg.yawDeg.toFixed(1)}°  ·  torso twist ${dbg.twistDeg.toFixed(1)}°  ·  ` +
+            `cuts ${cutCount}  ·  max turn/frame ${maxJump.toFixed(2)}°`;
+          el.style.color = dbg.cut ? '#ff6b6b' : '#8fead0';
+        }
       };
       loop();
     });
@@ -116,7 +140,12 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
       d.dispose();
       dancerRef.current = null;
     };
-  }, [onExit]);
+  }, [onExit, model]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    skelRef.current = skel;
+    dancerRef.current?.showSkeleton(skel);
+  }, [skel]);
 
   const set = (k: string, v: number) => {
     setTune((t) => ({ ...t, [k]: v }));
@@ -132,6 +161,7 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#14162a' }}>
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+      <div ref={readoutRef} style={readout} />
       <button
         onClick={() => setShow((s) => !s)}
         style={{ ...btn, position: 'absolute', top: 10, right: 10 }}
@@ -145,6 +175,19 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
             <button onClick={reset} style={btn}>
               reset
             </button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <select value={model} onChange={(e) => setModel(e.target.value)} style={sel}>
+              {Object.keys(MODELS).map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <label style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={skel} onChange={(e) => setSkel(e.target.checked)} />
+              skeleton
+            </label>
           </div>
           {KNOBS.map((k) => (
             <label key={k.key} style={row}>
@@ -188,6 +231,18 @@ const panel: React.CSSProperties = {
   flexDirection: 'column',
   gap: 8,
 };
+const readout: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 12,
+  left: 12,
+  padding: '4px 8px',
+  background: 'rgba(12,14,26,0.75)',
+  color: '#8fead0',
+  font: '12px ui-monospace, monospace',
+  borderRadius: 6,
+  pointerEvents: 'none',
+  whiteSpace: 'nowrap',
+};
 const row: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 };
 const btn: React.CSSProperties = {
   background: '#2a2f45',
@@ -198,3 +253,4 @@ const btn: React.CSSProperties = {
   fontSize: 12,
   cursor: 'pointer',
 };
+const sel: React.CSSProperties = { ...btn, flex: 1 };

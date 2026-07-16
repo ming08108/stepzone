@@ -180,6 +180,7 @@ export class ThreeVrmDancer {
   // ~authored speed at 128 BPM (2.13 beats/s × 18.2 s ≈ 39 beats/loop).
   tune = {
     clipBeats: 39,
+    clipTwist: 0, // how much of the clip's own Y-rotation to keep (0 = no samba spin; 1 = full)
     yawAmp: 0.45, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
     yawRate: 1.3, // max turn speed (rad/s) — the smoothness knob
     commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
@@ -482,6 +483,36 @@ export class ThreeVrmDancer {
   }
   private cachedTex: GPUTexture | null = null;
   private cachedView: GPUTextureView | null = null;
+  private skelHelper: THREE.SkeletonHelper | null = null;
+
+  /** Toggle a bone-skeleton overlay (drawn over the mesh) — a ?vrm debug aid to see the twist. */
+  showSkeleton(on: boolean): void {
+    if (!this.ready) return;
+    if (on && !this.skelHelper) {
+      this.skelHelper = new THREE.SkeletonHelper(this.vrm.scene);
+      const m = this.skelHelper.material as THREE.Material & { depthTest?: boolean };
+      m.depthTest = false;
+      m.transparent = true;
+      this.scene.add(this.skelHelper);
+    }
+    if (this.skelHelper) this.skelHelper.visible = on;
+  }
+
+  private qTwist = new THREE.Quaternion();
+  private qSwing = new THREE.Quaternion();
+  private qScaled = new THREE.Quaternion();
+
+  /** Scale a bone's Y-axis twist (facing rotation) to `keep`× the clip's, leaving roll/pitch
+   *  untouched (swing-twist decomposition). Used to tame the samba clip's fast UPPER-body
+   *  spin — the "instant twisting" seen from the side — without flattening the torso sway. */
+  private dampTwist(bone: THREE.Object3D | null, keep: number): void {
+    if (!bone || keep >= 0.999) return;
+    const q = bone.quaternion;
+    this.qTwist.set(0, q.y, 0, q.w).normalize(); // full Y-twist T
+    this.qSwing.copy(this.qTwist).invert().premultiply(q); // swing S = q · T⁻¹  (roll/pitch only)
+    this.qScaled.identity().slerp(this.qTwist, keep); // scaled twist
+    q.copy(this.qSwing).multiply(this.qScaled); // S · (keep·T)
+  }
 
   /** One semi-implicit spring step for a [position, velocity] pair. dt-correct (identical
    *  trajectory at 60/144 Hz); a `cut` (song seek/loop) snaps to the target instead. */
@@ -521,11 +552,14 @@ export class ThreeVrmDancer {
     dt = Math.min(dt, 1 / 20);
     const b = Number.isFinite(beat) ? beat : now * 1.4;
 
-    // Beat delta → cut detection (song seek/loop/restart) + a smoothed tempo (beats/sec) that
-    // scales the balance springs so the settle stays musical at any BPM. On a cut every spring
-    // snaps to its target this frame, so she never GLIDES across the pad after a restart.
+    // Beat delta → cut detection. A cut snaps every spring to its target this frame (so she
+    // doesn't GLIDE across the pad after a song restart). Only a BACKWARD jump counts as a cut
+    // (a loop/seek/restart): a big FORWARD jump is almost always a frame hitch (GC, tab blur) —
+    // the wall-clock beat leaps but it's not a real seek, and snapping on it caused the body to
+    // "instantly twist" at random. Forward jumps just let the springs ease to the new pose.
     const db = b - this.prevBeat;
-    const cut = Math.abs(db) > 0.5;
+    const cut = db < -0.25;
+    this._lastCut = cut;
     if (!cut && dt > 1e-5) {
       this.bps += (THREE.MathUtils.clamp(db / dt, 0.3, 8) - this.bps) * 0.03;
     }
@@ -541,6 +575,15 @@ export class ThreeVrmDancer {
     const cb = this.tune.clipBeats;
     this.mixer.setTime(((((b % cb) + cb) % cb) / cb) * this.clipDur);
     vrm.humanoid?.update();
+    // Strip the clip's own Y-rotation (default) — the samba spins the hips AND twists the torso
+    // hard, which is the "instant twisting" seen from the side. The whole-body TURN comes from the
+    // scene-yaw crossover pivot instead; the clip keeps only its roll/pitch sway (swing-twist
+    // decomposition leaves those). clipTwist>0 dials the samba rotation back in if wanted.
+    const tt = this.tune.clipTwist;
+    this.dampTwist(this.hips, tt);
+    this.dampTwist(this.spine, tt);
+    this.dampTwist(this.chest, tt);
+    this.dampTwist(this.upperChest, tt);
 
     // ---- Feet: pure function of beat (never freezes across a loop/seek) ----
     const tl = this.chartTl ?? this.synthTl!;
@@ -816,6 +859,9 @@ export class ThreeVrmDancer {
       vrm.springBoneManager?.update(this.springAccum);
       this.springAccum = 0;
     }
+    // The skeleton overlay (debug) doesn't get the renderer's auto-sweep (root scene has it off),
+    // so refresh its bone lines from the now-current bone world matrices.
+    if (this.skelHelper?.visible) this.skelHelper.updateMatrixWorld(true);
 
     for (let p = 0; p < 4; p++) {
       const dbl = b - this.litPanel[p];
@@ -829,6 +875,7 @@ export class ThreeVrmDancer {
   private _ankleGap = 0;
   private _pelvisPitch = 0;
   private _pelvisYaw = 0;
+  private _lastCut = false;
 
   /** Distance in the XZ plane from (px,pz) to the segment [(ax,az),(bx,bz)]. */
   private static segDist(
@@ -851,6 +898,17 @@ export class ThreeVrmDancer {
     const S = this.sampled;
     const cx = this.sComX[0];
     const cz = this.sComZ[0];
+    // Whole-body scene turn (deg) vs the CLIP's upper-body twist (deg) — the ?vrm readout shows
+    // both so we can tell which one is "twisting": the balance yaw or the samba clip's torso.
+    const bone = this.upperChest ?? this.chest ?? this.hips;
+    let twistDeg = 0;
+    if (bone) {
+      bone.getWorldQuaternion(this.qW);
+      const q = this.qW;
+      const cy = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
+      twistDeg = ((cy - this.baseRotY - this.yaw) * 180) / Math.PI;
+      twistDeg = ((((twistDeg + 180) % 360) + 360) % 360) - 180; // wrap to [-180,180]
+    }
     return {
       b: this.prevBeat,
       comX: cx,
@@ -858,6 +916,9 @@ export class ThreeVrmDancer {
       comZ: cz,
       comVX: this.sComX[1],
       yaw: this.yaw,
+      yawDeg: (this.yaw * 180) / Math.PI,
+      twistDeg,
+      cut: this._lastCut ? 1 : 0,
       load: this.loadLP,
       pelvisRoll: PELVIS_ROLL_SIGN * 0.09 * this.loadLP,
       pelvisPitch: this._pelvisPitch,
