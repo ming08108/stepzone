@@ -35,11 +35,13 @@ const RIG: Record<string, VRMHumanBoneName> = {
   mixamorigRightToeBase: 'rightToes',
 };
 
+const IDENTITY_Q = new THREE.Quaternion();
+
 export function retargetMixamoToVrm(
   clip: THREE.AnimationClip,
   vrm: VRM,
   mixamoRoot: THREE.Object3D,
-  keepBones?: readonly VRMHumanBoneName[],
+  gains?: Partial<Record<VRMHumanBoneName, number>>,
 ): THREE.AnimationClip {
   mixamoRoot.updateMatrixWorld(true);
   const tracks: THREE.KeyframeTrack[] = [];
@@ -49,18 +51,19 @@ export function retargetMixamoToVrm(
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const seen = new Set<string>();
-  // Optional ownership allowlist: the dancer keeps ONLY the arm/shoulder tracks so the clip
-  // can't touch the centre line (hips/spine/chest/head) or the legs — those are owned outright
-  // by the procedural balance model + foot-IK. With the tracks simply absent, humanoid.update()
-  // resets those normalized bones to rest each frame and the model writes on top, so there is no
-  // clip-vs-model slerp fight (the old cause of the robotic, detached torso).
-  const keep = keepBones ? new Set<VRMHumanBoneName>(keepBones) : null;
+  // Optional per-bone GAIN map: keep a bone's track only if it has an entry, scaling its motion
+  // amplitude by the gain (1 = full authored motion, 0.55 = damped). The dancer keeps arms/hands
+  // at full and the torso (spine/chest) at full — that clip choreography is what reads as
+  // "dancing" — but damps the hips (the procedural contrapposto/lean layer + foot-IK ride on
+  // top) and drops the legs entirely. Composed as clipPose·Δ downstream, so no slerp-fight.
+  const gainOf = (bone: VRMHumanBoneName): number | undefined => (gains ? gains[bone] : 1); // no map → keep everything at full (back-compat)
 
   for (const track of clip.tracks) {
     const [boneName, prop] = track.name.split('.');
     const vrmBone = RIG[boneName];
     if (!vrmBone) continue;
-    if (keep && !keep.has(vrmBone)) continue;
+    const gain = gainOf(vrmBone);
+    if (gain === undefined) continue; // bone absent from the map → drop its track
     const vrmNode = vrm.humanoid?.getNormalizedBoneNode(vrmBone);
     const mixamoNode = mixamoRoot.getObjectByName(boneName); // real bone (dupes exist)
     if (!vrmNode || !mixamoNode) continue;
@@ -81,6 +84,8 @@ export function retargetMixamoToVrm(
           q.x = -q.x;
           q.z = -q.z; // VRM0 faces −Z → mirror the animation about the YZ/XY axes
         }
+        // Scale the rest-relative deviation toward rest by (1−gain): keep `gain` of the motion.
+        if (gain < 1) q.slerp(IDENTITY_Q, 1 - gain);
         q.toArray(values, i);
       }
       tracks.push(

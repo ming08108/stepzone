@@ -131,13 +131,16 @@ const SYNTH: SynthStep[] = [
   { foot: 1, panel: 2 },
   { foot: 0, panel: 0 },
   'hold',
-  // beats 13-16 — crossovers, a feet-together stomp, split back out
+  // beats 13-16 — STAGGERED crossovers, split back out. (Steps here are deliberately one-foot-
+  // at-a-time: a perfectly simultaneous, symmetric two-foot cross forces both knees through the
+  // centreline at once — the one stance no IK depth-split can separate. Real charts step one foot
+  // at a time, so the demo does too.)
   { foot: 1, panel: 0 },
   'hold',
   { foot: 0, panel: 3 },
   'hold',
-  { l: 1, r: 1 },
-  'hold',
+  { foot: 1, panel: 2 },
+  { foot: 0, panel: 1 },
   { foot: 0, panel: 0 },
   { foot: 1, panel: 3 },
 ];

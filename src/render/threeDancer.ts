@@ -58,9 +58,12 @@ const PANEL = [
 ];
 const PANEL_COL = [0xff3fa0, 0x8f6bff, 0x4fd6ff, 0xffa63f];
 const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05)]; // L/R rest
-// Sign of the contrapposto hip hike vs. the loaded side, for this VRM0-mirrored rig (the
-// retarget flips x/z, so the correct sign is verified by eye in ?vrm, not derived on paper).
+// Signs for this VRM0-mirrored rig (the retarget flips x/z, so the correct sign is verified by
+// eye in ?vrm, not derived on paper): contrapposto hip hike vs. loaded side, and the weight-lean
+// roll/pitch vs. travel direction.
 const PELVIS_ROLL_SIGN = 1;
+const LEAN_ROLL_SIGN = 1;
+const LEAN_PITCH_SIGN = 1;
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
 // slightly turned-out stance keeps the two thighs from converging and clipping when the
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
@@ -116,7 +119,6 @@ export class ThreeVrmDancer {
   private legs!: [Leg, Leg];
   private footLeg!: [Leg, Leg]; // foot index (0=left,1=right) → VRM leg
   private hips!: THREE.Object3D;
-  private hipsRestQuat = new THREE.Quaternion();
   private arrowMats: THREE.MeshBasicNodeMaterial[] = [];
   private keyLight!: THREE.DirectionalLight;
   private rimLight!: THREE.DirectionalLight;
@@ -186,19 +188,15 @@ export class ThreeVrmDancer {
   private sComZ = [0, 0]; // horizontal CoM (world z)
   private sComY = [0, 0]; // vertical CoM offset (impacts push it down, spring recovers)
   private sYaw = [0, 0]; // body yaw
-  private sChestR = [0, 0]; // chest counter-roll
-  private sChestY = [0, 0]; // chest counter-yaw
-  private sChestP = [0, 0]; // chest pitch
+  private sLeanR = [0, 0]; // upper-body lean INTO lateral travel (roll) — "commit, catch, settle"
+  private sLeanP = [0, 0]; // upper-body lean into fore/aft travel (pitch)
   private sHeadR = [0, 0]; // head stabilization roll
-  private sHeadY = [0, 0]; // head stabilization yaw
+  private sSep = [0, 0]; // smoothed crossover front/back split direction (+1 foot0 in front)
+  private sepFb = 0; // closed-loop knee-separation feedback (from last frame's measured gap)
   private spine: THREE.Object3D | null = null;
   private chest: THREE.Object3D | null = null;
   private upperChest: THREE.Object3D | null = null;
   private head: THREE.Object3D | null = null;
-  private spineRest = new THREE.Quaternion();
-  private chestRest = new THREE.Quaternion();
-  private upperChestRest = new THREE.Quaternion();
-  private headRest = new THREE.Quaternion();
   private eSway = new THREE.Euler();
   private qSway = new THREE.Quaternion();
   private eChest = new THREE.Euler();
@@ -278,36 +276,39 @@ export class ThreeVrmDancer {
     this.scene.add(vrm.scene);
     vrm.scene.updateMatrixWorld(true);
 
-    // Retarget the groove onto the VRM humanoid — but keep ONLY the arm/shoulder tracks. The
-    // centre line (hips/spine/chest/head) and legs are owned outright by the balance model + IK;
-    // with no clip tracks there, humanoid.update() resets those bones to rest each frame and we
-    // write on top — no clip-vs-model fight (the old cause of the robotic, detached torso).
-    const vrmClip = retargetMixamoToVrm(sourceFbx.animations[0], vrm, sourceFbx, [
-      'leftShoulder',
-      'leftUpperArm',
-      'leftLowerArm',
-      'leftHand',
-      'rightShoulder',
-      'rightUpperArm',
-      'rightLowerArm',
-      'rightHand',
-    ]);
+    // Retarget the groove onto the VRM humanoid with a per-bone GAIN map. The clip drives the
+    // arms/hands and the SPINE/CHEST at full strength — that authored samba torso sway is what
+    // reads as real dancing — with the hips damped (the procedural contrapposto + weight-lean
+    // layer rides on top) and the legs dropped (foot-IK owns them). The balance model composes
+    // as clipPose·Δ each frame (post-multiply, one writer per bone), so there's no slerp-fight —
+    // the old mistake was stripping the clip's torso and trying to re-synthesise it procedurally,
+    // which could only manage ~0.04 rad and read as a rigid plank.
+    const vrmClip = retargetMixamoToVrm(sourceFbx.animations[0], vrm, sourceFbx, {
+      hips: 0.55,
+      spine: 1,
+      chest: 1,
+      upperChest: 1,
+      neck: 0.9,
+      head: 0.75,
+      leftShoulder: 1,
+      leftUpperArm: 1,
+      leftLowerArm: 1,
+      leftHand: 1,
+      rightShoulder: 1,
+      rightUpperArm: 1,
+      rightLowerArm: 1,
+      rightHand: 1,
+    });
     this.clipDur = vrmClip.duration;
     this.mixer = new THREE.AnimationMixer(vrm.scene);
     this.mixer.clipAction(vrmClip).play();
 
-    // Centre-line bones the balance model writes each frame (absolute: rest · Δ). Capture their
-    // rest orientations now, before any animation touches them.
+    // Centre-line bones the balance Δ post-multiplies onto the clip pose each frame.
     this.hips = this.raw('hips');
-    this.hipsRestQuat.copy(this.hips.quaternion);
     this.spine = this.rawOpt('spine');
     this.chest = this.rawOpt('chest');
     this.upperChest = this.rawOpt('upperChest');
     this.head = this.rawOpt('head');
-    if (this.spine) this.spineRest.copy(this.spine.quaternion);
-    if (this.chest) this.chestRest.copy(this.chest.quaternion);
-    if (this.upperChest) this.upperChestRest.copy(this.upperChest.quaternion);
-    if (this.head) this.headRest.copy(this.head.quaternion);
     this.baseRotY = vrm.scene.rotation.y;
     this.setupLegs();
     // The looping no-chart routine (ankleY/legLen are final after setupLegs).
@@ -470,11 +471,17 @@ export class ThreeVrmDancer {
     s[0] += s[1] * dt;
   }
 
-  /** Write a centre-line bone absolutely (rest · Δ), sharing the chest S-curve across joints. */
-  private writeSpine(bone: THREE.Object3D | null, rest: THREE.Quaternion, wgt: number): void {
+  /** Post-multiply the weight-lean Δ onto a centre-line bone's CLIP pose (bone = clip · Δ). The
+   *  lean is distributed up the spine (cumulative 1.0 at the top) so the shoulders lead — the body
+   *  reaches into its travel. No rest quat: humanoid.update() already deposited the clip pose. */
+  private writeSpine(bone: THREE.Object3D | null, wgt: number): void {
     if (!bone) return;
-    this.eChest.set(this.sChestP[0] * wgt, this.sChestY[0] * wgt, this.sChestR[0] * wgt);
-    bone.quaternion.copy(rest).multiply(this.qChest.setFromEuler(this.eChest));
+    this.eChest.set(
+      LEAN_PITCH_SIGN * this.sLeanP[0] * wgt,
+      0,
+      LEAN_ROLL_SIGN * this.sLeanR[0] * wgt,
+    );
+    bone.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
   }
 
   /** Advance one frame: the balance model + arm clip + foot-IK + spring bones. */
@@ -544,10 +551,37 @@ export class ThreeVrmDancer {
     const wsum = w0 + w1 || 1;
     const tgtX = (w0 * S.dest[0].x + w1 * S.dest[1].x) / wsum;
     const tgtZ = (w0 * S.dest[0].z + w1 * S.dest[1].z) / wsum;
-    // Horizontal CoM — slightly underdamped (ζ=0.8) so each shift overshoots ~4% and settles
-    // (the "weight arrived" cue). G = partial commit (panels are only 0.3 m out).
-    this.sp2(this.sComX, tgtX * 0.62, 13 * tempo, 0.8, dt, cut);
-    this.sp2(this.sComZ, tgtZ * 0.42, 13 * tempo, 0.8, dt, cut);
+    // Horizontal CoM — FULL commit: the mass goes where the support is, in every stance. A
+    // partial gain here was a systematic balance error (body inside the feet → "about to fall
+    // over" when both feet went to one side). Style lives in the lean below, not in under-
+    // translating. ζ=0.8 keeps the ~4% overshoot-and-settle ("weight arrived"). Z at 0.9 because
+    // on-camera fore/aft is foreshortened and the pitch-lean carries that axis visually.
+    const comTgtX = tgtX;
+    const comTgtZ = tgtZ * 0.9;
+    this.sp2(this.sComX, comTgtX, 13 * tempo, 0.8, dt, cut);
+    this.sp2(this.sComZ, comTgtZ, 13 * tempo, 0.8, dt, cut);
+
+    // Lean-and-catch: the upper body leans INTO the travel (velocity) and toward the not-yet-
+    // reached target (error), then settles as the CoM arrives — a fast shift reads as a committed
+    // lean, not a rigid slide. Distributed up the spine (shoulders lead) in writeSpine below.
+    const errX = comTgtX - this.sComX[0];
+    const errZ = comTgtZ - this.sComZ[0];
+    this.sp2(
+      this.sLeanR,
+      THREE.MathUtils.clamp(0.12 * this.sComX[1] + 0.45 * errX, -0.22, 0.22),
+      10,
+      1,
+      dt,
+      cut,
+    );
+    this.sp2(
+      this.sLeanP,
+      THREE.MathUtils.clamp(0.1 * this.sComZ[1] + 0.35 * errZ, -0.15, 0.18),
+      10,
+      1,
+      dt,
+      cut,
+    );
 
     // Vertical CoM — a small pre-beat pump (dancers entrain even between steps) plus a downward
     // IMPULSE on every foot land, scaled by how far that foot travelled: a big crossover sinks
@@ -586,36 +620,36 @@ export class ThreeVrmDancer {
     const Lraw = (s1 - s0) / (s1 + s0 || 1); // +1 → weight on the +x (screen-right, VRM-left) foot
     this.loadLP += (Lraw - this.loadLP) * (cut ? 1 : 1 - Math.exp(-dt / 0.08));
 
-    // ---- Pelvis: consequences of the CoM/foot state (no free oscillators) ----
-    const pelvisRoll = PELVIS_ROLL_SIGN * 0.11 * this.loadLP; // hip hikes over the loaded leg
-    const pelvisPitch =
-      0.03 +
-      Math.min(0.12, (0.9 * Math.max(0, -comY)) / this.legLen) + // crouch as the CoM sinks
-      0.15 * this.sComZ[1]; // lean into fore/aft travel
+    // ---- Pelvis Δ: contrapposto + weight-lean, post-multiplied onto the clip's hip sway.
+    // The clip (hips gain 0.55) supplies the samba groove; this adds the foot-coupled physics.
+    const pelvisRoll = PELVIS_ROLL_SIGN * 0.09 * this.loadLP; // hip hikes over the loaded leg
+    const pelvisPitch = 0.03 + Math.min(0.12, (0.9 * Math.max(0, -comY)) / this.legLen); // crouch
     const pelvisYaw = THREE.MathUtils.clamp(
       (0.4 * (this.footPos[0].z - this.footPos[1].z)) / 0.6,
       -0.25,
       0.25,
     ); // hips open toward the forward foot
-    this.eSway.set(pelvisPitch, pelvisYaw, pelvisRoll);
-    this.hips.quaternion.copy(this.hipsRestQuat).multiply(this.qSway.setFromEuler(this.eSway));
+    this.eSway.set(
+      pelvisPitch + 0.35 * LEAN_PITCH_SIGN * this.sLeanP[0],
+      pelvisYaw,
+      pelvisRoll + 0.35 * LEAN_ROLL_SIGN * this.sLeanR[0],
+    );
+    this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
+    this._pelvisPitch = pelvisPitch;
+    this._pelvisYaw = pelvisYaw;
 
-    // ---- Spine/chest: lagged counter-followers (the S-curve), split across 3 joints so the
-    // spine curves instead of hinging. ω=9/ζ=1 → ~70 ms behind the pelvis (visible follow-through).
-    const oppose = -(1 - s0) * u0 + (1 - s1) * u1; // the swinging foot's side leads the shoulders
-    this.sp2(this.sChestR, -0.6 * pelvisRoll, 9, 1, dt, cut);
-    this.sp2(this.sChestY, -0.5 * pelvisYaw + 0.12 * oppose, 9, 1, dt, cut);
-    this.sp2(this.sChestP, 0.3 * pelvisPitch, 9, 1, dt, cut);
-    this.writeSpine(this.spine, this.spineRest, 0.3);
-    this.writeSpine(this.chest, this.chestRest, 0.3);
-    this.writeSpine(this.upperChest, this.upperChestRest, 0.4);
+    // ---- Spine/chest: the weight-lean, distributed spine→chest→upperChest (cumulative 1.0 so
+    // the shoulders lead the pelvis into the travel). The clip owns the torso's dance sway; this
+    // only adds the reach, composed multiplicatively (bone = clip · Δ), so it can't fight the clip.
+    this.writeSpine(this.spine, 0.3);
+    this.writeSpine(this.chest, 0.3);
+    this.writeSpine(this.upperChest, 0.4);
 
-    // ---- Head: vestibular stabilization (keeps the eyes level) + a small pre-beat nod ----
-    this.sp2(this.sHeadR, -0.5 * (pelvisRoll + this.sChestR[0]), 7, 1, dt, cut);
-    this.sp2(this.sHeadY, -0.6 * this.sChestY[0], 7, 1, dt, cut);
+    // ---- Head: vestibular stabilization (counters the lean to keep the eyes level) + beat nod.
+    this.sp2(this.sHeadR, -0.4 * LEAN_ROLL_SIGN * this.sLeanR[0], 7, 1, dt, cut);
     if (this.head) {
-      this.eChest.set(0.03 * pulse(phi + 0.12), this.sHeadY[0], this.sHeadR[0]);
-      this.head.quaternion.copy(this.headRest).multiply(this.qChest.setFromEuler(this.eChest));
+      this.eChest.set(0.03 * pulse(phi + 0.12), 0, this.sHeadR[0]);
+      this.head.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
 
     // Only the two hip sockets are read for the grounding servo — update just those two chains.
@@ -632,13 +666,25 @@ export class ThreeVrmDancer {
     vrm.scene.position.x = this.sComX[0];
     vrm.scene.position.z = this.sComZ[0];
 
+    // ---- Crossedness, measured in the BODY frame ----
+    // A leg is "crossed" when its foot is past the body's own centreline — which MOVES with the
+    // CoM translation and body yaw. Measuring in world x (as before) got the answer wrong exactly
+    // when the body was shifted/turned, i.e. during the deep crossovers where it matters most.
+    // Rotate each foot's offset-from-body by −yaw (last frame's yaw; it's rate-limited, so stable).
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    const bodyX = this.sComX[0];
+    const bodyZ = this.sComZ[0];
+    const lx0 = cy * (this.footPos[0].x - bodyX) - sy * (this.footPos[0].z - bodyZ);
+    const lx1 = cy * (this.footPos[1].x - bodyX) - sy * (this.footPos[1].z - bodyZ);
+    const c0 = Math.max(0, lx0); // VRM right leg (hip −x) reaching past centre to +x
+    const c1 = Math.max(0, -lx1); // VRM left leg (hip +x) reaching past centre to −x
+
     // ---- Body yaw: pivot INTO crossovers, provably continuous + rate-limited ----
-    // tanh of the crossedness signal (C¹, soft-saturating — no thresholds), a critically-damped
-    // spring, then a HARD per-frame cap: |Δyaw| ≤ 3 rad/s·dt. Even a bad upstream value can only
-    // make her turn quickly, never teleport (the old sudden-rotation bug is now impossible).
-    const rc = Math.max(0, this.footPos[0].x); // VRM right leg reaching to +x
-    const lc = Math.max(0, -this.footPos[1].x); // VRM left leg reaching to −x
-    const yawTarget = 0.72 * Math.tanh((rc - lc) / 0.15);
+    // tanh of the crossedness (C¹, soft-saturating — no thresholds), a critically-damped spring,
+    // then a HARD per-frame cap: |Δyaw| ≤ 3 rad/s·dt. A symmetric double-cross gives (c0−c1)=0 →
+    // no turn (correct — those legs split in DEPTH below, not by turning the whole body).
+    const yawTarget = 0.72 * Math.tanh((c0 - c1) / 0.15);
     const yPrev = this.sYaw[0];
     this.sp2(this.sYaw, yawTarget, 8, 1, dt, cut);
     if (!cut) {
@@ -650,21 +696,59 @@ export class ThreeVrmDancer {
     this.yaw = this.sYaw[0];
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
 
-    // Crossover-safe leg separation. A leg is "crossed" when its foot is on the far side of
-    // its own hip (leg 0 / VRM-right hip at −x → crossed as its foot goes +x; leg 1 mirror).
-    //  • Fade the outward knee-splay to ZERO as a leg crosses — otherwise splaying each knee
-    //    outward drives the two knees straight INTO each other in an X.
-    //  • Push the crossing leg's knee FORWARD (+z pole) so it bends in front of the standing
-    //    leg — the depth separation the body yaw can't fully deliver down at the (pinned) feet.
-    const c0 = Math.max(0, this.footPos[0].x); // VRM right-leg crossedness (metres)
-    const c1 = Math.max(0, -this.footPos[1].x); // VRM left-leg crossedness
-    const splay0 = -KNEE_OUT * Math.max(0, 1 - c0 / 0.1);
-    const splay1 = KNEE_OUT * Math.max(0, 1 - c1 / 0.1);
-    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 5.5, this.footPitch[0]);
-    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 5.5, this.footPitch[1]);
+    // ---- Crossover-safe leg separation: anti-symmetric DEPTH split ----
+    // Fade the outward knee-splay to zero as a leg crosses (else the two knees splay INTO each
+    // other), and push one knee forward / the other back so they pass at different depths — the
+    // separation the (continuity-capped) body yaw can't deliver, and the ONLY thing that works on
+    // a symmetric double-cross where the yaw signal cancels. Front foot = the more recently landed
+    // (that's what a crossover is); ties fall back to c0−c1, then hysteresis so it never flip-flops.
+    // Which foot passes in FRONT — must be STABLE across the whole crossover (a jittery choice
+    // leaves sSep≈0 → symmetric poles → no depth separation, the failure on a symmetric double-
+    // swing where u0≈u1). Decide by DESTINATION: the foot travelling further to +x passes in
+    // front (fixed for the whole swing). Fall back to crossedness, then hysteresis.
+    let sepTarget: number;
+    const destDx = S.dest[0].x - S.dest[1].x;
+    if ((u0 > 0.05 || u1 > 0.05) && Math.abs(destDx) > 0.03) {
+      sepTarget = destDx > 0 ? 1 : -1;
+    } else if (Math.abs(c0 - c1) > 0.02) {
+      sepTarget = c0 > c1 ? 1 : -1;
+    } else {
+      sepTarget = this.sSep[0] >= 0 ? 1 : -1; // hold (no flip-flop on a symmetric stance)
+    }
+    this.sp2(this.sSep, sepTarget, 16, 1, dt, cut);
+    // Engagement — the split turns on when the knees are about to meet, from three signals:
+    //  • lateral proximity: the feet are close in body-x (covers a cross THROUGH centre and a
+    //    feet-together stomp — the cases a "both crossed" test misses, which is where it clipped);
+    //  • feed-forward: both feet already crossed (a deep double-cross);
+    //  • closed-loop feedback from last frame's MEASURED knee gap (catches anything left).
+    // DEPTH split only engages on a real CROSS (a leg past centre) — on a close-but-uncrossed
+    // stance (both feet near the same spot) a depth split would sweep one knee through the other,
+    // so those cases get outward X-SPLAY instead. `crossing` = how far the more-crossed leg is over.
+    const crossing = Math.max(c0, c1);
+    const crossGate = THREE.MathUtils.clamp(crossing / 0.05, 0, 1);
+    const latClose = THREE.MathUtils.clamp((0.3 - Math.abs(lx0 - lx1)) / 0.14, 0, 1);
+    const ff = THREE.MathUtils.clamp(Math.min(c0, c1) / 0.12, 0, 1);
+    const fbTgt = THREE.MathUtils.clamp((0.16 - this._kneeGap) / 0.05, 0, 1);
+    this.sepFb += (fbTgt - this.sepFb) * (cut ? 1 : 1 - Math.exp(-dt / 0.03));
+    const sepAmt = crossGate * Math.max(ff, this.sepFb); // depth split, gated to actual crossings
+    const closeSplay = latClose * (1 - crossGate); // close + uncrossed → spread the knees sideways
+    const front = 0.5 * (1 + this.sSep[0]); // front-ness of foot 0 (0..1)
+    const splay0 = -KNEE_OUT * (Math.max(0, 1 - c0 / 0.1) + 0.8 * closeSplay);
+    const splay1 = KNEE_OUT * (Math.max(0, 1 - c1 / 0.1) + 0.8 * closeSplay);
+    const poleZ0 = Math.max(0.3, 1 + 4.5 * c0 + 4.0 * sepAmt * front - 2.2 * sepAmt * (1 - front));
+    const poleZ1 = Math.max(0.3, 1 + 4.5 * c1 + 4.0 * sepAmt * (1 - front) - 2.2 * sepAmt * front);
+    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, poleZ0, this.footPitch[0]);
+    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, poleZ1, this.footPitch[1]);
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
+    // TEMP DIAG: knee/ankle separation for the clipping probe (read after the world update).
+    this.legs[0].knee.getWorldPosition(this.tmp);
+    this.legs[1].knee.getWorldPosition(this.tmp2);
+    this._kneeGap = this.tmp.distanceTo(this.tmp2);
+    this.legs[0].ankle.getWorldPosition(this.tmp);
+    this.legs[1].ankle.getWorldPosition(this.tmp2);
+    this._ankleGap = this.tmp.distanceTo(this.tmp2);
     vrm.lookAt?.update(dt);
     vrm.expressionManager?.update();
     vrm.nodeConstraintManager?.update();
@@ -686,20 +770,58 @@ export class ThreeVrmDancer {
   }
 
   private support = [1, 1];
+  private _kneeGap = 0;
+  private _ankleGap = 0;
+  private _pelvisPitch = 0;
+  private _pelvisYaw = 0;
+
+  /** Distance in the XZ plane from (px,pz) to the segment [(ax,az),(bx,bz)]. */
+  private static segDist(
+    px: number,
+    pz: number,
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+  ): number {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const len2 = dx * dx + dz * dz || 1;
+    const t = THREE.MathUtils.clamp(((px - ax) * dx + (pz - az) * dz) / len2, 0, 1);
+    return Math.hypot(px - (ax + t * dx), pz - (az + t * dz));
+  }
 
   /** A snapshot of the balance state for the ?vrm verification harness (coupling metrics). */
   debug(): Record<string, number> {
     const S = this.sampled;
+    const cx = this.sComX[0];
+    const cz = this.sComZ[0];
     return {
       b: this.prevBeat,
-      comX: this.sComX[0],
+      comX: cx,
       comY: this.sComY[0],
-      comZ: this.sComZ[0],
+      comZ: cz,
+      comVX: this.sComX[1],
       yaw: this.yaw,
       load: this.loadLP,
-      pelvisRoll: PELVIS_ROLL_SIGN * 0.11 * this.loadLP,
-      chestR: this.sChestR[0],
+      pelvisRoll: PELVIS_ROLL_SIGN * 0.09 * this.loadLP,
+      pelvisPitch: this._pelvisPitch,
+      pelvisYaw: this._pelvisYaw,
+      leanR: this.sLeanR[0],
+      leanP: this.sLeanP[0],
       headR: this.sHeadR[0],
+      kneeGap: this._kneeGap,
+      ankleGap: this._ankleGap,
+      // Balance: CoM distance to the support she's committing to (dest) and standing on (pos).
+      balErrDest: ThreeVrmDancer.segDist(
+        cx,
+        cz,
+        S.dest[0].x,
+        S.dest[0].z,
+        S.dest[1].x,
+        S.dest[1].z,
+      ),
+      balErrNow: ThreeVrmDancer.segDist(cx, cz, S.pos[0].x, S.pos[0].z, S.pos[1].x, S.pos[1].z),
       f0x: this.footPos[0].x,
       f0z: this.footPos[0].z,
       f1x: this.footPos[1].x,
