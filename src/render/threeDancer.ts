@@ -193,6 +193,7 @@ export class ThreeVrmDancer {
   private sHeadR = [0, 0]; // head stabilization roll
   private sSep = [0, 0]; // smoothed crossover front/back split direction (+1 foot0 in front)
   private sepFb = 0; // closed-loop knee-separation feedback (from last frame's measured gap)
+  private sepAmtPrev = 0; // last frame's split amount → this frame's crouch coupling
   private spine: THREE.Object3D | null = null;
   private chest: THREE.Object3D | null = null;
   private upperChest: THREE.Object3D | null = null;
@@ -284,7 +285,7 @@ export class ThreeVrmDancer {
     // the old mistake was stripping the clip's torso and trying to re-synthesise it procedurally,
     // which could only manage ~0.04 rad and read as a rigid plank.
     const vrmClip = retargetMixamoToVrm(sourceFbx.animations[0], vrm, sourceFbx, {
-      hips: 0.55,
+      hips: 0.75,
       spine: 1,
       chest: 1,
       upperChest: 1,
@@ -611,7 +612,11 @@ export class ThreeVrmDancer {
     const phi = b - Math.floor(b);
     const pulse = (p: number): number => Math.exp(-4 * (p - Math.floor(p)));
     const pumpAmp = this.legLen * (0.015 + 0.015 * (Math.min(this.holdBeats, 2) / 2));
-    this.sp2(this.sComY, -pumpAmp * pulse(phi + 0.12), 22, 0.55, dt, cut);
+    // Crouch when the knees are tight (last frame's split amount): sinking bends BOTH knees,
+    // which gives the depth-split poles more travel to separate them — so the pelvis can groove
+    // freely (hip clip at full) without the busier hips tightening the legs into a clip.
+    const crouch = this.legLen * 0.07 * this.sepAmtPrev;
+    this.sp2(this.sComY, -pumpAmp * pulse(phi + 0.12) - crouch, 22, 0.55, dt, cut);
     const comY = this.sComY[0];
 
     // Loadedness: which leg carries the weight (support-weighted), smoothed. Drives contrapposto.
@@ -680,15 +685,16 @@ export class ThreeVrmDancer {
     const c0 = Math.max(0, lx0); // VRM right leg (hip −x) reaching past centre to +x
     const c1 = Math.max(0, -lx1); // VRM left leg (hip +x) reaching past centre to −x
 
-    // ---- Body yaw: pivot INTO crossovers, provably continuous + rate-limited ----
+    // ---- Body yaw: a GENTLE pivot into crossovers, provably continuous + rate-limited ----
     // tanh of the crossedness (C¹, soft-saturating — no thresholds), a critically-damped spring,
-    // then a HARD per-frame cap: |Δyaw| ≤ 3 rad/s·dt. A symmetric double-cross gives (c0−c1)=0 →
-    // no turn (correct — those legs split in DEPTH below, not by turning the whole body).
-    const yawTarget = 0.72 * Math.tanh((c0 - c1) / 0.15);
+    // then a HARD per-frame cap: |Δyaw| ≤ 1.3 rad/s·dt. The turn is small (±0.28 rad) and slow now
+    // that the knee DEPTH-split does the crossover separation — a big/fast yaw read as the body
+    // snapping left↔right during crossover runs. A symmetric double-cross gives (c0−c1)=0 → no turn.
+    const yawTarget = 0.4 * Math.tanh((c0 - c1) / 0.18);
     const yPrev = this.sYaw[0];
-    this.sp2(this.sYaw, yawTarget, 8, 1, dt, cut);
+    this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
     if (!cut) {
-      const maxStep = 3.0 * dt;
+      const maxStep = 1.3 * dt;
       const dy = this.sYaw[0] - yPrev;
       if (dy > maxStep) this.sYaw[0] = yPrev + maxStep;
       else if (dy < -maxStep) this.sYaw[0] = yPrev - maxStep;
@@ -727,12 +733,16 @@ export class ThreeVrmDancer {
     const crossing = Math.max(c0, c1);
     const crossGate = THREE.MathUtils.clamp(crossing / 0.05, 0, 1);
     const latClose = THREE.MathUtils.clamp((0.3 - Math.abs(lx0 - lx1)) / 0.14, 0, 1);
-    const ff = THREE.MathUtils.clamp(Math.min(c0, c1) / 0.12, 0, 1);
+    // Feed-forward on a single DEEP cross too (a leg reaching across with the other foot on the
+    // same side is a clip risk even though only one foot is "crossed"), plus the both-crossed and
+    // measured-gap signals.
+    const ff = THREE.MathUtils.clamp(Math.max(c0, c1) / 0.18, 0, 1);
     const fbTgt = THREE.MathUtils.clamp((0.16 - this._kneeGap) / 0.05, 0, 1);
     this.sepFb += (fbTgt - this.sepFb) * (cut ? 1 : 1 - Math.exp(-dt / 0.03));
     const sepAmt = crossGate * Math.max(ff, this.sepFb); // depth split, gated to actual crossings
     const closeSplay = latClose * (1 - crossGate); // close + uncrossed → spread the knees sideways
     const front = 0.5 * (1 + this.sSep[0]); // front-ness of foot 0 (0..1)
+    this.sepAmtPrev = sepAmt; // fed to next frame's crouch coupling
     const splay0 = -KNEE_OUT * (Math.max(0, 1 - c0 / 0.1) + 0.8 * closeSplay);
     const splay1 = KNEE_OUT * (Math.max(0, 1 - c1 / 0.1) + 0.8 * closeSplay);
     const poleZ0 = Math.max(0.3, 1 + 4.5 * c0 + 4.0 * sepAmt * front - 2.2 * sepAmt * (1 - front));
