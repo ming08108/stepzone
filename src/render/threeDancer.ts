@@ -175,9 +175,22 @@ export class ThreeVrmDancer {
   // Every visible motion (pelvis shift/roll/pitch/yaw, torso S-curve, head, bounce, travel) is
   // a consequence of these, so the upper body can never be "detached" from the feet: the feet
   // are its only excitation. Each spring is a [position, velocity] pair; sp2() integrates them
-  // dt-correctly. clipBeats beat-locks the 18.2 s arm clip so it plays at ~authored speed at
-  // 128 BPM (measured: 2.13 beats/s × 18.2 s ≈ 39 beats/loop); faster/slower songs scale it.
-  clipBeats = 39;
+  // dt-correctly. The `tune` knobs are read live every frame (the ?vrm UI writes to them), so
+  // the dancer can be dialed in without a rebuild. clipBeats beat-locks the 18.2 s arm clip to
+  // ~authored speed at 128 BPM (2.13 beats/s × 18.2 s ≈ 39 beats/loop).
+  tune = {
+    clipBeats: 39,
+    yawAmp: 0.45, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
+    yawRate: 1.3, // max turn speed (rad/s) — the smoothness knob
+    commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
+    commitZ: 0.5, // fore/aft weight shift
+    comStiff: 9, // CoM spring stiffness (higher = snappier weight transfer)
+    leanRoll: 0.45, // upper-body lean into lateral travel
+    leanPitch: 0.35, // upper-body lean into fore/aft travel
+    pelvisRoll: 0.09, // contrapposto hip hike over the loaded leg
+    bounce: 1.0, // vertical impact-bounce scale
+    kneeSplit: 4.0, // crossover knee depth-split strength (anti-clip)
+  };
   private prevBeat = 0;
   private bps = 2.13; // smoothed tempo (beats/sec ≈ 128 BPM) — scales the spring stiffness
   private holdBeats = 0; // beats since any foot landed (idle-groove gain)
@@ -419,6 +432,14 @@ export class ThreeVrmDancer {
     this.camera.lookAt(0, c.y - 0.1, 0);
   }
 
+  /** The render camera + its look target — for the ?vrm orbit controls. */
+  get cam(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+  get orbitTarget(): readonly [number, number, number] {
+    return [0, this._center[1] - 0.1, 0];
+  }
+
   setSteps(steps: readonly DancerStep[]): void {
     // Precompute the whole footwork timeline once; empty → fall back to the looping synth routine.
     this.chartTl = steps.length ? buildChartTimeline(steps, PANEL, HOME, this.ankleY) : null;
@@ -517,7 +538,7 @@ export class ThreeVrmDancer {
     // beat — half of why the body read as detached). humanoid.update() resets the centre-line
     // bones to rest; the balance model writes them below. Arms are children of upperChest, so
     // they automatically ride the procedural torso wave with no extra code.
-    const cb = this.clipBeats;
+    const cb = this.tune.clipBeats;
     this.mixer.setTime(((((b % cb) + cb) % cb) / cb) * this.clipDur);
     vrm.humanoid?.update();
 
@@ -573,10 +594,10 @@ export class ThreeVrmDancer {
     // over it — full commit read as over-exaggerated once the translation actually rendered. She
     // stays inside her support base (both feet), so it's a natural weight shift, not a topple.
     // Soft spring (ω≈9) so the pelvis FLOWS foot to foot instead of snapping. ζ=0.75 settles.
-    const comTgtX = tgtX * 0.6;
-    const comTgtZ = tgtZ * 0.5;
-    this.sp2(this.sComX, comTgtX, 9 * tempo, 0.75, dt, cut);
-    this.sp2(this.sComZ, comTgtZ, 9 * tempo, 0.75, dt, cut);
+    const comTgtX = tgtX * this.tune.commitX;
+    const comTgtZ = tgtZ * this.tune.commitZ;
+    this.sp2(this.sComX, comTgtX, this.tune.comStiff * tempo, 0.75, dt, cut);
+    this.sp2(this.sComZ, comTgtZ, this.tune.comStiff * tempo, 0.75, dt, cut);
 
     // Lean-and-catch: the upper body leans INTO the travel (velocity) and toward the not-yet-
     // reached target (error), then settles as the CoM arrives — a fast shift reads as a committed
@@ -585,7 +606,7 @@ export class ThreeVrmDancer {
     const errZ = comTgtZ - this.sComZ[0];
     this.sp2(
       this.sLeanR,
-      THREE.MathUtils.clamp(0.12 * this.sComX[1] + 0.45 * errX, -0.22, 0.22),
+      THREE.MathUtils.clamp(0.12 * this.sComX[1] + this.tune.leanRoll * errX, -0.22, 0.22),
       10,
       1,
       dt,
@@ -593,7 +614,7 @@ export class ThreeVrmDancer {
     );
     this.sp2(
       this.sLeanP,
-      THREE.MathUtils.clamp(0.1 * this.sComZ[1] + 0.35 * errZ, -0.15, 0.18),
+      THREE.MathUtils.clamp(0.1 * this.sComZ[1] + this.tune.leanPitch * errZ, -0.15, 0.18),
       10,
       1,
       dt,
@@ -607,17 +628,18 @@ export class ThreeVrmDancer {
     const land0 = S.landBeat[0] !== this.lastLand0 && S.landBeat[0] > -1e8;
     const land1 = S.landBeat[1] !== this.lastLand1 && S.landBeat[1] > -1e8;
     if (!cut) {
+      const bn = this.tune.bounce;
       if (land0 && land1 && Math.abs(S.landBeat[0] - S.landBeat[1]) < 1e-6) {
         const d = Math.max(S.stepDist[0], S.stepDist[1]);
-        this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * d, 0.25, 0.8) * 1.6; // jump: one big hit
+        this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * d, 0.25, 0.8) * 1.6 * bn; // jump hit
         this.holdBeats = 0;
       } else {
         if (land0) {
-          this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * S.stepDist[0], 0.25, 0.8);
+          this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * S.stepDist[0], 0.25, 0.8) * bn;
           this.holdBeats = 0;
         }
         if (land1) {
-          this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * S.stepDist[1], 0.25, 0.8);
+          this.sComY[1] -= THREE.MathUtils.clamp(0.25 + 1.2 * S.stepDist[1], 0.25, 0.8) * bn;
           this.holdBeats = 0;
         }
       }
@@ -643,7 +665,7 @@ export class ThreeVrmDancer {
 
     // ---- Pelvis Δ: contrapposto + weight-lean, post-multiplied onto the clip's hip sway.
     // The clip (hips gain 0.55) supplies the samba groove; this adds the foot-coupled physics.
-    const pelvisRoll = PELVIS_ROLL_SIGN * 0.09 * this.loadLP; // hip hikes over the loaded leg
+    const pelvisRoll = PELVIS_ROLL_SIGN * this.tune.pelvisRoll * this.loadLP; // hip hike, loaded leg
     const pelvisPitch = 0.03 + Math.min(0.12, (0.9 * Math.max(0, -comY)) / this.legLen); // crouch
     const pelvisYaw = THREE.MathUtils.clamp(
       (0.4 * (this.footPos[0].z - this.footPos[1].z)) / 0.6,
@@ -706,11 +728,11 @@ export class ThreeVrmDancer {
     // then a HARD per-frame cap: |Δyaw| ≤ 1.3 rad/s·dt. The turn is small (±0.28 rad) and slow now
     // that the knee DEPTH-split does the crossover separation — a big/fast yaw read as the body
     // snapping left↔right during crossover runs. A symmetric double-cross gives (c0−c1)=0 → no turn.
-    const yawTarget = 0.06 * Math.tanh((c0 - c1) / 0.18);
+    const yawTarget = this.tune.yawAmp * Math.tanh((c0 - c1) / 0.18);
     const yPrev = this.sYaw[0];
     this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
     if (!cut) {
-      const maxStep = 1.3 * dt;
+      const maxStep = this.tune.yawRate * dt;
       const dy = this.sYaw[0] - yPrev;
       if (dy > maxStep) this.sYaw[0] = yPrev + maxStep;
       else if (dy < -maxStep) this.sYaw[0] = yPrev - maxStep;
@@ -761,8 +783,15 @@ export class ThreeVrmDancer {
     this.sepAmtPrev = sepAmt; // fed to next frame's crouch coupling
     const splay0 = -KNEE_OUT * (Math.max(0, 1 - c0 / 0.1) + 0.8 * closeSplay);
     const splay1 = KNEE_OUT * (Math.max(0, 1 - c1 / 0.1) + 0.8 * closeSplay);
-    const poleZ0 = Math.max(0.3, 1 + 4.5 * c0 + 4.0 * sepAmt * front - 2.2 * sepAmt * (1 - front));
-    const poleZ1 = Math.max(0.3, 1 + 4.5 * c1 + 4.0 * sepAmt * (1 - front) - 2.2 * sepAmt * front);
+    const ks = this.tune.kneeSplit;
+    const poleZ0 = Math.max(
+      0.3,
+      1 + 4.5 * c0 + ks * sepAmt * front - 0.55 * ks * sepAmt * (1 - front),
+    );
+    const poleZ1 = Math.max(
+      0.3,
+      1 + 4.5 * c1 + ks * sepAmt * (1 - front) - 0.55 * ks * sepAmt * front,
+    );
     this.solveLeg(this.footLeg[0], this.footPos[0], splay0, poleZ0, this.footPitch[0]);
     this.solveLeg(this.footLeg[1], this.footPos[1], splay1, poleZ1, this.footPitch[1]);
 

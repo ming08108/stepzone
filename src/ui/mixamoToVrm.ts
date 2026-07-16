@@ -51,7 +51,6 @@ export function retargetMixamoToVrm(
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const seen = new Set<string>();
-  const twist = new THREE.Quaternion();
   // Optional per-bone GAIN map: keep a bone's track only if it has an entry, scaling its motion
   // amplitude by the gain (1 = full authored motion, 0.55 = damped). The dancer keeps arms/hands
   // at full and the torso (spine/chest) at full — that clip choreography is what reads as
@@ -84,14 +83,6 @@ export function retargetMixamoToVrm(
         if (isVrm0) {
           q.x = -q.x;
           q.z = -q.z; // VRM0 faces −Z → mirror the animation about the YZ/XY axes
-        }
-        // The HIPS drive the whole body, and the samba clip TURNS (full-body spins) — which spun
-        // an attract dancer who should face the camera. Strip only the Y-axis twist (the facing
-        // rotation) from the hips via swing-twist decomposition, keeping the roll/pitch hip sway.
-        // (Torso twist stays: it lives in spine/chest, which rotate relative to a forward pelvis.)
-        if (vrmBone === 'hips') {
-          twist.set(0, q.y, 0, q.w).normalize(); // the Y-twist component
-          q.multiply(twist.invert()); // swing = q · twist⁻¹  → yaw removed
         }
         // Scale the rest-relative deviation toward rest by (1−gain): keep `gain` of the motion.
         if (gain < 1) q.slerp(IDENTITY_Q, 1 - gain);
