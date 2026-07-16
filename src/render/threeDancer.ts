@@ -67,6 +67,8 @@ const PELVIS_ROLL_SIGN = 1;
 const PELVIS_PITCH_SIGN = -1;
 const LEAN_ROLL_SIGN = 1;
 const LEAN_PITCH_SIGN = 1;
+const ARM_OPP_SIGN = 1; // chest counter-twist direction vs. the stepping foot (mirror-verified)
+const GAZE_SIGN = 1; // head-turn direction toward the next step
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
 // slightly turned-out stance keeps the two thighs from converging and clipping when the
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
@@ -199,6 +201,11 @@ export class ThreeVrmDancer {
     pelvisRoll: 0.09, // contrapposto hip hike over the loaded leg
     bounce: 1.0, // vertical impact-bounce scale
     kneeSplit: 4.0, // crossover knee depth-split strength (anti-clip)
+    // ---- naturalness layers (additive, small) ----
+    armSwing: 0.5, // torso counter-twist coupled to the stepping foot (opposition) → arms follow
+    gaze: 0.5, // head leads toward the foot she's about to step
+    breath: 0.5, // slow breathing rise/fall (strongest during holds)
+    idleSway: 0.5, // subtle non-repeating body drift when she's not busy stepping
   };
   private prevBeat = 0;
   private bps = 2.13; // smoothed tempo (beats/sec ≈ 128 BPM) — scales the spring stiffness
@@ -213,6 +220,9 @@ export class ThreeVrmDancer {
   private sLeanR = [0, 0]; // upper-body lean INTO lateral travel (roll) — "commit, catch, settle"
   private sLeanP = [0, 0]; // upper-body lean into fore/aft travel (pitch)
   private sHeadR = [0, 0]; // head stabilization roll
+  private sHeadY = [0, 0]; // head gaze yaw toward the next step
+  private sChestY = [0, 0]; // torso opposition twist (arms follow the stepping foot)
+  private _breath = 0; // current breathing offset (for the spine write)
   private sSep = [0, 0]; // smoothed crossover front/back split direction (+1 foot0 in front)
   private sepFb = 0; // closed-loop knee-separation feedback (from last frame's measured gap)
   private sepAmtPrev = 0; // last frame's split amount → this frame's crouch coupling
@@ -582,9 +592,10 @@ export class ThreeVrmDancer {
    *  reaches into its travel. No rest quat: humanoid.update() already deposited the clip pose. */
   private writeSpine(bone: THREE.Object3D | null, wgt: number): void {
     if (!bone) return;
+    // pitch = weight-lean + breathing (chest opens on the inhale); yaw = step-opposition twist.
     this.eChest.set(
-      LEAN_PITCH_SIGN * this.sLeanP[0] * wgt,
-      0,
+      (LEAN_PITCH_SIGN * this.sLeanP[0] + PELVIS_PITCH_SIGN * this._breath) * wgt,
+      this.sChestY[0] * wgt,
       LEAN_ROLL_SIGN * this.sLeanR[0] * wgt,
     );
     bone.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
@@ -762,6 +773,36 @@ export class ThreeVrmDancer {
     const Lraw = (s1 - s0) / (s1 + s0 || 1); // +1 → weight on the +x (screen-right, VRM-left) foot
     this.loadLP += (Lraw - this.loadLP) * (cut ? 1 : 1 - Math.exp(-dt / 0.08));
 
+    // ---- Naturalness layers (small, additive) ----
+    // How "calm" she is — 0 while stepping, →1 during a hold. Breathing and idle drift are idle
+    // behaviours, so they fade IN when the footwork quiets down and fade out when she's busy.
+    const calm = THREE.MathUtils.clamp((this.holdBeats - 0.4) / 1.8, 0, 1);
+    // Breathing: a slow rise/fall (~4 s), always a little, more when calm.
+    this._breath = this.tune.breath * (0.35 + 0.65 * calm) * Math.sin(now * ((2 * Math.PI) / 4.1));
+    // Idle drift: two incommensurate sines (never exactly repeats) so a held pose keeps micro-
+    // moving instead of freezing. Deterministic (no RNG), tiny amplitude, gated by calm.
+    const idle = this.tune.idleSway * calm;
+    const idleYaw = idle * 0.05 * (Math.sin(now * 0.61) + 0.5 * Math.sin(now * 1.13 + 2.1));
+    const idleRoll = idle * 0.045 * (Math.sin(now * 0.47 + 1.3) + 0.5 * Math.sin(now * 0.89 + 0.4));
+    // Opposition: the SWINGING foot pulls the opposite shoulder forward (the natural arm/torso
+    // counter-twist of a step). Ties the clip's arms to the ACTUAL footwork — otherwise they just
+    // play the loop regardless of where she steps. eased so it flows.
+    const opp = (1 - s1) * u1 - (1 - s0) * u0; // >0 → right foot swinging
+    this.sp2(this.sChestY, ARM_OPP_SIGN * this.tune.armSwing * 0.5 * opp, 8, 1, dt, cut);
+    // Gaze: the head leads toward the foot she's about to step, ramping in over the last ~1.2 beats.
+    const gAhead = Math.min(S.nextLand[0] - b, S.nextLand[1] - b);
+    const gi = S.nextLand[0] - b <= S.nextLand[1] - b ? 0 : 1;
+    let gazeTgt = 0;
+    if (S.nextPanel[gi] >= 0 && gAhead >= 0 && gAhead < 1.2) {
+      gazeTgt =
+        GAZE_SIGN *
+        this.tune.gaze *
+        THREE.MathUtils.clamp(PANEL[S.nextPanel[gi]].x / 0.3, -1, 1) *
+        (1 - gAhead / 1.2) *
+        0.35;
+    }
+    this.sp2(this.sHeadY, gazeTgt, 5, 1, dt, cut);
+
     // ---- Pelvis Δ: contrapposto + weight-lean, post-multiplied onto the clip's hip sway.
     // The clip (hips gain 0.55) supplies the samba groove; this adds the foot-coupled physics.
     const pelvisRoll = PELVIS_ROLL_SIGN * this.tune.pelvisRoll * this.loadLP; // hip hike, loaded leg
@@ -777,8 +818,8 @@ export class ThreeVrmDancer {
     ); // hips open toward the forward foot
     this.eSway.set(
       pelvisPitch + 0.35 * LEAN_PITCH_SIGN * this.sLeanP[0],
-      pelvisYaw,
-      pelvisRoll + 0.35 * LEAN_ROLL_SIGN * this.sLeanR[0],
+      pelvisYaw + idleYaw,
+      pelvisRoll + 0.35 * LEAN_ROLL_SIGN * this.sLeanR[0] + idleRoll,
     );
     this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
     this._pelvisPitch = pelvisPitch;
@@ -791,10 +832,10 @@ export class ThreeVrmDancer {
     this.writeSpine(this.chest, 0.3);
     this.writeSpine(this.upperChest, 0.4);
 
-    // ---- Head: vestibular stabilization (counters the lean to keep the eyes level) + beat nod.
+    // ---- Head: vestibular stabilization (eyes level) + beat nod + GAZE toward the next step.
     this.sp2(this.sHeadR, -0.4 * LEAN_ROLL_SIGN * this.sLeanR[0], 7, 1, dt, cut);
     if (this.head) {
-      this.eChest.set(0.03 * pulse(phi + 0.12), 0, this.sHeadR[0]);
+      this.eChest.set(0.03 * pulse(phi + 0.12), this.sHeadY[0], this.sHeadR[0]);
       this.head.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
 

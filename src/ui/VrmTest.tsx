@@ -36,6 +36,10 @@ const KNOBS: Knob[] = [
   { key: 'pelvisRoll', label: 'Hip hike (contrapposto)', min: 0, max: 0.3, step: 0.01 },
   { key: 'bounce', label: 'Bounce / impact', min: 0, max: 2, step: 0.05 },
   { key: 'kneeSplit', label: 'Knee anti-clip', min: 0, max: 8, step: 0.2 },
+  { key: 'armSwing', label: 'Arm/torso opposition', min: 0, max: 1.5, step: 0.05 },
+  { key: 'gaze', label: 'Look toward next step', min: 0, max: 1.5, step: 0.05 },
+  { key: 'breath', label: 'Breathing', min: 0, max: 1.5, step: 0.05 },
+  { key: 'idleSway', label: 'Idle micro-sway', min: 0, max: 1.5, step: 0.05 },
   { key: 'clipBeats', label: 'Arm speed (beats/loop)', min: 12, max: 80, step: 1 },
 ];
 const DEFAULTS: Record<string, number> = {
@@ -52,6 +56,10 @@ const DEFAULTS: Record<string, number> = {
   pelvisRoll: 0.09,
   bounce: 1.0,
   kneeSplit: 4.0,
+  armSwing: 0.5,
+  gaze: 0.5,
+  breath: 0.5,
+  idleSway: 0.5,
   clipBeats: 39,
 };
 
