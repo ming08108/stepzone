@@ -84,9 +84,18 @@ export function NoteFieldPreview({
   attract?: AttractConfig | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  // Live-applied per frame (no rebuild): scroll.
-  const liveRef = useRef({ scrollMode, scrollValue });
-  liveRef.current = { scrollMode, scrollValue };
+  // Live-applied per frame (no field rebuild): scroll, reverse, dim, HUD meta, media rate.
+  // These all update the existing field in place, so changing them must NOT recreate the
+  // WebGPU device — which (in DANCE mode) would reparse the whole 5.6 MB VRM dancer and
+  // freeze the options screen on every tweak.
+  const liveRef = useRef({ scrollMode, scrollValue, reverse, bgDim, meta, mediaRate });
+  liveRef.current = { scrollMode, scrollValue, reverse, bgDim, meta, mediaRate };
+  // The dance-background config, applied live: a difficulty / BG-mode switch updates the
+  // existing field (same dancer model → the loadModel guard skips the VRM reload) rather
+  // than recreating the device.
+  const attractRef = useRef(attract);
+  attractRef.current = attract;
+  const fieldRef = useRef<GpuNoteField | null>(null);
   const clockRef = useRef(clock);
   clockRef.current = clock;
   // The chart (notes/timing/loop) is read through a ref so it can be SWAPPED on
@@ -260,7 +269,16 @@ export function NoteFieldPreview({
       }
       livePatch.scrollMode = liveRef.current.scrollMode;
       livePatch.scrollValue = liveRef.current.scrollValue;
+      livePatch.reverse = liveRef.current.reverse;
+      livePatch.bgDim = hud ? liveRef.current.bgDim : 1;
+      if (hud && liveRef.current.meta) livePatch.meta = liveRef.current.meta;
       gpuField?.applyConfig(livePatch);
+      if (
+        bgMedia instanceof HTMLVideoElement &&
+        bgMedia.playbackRate !== liveRef.current.mediaRate
+      ) {
+        bgMedia.playbackRate = liveRef.current.mediaRate;
+      }
       const loop = dataRef.current.loopWindow;
       const beat = dataRef.current.timing.getBeatFromElapsedTime(now);
       // HUD progress hairline: the loop for a practice section, else the song.
@@ -315,8 +333,9 @@ export function NoteFieldPreview({
         gpuField = null;
         return;
       }
+      fieldRef.current = gpuField;
       gpuField.setBackground(bgMedia);
-      if (attract) gpuField.setAttract(attract); // DANCE mode: procedural bg
+      if (attractRef.current) gpuField.setAttract(attractRef.current); // DANCE mode: dancer bg
       reload(); // rebuild + beat lines from the current chart
       ro = new ResizeObserver(() => resize());
       ro.observe(canvas);
@@ -326,6 +345,7 @@ export function NoteFieldPreview({
     return () => {
       cancelled = true;
       reloadRef.current = () => {};
+      fieldRef.current = null;
       cancelAnimationFrame(raf);
       ro?.disconnect();
       gpuField?.destroy();
@@ -340,24 +360,23 @@ export function NoteFieldPreview({
     // swapped on the live field by the effect below, so a difficulty change
     // never recreates the WebGPU device (Firefox-crash fix). Only stepsType (a
     // different lane count needs a fresh field) and the create-time chrome are.
-  }, [
-    stepsType,
-    noteSkin,
-    reverse,
-    hud,
-    bgDim,
-    background,
-    mediaRate,
-    attract,
-    meta?.title,
-    meta?.subtitle,
-    meta?.difficulty,
-  ]);
+    // Only a genuinely different device need recreates the field: lane count (stepsType),
+    // a canvas/context swap (noteSkin, via the key below), the HUD-chrome layout (hud), or a
+    // different background File. reverse / bgDim / meta / mediaRate / attract are all applied
+    // LIVE (above / below), so tweaking them never reparses the dancer.
+  }, [stepsType, noteSkin, hud, background]);
 
   // Chart swap (difficulty change): reload the notes on the EXISTING field.
   useEffect(() => {
     reloadRef.current();
   }, [noteData, timing, loopWindow?.startSeconds, loopWindow?.endSeconds]);
+
+  // Dance background: apply live to the existing field. A same-model change (difficulty, or
+  // toggling BG mode among dance-capable states) updates the step timeline without reloading
+  // the VRM (the loadModel guard); null clears it. This is what keeps Options snappy.
+  useEffect(() => {
+    fieldRef.current?.setAttract(attract ?? null);
+  }, [attract]);
 
   // Fresh element per skin: a canvas can hold only one context type/device, so
   // swapping skins swaps the element rather than reconfiguring in place.
