@@ -185,7 +185,7 @@ export class ThreeVrmDancer {
     clipBeats: 39,
     clipTwist: 0, // how much of the clip's own Y-rotation to keep (0 = no samba spin; 1 = full)
     yawAmp: 0.7, // whole-body pivot INTO crossovers (turns the entire avatar; feet stay planted)
-    yawRate: 1.3, // max turn speed (rad/s) — the smoothness knob
+    yawRate: 6, // turn snappiness — drives the yaw spring stiffness AND the teleport-backstop cap
     commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
     commitZ: 0.5, // fore/aft weight shift
     comStiff: 9, // CoM spring stiffness (higher = snappier weight transfer)
@@ -802,9 +802,14 @@ export class ThreeVrmDancer {
     const dbl = this.sSep[0] * Math.min(c0, c1);
     const yawTarget = this.tune.yawAmp * Math.tanh((c0 - c1 + CROSS_TURN * dbl) / 0.18);
     const yPrev = this.sYaw[0];
-    this.sp2(this.sYaw, yawTarget, 6, 1, dt, cut);
+    // yawRate drives BOTH the spring stiffness (the real bottleneck on turn speed) and the hard
+    // per-frame cap, so the "Turn speed" knob genuinely controls snappiness. The cap is kept a bit
+    // above the spring's own max velocity so it only ever fires as a teleport backstop, never
+    // throttling a normal turn.
+    const yr = this.tune.yawRate;
+    this.sp2(this.sYaw, yawTarget, yr * 2.5, 1, dt, cut);
     if (!cut) {
-      const maxStep = this.tune.yawRate * dt;
+      const maxStep = yr * 2.5 * dt;
       const dy = this.sYaw[0] - yPrev;
       if (dy > maxStep) this.sYaw[0] = yPrev + maxStep;
       else if (dy < -maxStep) this.sYaw[0] = yPrev - maxStep;

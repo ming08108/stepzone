@@ -23,7 +23,7 @@ type Knob = { key: string; label: string; min: number; max: number; step: number
 const KNOBS: Knob[] = [
   { key: 'clipTwist', label: 'Clip rotation (samba spin)', min: 0, max: 1, step: 0.02 },
   { key: 'yawAmp', label: 'Body turn into crossover', min: 0, max: 1.6, step: 0.02 },
-  { key: 'yawRate', label: 'Turn speed (rad/s)', min: 0.3, max: 6, step: 0.1 },
+  { key: 'yawRate', label: 'Turn snappiness', min: 1, max: 30, step: 0.5 },
   { key: 'commitX', label: 'Weight shift  ← →', min: 0, max: 1, step: 0.02 },
   { key: 'commitZ', label: 'Weight shift  fore/aft', min: 0, max: 1, step: 0.02 },
   { key: 'comStiff', label: 'Weight stiffness', min: 3, max: 20, step: 0.5 },
@@ -37,7 +37,7 @@ const KNOBS: Knob[] = [
 const DEFAULTS: Record<string, number> = {
   clipTwist: 0,
   yawAmp: 0.7,
-  yawRate: 1.3,
+  yawRate: 6,
   commitX: 0.6,
   commitZ: 0.5,
   comStiff: 9,
