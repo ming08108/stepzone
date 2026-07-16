@@ -361,6 +361,31 @@ export class ThreeVrmDancer {
       vrm.springBoneManager.setInitState(); // seed verlet state in centre space, matrices current
     }
 
+    // Rim light on the MToon materials. VRoid's dark clothing is a near-black diffuse texture with
+    // white color/shade factors, so albedo×light ≈ 0 and toon shading can't lift it — a black skirt
+    // reads as a flat silhouette with no folds. MToon's parametric rim is ADDITIVE (independent of
+    // albedo), so a subtle cool edge sheen gives dark cloth 3-D form without touching the mid-tones.
+    vrm.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const mm = m as unknown as {
+          parametricRimColorFactor?: THREE.Color;
+          parametricRimFresnelPowerFactor?: number;
+          parametricRimLiftFactor?: number;
+          rimLightingMixFactor?: number;
+          isOutline?: boolean;
+        };
+        if (!mm.parametricRimColorFactor || mm.isOutline) continue;
+        mm.parametricRimColorFactor.setRGB(0.13, 0.15, 0.22); // cool, subtle
+        if (mm.parametricRimFresnelPowerFactor !== undefined)
+          mm.parametricRimFresnelPowerFactor = 3.2;
+        if (mm.parametricRimLiftFactor !== undefined) mm.parametricRimLiftFactor = 0.04;
+        if (mm.rimLightingMixFactor !== undefined) mm.rimLightingMixFactor = 0.5;
+      }
+    });
+
     // Retarget the groove onto the VRM humanoid with a per-bone GAIN map. The clip drives the
     // arms/hands and the SPINE/CHEST at full strength — that authored samba torso sway is what
     // reads as real dancing — with the hips damped (the procedural contrapposto + weight-lean
