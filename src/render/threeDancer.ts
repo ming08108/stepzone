@@ -62,6 +62,7 @@ const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05
 // eye in ?vrm, not derived on paper): contrapposto hip hike vs. loaded side, and the weight-lean
 // roll/pitch vs. travel direction.
 const PELVIS_ROLL_SIGN = 1;
+const PELVIS_PITCH_SIGN = -1;
 const LEAN_ROLL_SIGN = 1;
 const LEAN_PITCH_SIGN = 1;
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
@@ -752,7 +753,11 @@ export class ThreeVrmDancer {
     // ---- Pelvis Δ: contrapposto + weight-lean, post-multiplied onto the clip's hip sway.
     // The clip (hips gain 0.55) supplies the samba groove; this adds the foot-coupled physics.
     const pelvisRoll = PELVIS_ROLL_SIGN * this.tune.pelvisRoll * this.loadLP; // hip hike, loaded leg
-    const pelvisPitch = 0.03 + Math.min(0.12, (0.9 * Math.max(0, -comY)) / this.legLen); // crouch
+    // Slight forward lean at rest + more as she crouches — a dancer's posture. PELVIS_PITCH_SIGN
+    // is negative on this VRM0-mirrored rig (a +X pitch tilts BACK here); without the flip she
+    // leaned backward, which showed the moment the clip's own forward lean was dialed down.
+    const pelvisPitch =
+      PELVIS_PITCH_SIGN * (0.03 + Math.min(0.12, (0.9 * Math.max(0, -comY)) / this.legLen)); // crouch
     const pelvisYaw = THREE.MathUtils.clamp(
       (0.4 * (this.footPos[0].z - this.footPos[1].z)) / 0.6,
       -0.25,
