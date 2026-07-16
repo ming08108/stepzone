@@ -548,13 +548,12 @@ export class AttractGpu {
       return;
     }
     this.usingModel = true; // the composite (draw) samples her last render every frame
-    // Throttle her HEAVY per-frame work (three render + spring bones + foot-IK) to
-    // ~60fps: she's a background element, so at 144/240Hz the composite reuses the last
-    // render for the in-between frames — the note field itself stays at full refresh.
-    // Throttle + physics dt use a MONOTONIC wall clock, NOT the song `now` (which seeks/
-    // loops/resets between songs — a backward `now` would freeze her forever).
+    // She now updates EVERY frame — at the display's full refresh rate — so her motion is
+    // as smooth as the note field (no 60fps cap, no reused in-between frames). She only
+    // loads in 'dance' mode (see Play.tsx), so this cost is opt-in. The physics dt uses a
+    // MONOTONIC wall clock, NOT the song `now` (which seeks/loops/resets between songs — a
+    // backward `now` would freeze her forever), clamped so a long stall can't explode it.
     const wall = performance.now() * 0.001;
-    if (d.colorView && wall - this.lastDancerUpdate < 1 / 62) return;
     const dt = Math.min(Math.max(wall - this.lastDancerUpdate, 0), 1 / 30);
     this.lastDancerUpdate = wall;
     try {

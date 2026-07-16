@@ -679,11 +679,14 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       const useDanceBg = (): void =>
         session.setAttract({
           ...buildAttractConfig(req.song.title, req.song.timing, req.chart),
-          // The heavy textured avatar is single-player only — in a live room
-          // race two of them (one per machine, but the perf gate runs both on
-          // one box) starve the field, so versus falls back to the procedural
-          // dancer. Solo players get the full 3D character.
-          model: !req.versus,
+          // The heavy textured VRM avatar loads ONLY when the player picked the
+          // 'dance' background — that's its purpose, and it carries a real cost
+          // (a whole three.js WebGPU renderer + spring physics + foot-IK per
+          // frame). For a BGA-less song in 'dim'/'full' we still want the neon
+          // tunnel, but NOT the avatar (it'd render offscreen unseen, wasting the
+          // GPU and — in software-WebGPU CI — stalling the field). Versus also
+          // skips it: two avatars on one perf box starve the note field.
+          model: !req.versus && settings.bgMode === 'dance',
         });
       if (settings.bgMode === 'dance') {
         useDanceBg();
