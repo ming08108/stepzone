@@ -49,12 +49,14 @@ export interface DancerCamera {
   target?: readonly [number, number, number];
 }
 
-// Panel → floor position (metres). L/R straddle x; U far (−z), D near (+z).
+// Panel → floor position (metres). L/R straddle x; U far (−z), D near (+z). Kept fairly narrow:
+// a 60 cm L↔R split reads as an unnatural sumo stance AND stretches long garments (a jacket/coat
+// hem skinned to the legs tents out into a "skirt" on the a/b/c samples). ~48 cm looks natural.
 const PANEL = [
-  new THREE.Vector3(-0.3, 0, 0), // 0 L
-  new THREE.Vector3(0, 0, 0.3), //  1 D
-  new THREE.Vector3(0, 0, -0.3), // 2 U
-  new THREE.Vector3(0.3, 0, 0), //  3 R
+  new THREE.Vector3(-0.24, 0, 0), // 0 L
+  new THREE.Vector3(0, 0, 0.26), //  1 D
+  new THREE.Vector3(0, 0, -0.26), // 2 U
+  new THREE.Vector3(0.24, 0, 0), //  3 R
 ];
 const PANEL_COL = [0xff3fa0, 0x8f6bff, 0x4fd6ff, 0xffa63f];
 const HOME = [new THREE.Vector3(-0.09, 0, 0.05), new THREE.Vector3(0.09, 0, 0.05)]; // L/R rest
