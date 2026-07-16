@@ -578,31 +578,46 @@ export class AttractGpu {
         0.7,
       );
 
-      // Dynamic camera: a wide two-frequency orbit + slow crane + beat dolly. The pad
-      // is IN the three scene (feet stay on the arrows at any angle), so the orbit can
-      // be freer than the old 2D-pad dancer; kept moderate to match the tunnel's sway.
+      // ---- Dynamic camera: beat-synced CUTS + in-shot drift ----
+      // Hold a composed shot for a couple of beats, then hard-CUT to a fresh angle on the
+      // beat (a music-video cut). Each shot's azimuth / height / zoom come from a hash of the
+      // shot index — varied but rock-steady within the shot — and a slow drift + push-in keep
+      // it alive. The pad is IN the three scene, so the feet stay on the arrows at any angle.
       const c = d.center;
       const r = d.radius;
       const fovY = 0.62;
       const phase = b - Math.floor(b);
       const kick = Number.isFinite(beat) ? Math.exp(-6 * phase) : 0;
       const fixed = this.camAz !== null;
-      const orbit = fixed
-        ? (this.camAz as number)
-        : 0.16 * Math.sin(now * 0.16) + 0.07 * Math.sin(now * 0.37 + 1.0);
-      const crane = fixed ? 0 : 0.07 * r * Math.sin(now * 0.13 + 0.5);
-      const dolly = fixed ? 1 : 1 + 0.03 * Math.sin(now * 0.11) - 0.05 * kick;
+      const hash = (n: number) => {
+        const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+        return s - Math.floor(s);
+      };
+      // Cut cadence: mostly every 4 beats (a bar), but some shots hold only 2 for punch.
+      const bar = Math.floor(b / 4);
+      const cutBeats = hash(bar + 0.5) < 0.4 ? 2 : 4;
+      const shot = Math.floor(b / cutBeats);
+      const tShot = b / cutBeats - shot; // 0..1 through the current shot
+      // Azimuth spread ±~68° around the front; drift eases out and back (0 at the cut).
+      const shotAz = (hash(shot) - 0.5) * 2.4;
+      const drift = 0.16 * Math.sin(tShot * Math.PI) * (hash(shot + 1.9) - 0.5) * 2;
+      const orbit = fixed ? (this.camAz as number) : shotAz + drift;
+      // Eye height: low (looking up, dramatic) → high (looking down).
+      const heightMul = fixed ? 0.22 : -0.1 + hash(shot + 4.7) * 0.68;
+      // Distance: close-up → wide, with a slow push-in through the shot + a beat dolly punch.
+      const zoomMul = fixed ? 1 : 0.8 + hash(shot + 8.3) * 0.55;
+      const dolly = fixed ? 1 : zoomMul * (1 - 0.07 * tShot) * (1 - 0.05 * kick);
       const dist = (r / Math.sin(fovY / 2)) * 1.02 * dolly;
-      const panY = fixed ? 0 : 0.025 * r * Math.sin(now * 0.19);
-      const lift = 0.05 * r;
+      // On low shots, tilt the look-at up so her head isn't cropped.
+      const lowTilt = !fixed && heightMul < 0.12 ? 0.1 * r : 0;
       d.render({
         fovY,
         eye: [
           c[0] + Math.sin(orbit) * dist,
-          c[1] + 0.22 * r + lift + crane,
+          c[1] + heightMul * r + 0.04 * r,
           c[2] + Math.cos(orbit) * dist,
         ],
-        target: [c[0], c[1] + panY + lift + crane * 0.35, c[2]],
+        target: [c[0], c[1] + 0.06 * r + lowTilt, c[2]],
       });
     } catch {
       // A three.js hiccup (device loss, a bad resource, a transient NaN) must NEVER

@@ -60,7 +60,10 @@ const SWING_BEATS = 0.55;
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
 const KNEE_OUT = 0.34;
 
-const SAMBA_URL = '/threejs-demo/samba.fbx';
+// Upper-body groove clip (Mixamo, mixamorig rig → retargeted to the VRM humanoid). Only the
+// arms/torso/head read through; the legs are overridden by the chart foot-IK. An energetic
+// hip-hop dance reads far more like an idol performance than the old neutral samba sway.
+const GROOVE_URL = '/threejs-demo/hiphop.fbx';
 
 // Placeholder choreography for the ?vrm proving ground / no-chart fallback. A 16-beat
 // routine at 8th-note (half-beat) resolution — alternating quarter steps, fast 8th runs,
@@ -144,6 +147,8 @@ export interface ThreeVrmDancerOpts {
   width?: number;
   height?: number;
   bpm?: number;
+  /** Mixamo FBX whose upper body drives the groove (defaults to the shipped hip-hop clip). */
+  animUrl?: string;
 }
 
 export class ThreeVrmDancer {
@@ -248,7 +253,7 @@ export class ThreeVrmDancer {
     );
     const [gltf, sourceFbx] = await Promise.all([
       loader.loadAsync(this.opts.modelUrl),
-      new FBXLoader().loadAsync(SAMBA_URL),
+      new FBXLoader().loadAsync(this.opts.animUrl ?? GROOVE_URL),
     ]);
     if (this.disposed) return;
     const vrm = gltf.userData.vrm as VRM;
@@ -500,8 +505,8 @@ export class ThreeVrmDancer {
     const wsum = support[0] + support[1] || 1;
     const comX = (this.footPos[0].x * support[0] + this.footPos[1].x * support[1]) / wsum;
     const comZ = (this.footPos[0].z * support[0] + this.footPos[1].z * support[1]) / wsum;
-    this.weight += (THREE.MathUtils.clamp(comX / 0.28, -1, 1) - this.weight) * 0.16;
-    this.lean += (THREE.MathUtils.clamp(comZ / 0.3, -1, 1) - this.lean) * 0.16;
+    this.weight += (THREE.MathUtils.clamp(comX / 0.28, -1, 1) - this.weight) * 0.2;
+    this.lean += (THREE.MathUtils.clamp(comZ / 0.3, -1, 1) - this.lean) * 0.2;
 
     // Beat-phase vertical: a WEIGHTY settle — the body sinks onto the beat (the loaded leg
     // absorbs into a knee flex) and springs back. Sharper down than up (pow < 1), and
@@ -521,12 +526,13 @@ export class ThreeVrmDancer {
     // steps, so she's never a statue holding an IK pose. It rides ON TOP of the weight-
     // driven contrapposto; the feet stay planted while the hips groove over them.
     const hipGroove = 0.05 * Math.sin(2 * Math.PI * bp);
-    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.05, 0, this.weight * 0.12 + hipGroove);
+    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.06, 0, this.weight * 0.14 + hipGroove);
     this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
-    // Torso counter-sway: the shoulders resist both the weight tilt and the hip rock (the
-    // classic S-curve) — flow through the spine instead of a rigid plank.
+    // Torso: LEAN into the weight — the upper body tilts toward the loaded foot so her head
+    // tracks over the support base (reads as balanced, not teetering off-centre), plus a
+    // small counter to the continuous hip rock so the spine still flows (S-curve).
     if (this.upperChest) {
-      this.eChest.set(0.02 * dip, -this.weight * 0.05, -this.weight * 0.06 - 0.5 * hipGroove);
+      this.eChest.set(0.02 * dip, -this.weight * 0.04, this.weight * 0.05 - 0.5 * hipGroove);
       this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
     vrm.scene.updateMatrixWorld(true);
@@ -537,10 +543,11 @@ export class ThreeVrmDancer {
         this.legs[1].hip.getWorldPosition(this.tmp2).y);
     vrm.scene.position.y += this.socketH + bodyLift - groove - socketY;
 
-    // Shift the whole body so the centre of mass tracks over the support foot (balance) —
-    // a little quicker/further so the reaction to a step reads.
-    this.desiredShift.set(comX * 0.36, 0, comZ * 0.22);
-    this.bodyShift.lerp(this.desiredShift, 0.16);
+    // Shift the whole body so the centre of mass tracks OVER the support foot (balance) —
+    // a strong, quick commit so when she's on one leg the pelvis is genuinely over it, not
+    // hovering near centre looking about to topple.
+    this.desiredShift.set(comX * 0.55, 0, comZ * 0.36);
+    this.bodyShift.lerp(this.desiredShift, 0.2);
     vrm.scene.position.x = this.bodyShift.x;
     vrm.scene.position.z = this.bodyShift.z;
     // Body yaw: pivot INTO crossovers so a leg reaching across the centreline swings AROUND
@@ -554,16 +561,27 @@ export class ThreeVrmDancer {
     let pivot = rightCross - leftCross;
     // Full double-cross (both legs over the line, an X): the difference cancels but the legs
     // are MOST tangled — turn hard toward the deeper-reaching leg so they go front/back.
-    if (rightCross > 0.08 && leftCross > 0.08)
+    if (rightCross > 0.06 && leftCross > 0.06)
       pivot = (rightCross + leftCross) * (rightCross >= leftCross ? 1 : -1);
-    const targetYaw = THREE.MathUtils.clamp(pivot * 2.4, -0.8, 0.8);
-    this.yaw += (targetYaw - this.yaw) * 0.14;
+    // Strong turn: brings the crossing leg's hip well forward so the leg passes in front
+    // (the feet are pinned at z≈0, so depth separation has to come from turning the hips).
+    const targetYaw = THREE.MathUtils.clamp(pivot * 3.2, -0.95, 0.95);
+    this.yaw += (targetYaw - this.yaw) * 0.18;
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
     vrm.scene.updateMatrixWorld(true);
 
-    // footLeg[0] = VRM right leg (hip on −x) → splay its knee toward −x; [1] = left → +x.
-    this.solveLeg(this.footLeg[0], this.footPos[0], -KNEE_OUT);
-    this.solveLeg(this.footLeg[1], this.footPos[1], KNEE_OUT);
+    // Crossover-safe leg separation. A leg is "crossed" when its foot is on the far side of
+    // its own hip (leg 0 / VRM-right hip at −x → crossed as its foot goes +x; leg 1 mirror).
+    //  • Fade the outward knee-splay to ZERO as a leg crosses — otherwise splaying each knee
+    //    outward drives the two knees straight INTO each other in an X.
+    //  • Push the crossing leg's knee FORWARD (+z pole) so it bends in front of the standing
+    //    leg — the depth separation the body yaw can't fully deliver down at the (pinned) feet.
+    const c0 = Math.max(0, this.footPos[0].x); // VRM right-leg crossedness (metres)
+    const c1 = Math.max(0, -this.footPos[1].x); // VRM left-leg crossedness
+    const splay0 = -KNEE_OUT * Math.max(0, 1 - c0 / 0.1);
+    const splay1 = KNEE_OUT * Math.max(0, 1 - c1 / 0.1);
+    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 4);
+    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 4);
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
@@ -695,7 +713,7 @@ export class ThreeVrmDancer {
     bone.quaternion.copy(this.qP.invert().multiply(this.qW));
   }
 
-  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number): void {
+  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number, fwdZ = 1): void {
     leg.hip.updateWorldMatrix(true, false);
     leg.hip.getWorldPosition(this.hipPos);
     const toT = this.sToT.copy(targetWorld).sub(this.hipPos);
@@ -711,9 +729,10 @@ export class ThreeVrmDancer {
       1,
     );
     const hipAngle = Math.acos(cosHip);
-    // Pole = forward + a per-leg OUTWARD bias, so the knee bends forward-and-out (a natural,
-    // faintly turned-out stance) rather than straight forward — stops the thighs converging.
-    const pole = this.sPole.set(outX, 0, 1);
+    // Pole aims the knee: forward (fwdZ, boosted for a crossing leg so it bends in FRONT) with
+    // a per-leg OUTWARD bias (outX, a natural turned-out stance that keeps thighs from
+    // converging). Projected perpendicular to the leg, so it only sets the bend plane.
+    const pole = this.sPole.set(outX, 0, fwdZ);
     pole.addScaledVector(n, -pole.dot(n));
     if (pole.lengthSq() < 1e-6) pole.set(0, 0, 1);
     pole.normalize();
