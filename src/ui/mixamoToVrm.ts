@@ -39,6 +39,7 @@ export function retargetMixamoToVrm(
   clip: THREE.AnimationClip,
   vrm: VRM,
   mixamoRoot: THREE.Object3D,
+  keepBones?: readonly VRMHumanBoneName[],
 ): THREE.AnimationClip {
   mixamoRoot.updateMatrixWorld(true);
   const tracks: THREE.KeyframeTrack[] = [];
@@ -48,11 +49,18 @@ export function retargetMixamoToVrm(
 
   const isVrm0 = vrm.meta?.metaVersion === '0';
   const seen = new Set<string>();
+  // Optional ownership allowlist: the dancer keeps ONLY the arm/shoulder tracks so the clip
+  // can't touch the centre line (hips/spine/chest/head) or the legs — those are owned outright
+  // by the procedural balance model + foot-IK. With the tracks simply absent, humanoid.update()
+  // resets those normalized bones to rest each frame and the model writes on top, so there is no
+  // clip-vs-model slerp fight (the old cause of the robotic, detached torso).
+  const keep = keepBones ? new Set<VRMHumanBoneName>(keepBones) : null;
 
   for (const track of clip.tracks) {
     const [boneName, prop] = track.name.split('.');
     const vrmBone = RIG[boneName];
     if (!vrmBone) continue;
+    if (keep && !keep.has(vrmBone)) continue;
     const vrmNode = vrm.humanoid?.getNormalizedBoneNode(vrmBone);
     const mixamoNode = mixamoRoot.getObjectByName(boneName); // real bone (dupes exist)
     if (!vrmNode || !mixamoNode) continue;

@@ -33,16 +33,35 @@ export function VrmTest({ onExit }: { onExit: () => void }) {
     };
     window.addEventListener('keydown', onKey);
 
+    const params = new URLSearchParams(location.search);
+    const clipBeats = Number(params.get('clipBeats'));
+    // Deterministic driver (?fixed=<fps>): advance a synthetic 128-BPM beat at a FIXED dt so a
+    // headless run is reproducible — used to prove the balance springs are dt-correct (identical
+    // trajectory at 60 vs 144) and to log the coupling metrics without rAF jitter.
+    const fixedFps = Number(params.get('fixed'));
+
     const d = new ThreeVrmDancer({ modelUrl, canvas });
     dancer = d;
+    (window as unknown as { __dancer?: ThreeVrmDancer }).__dancer = d;
     void d.init().then(() => {
+      if (clipBeats > 0) d.clipBeats = clipBeats;
+      let frame = 0;
       const loop = () => {
         raf = requestAnimationFrame(loop);
-        const now = performance.now();
-        const dt = Math.min((now - lastT) / 1000, 1 / 30);
-        lastT = now;
-        const beat = (((now - t0) / 1000) * 128) / 60;
-        d.build((now - t0) / 1000, beat, dt);
+        let elapsed: number;
+        let dt: number;
+        if (fixedFps > 0) {
+          dt = 1 / fixedFps;
+          elapsed = frame * dt;
+          frame++;
+        } else {
+          const now = performance.now();
+          dt = Math.min((now - lastT) / 1000, 1 / 30);
+          lastT = now;
+          elapsed = (now - t0) / 1000;
+        }
+        const beat = (elapsed * 128) / 60;
+        d.build(elapsed, beat, dt);
         d.render();
       };
       loop();
