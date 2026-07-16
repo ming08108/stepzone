@@ -217,6 +217,7 @@ export class ThreeVrmDancer {
   private bodyShift = new THREE.Vector3();
   private desiredShift = new THREE.Vector3();
   private yaw = 0;
+  private springAccum = 0; // spring-bone physics runs at a fixed cap, not the full refresh
   // weight / balance layer (contrapposto sway + torso counter, weighty settle)
   private weight = 0; // smoothed lateral weight side, screen space [-1,1]
   private lean = 0; // smoothed fore/aft weight
@@ -346,6 +347,12 @@ export class ThreeVrmDancer {
     if (this.disposed) return;
 
     this.frameCamera(w, h);
+    // We drive the VRM's world matrices manually every frame (the pose pipeline ends with an
+    // updateMatrixWorld before the spring bones, which themselves keep their chains current).
+    // Turn OFF the renderer's automatic per-frame scene sweep so it doesn't redundantly
+    // re-traverse all ~240 VRM nodes on top of ours. The pad/lights are static (updated once).
+    this.scene.updateMatrixWorld(true);
+    vrm.scene.matrixWorldAutoUpdate = false;
     this.ready = true;
   }
 
@@ -538,7 +545,10 @@ export class ThreeVrmDancer {
       this.eChest.set(0.02 * dip, -this.weight * 0.04, this.weight * 0.05 - 0.5 * hipGroove);
       this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
-    vrm.scene.updateMatrixWorld(true);
+    // Only the two hip sockets are read here (for the grounding servo), so update just those
+    // two bone chains — not the whole 240-node scene. The final full sweep happens below.
+    this.legs[0].hip.updateWorldMatrix(true, false);
+    this.legs[1].hip.updateWorldMatrix(true, false);
 
     const socketY =
       0.5 *
@@ -571,7 +581,8 @@ export class ThreeVrmDancer {
     const targetYaw = THREE.MathUtils.clamp(pivot * 3.2, -0.95, 0.95);
     this.yaw += (targetYaw - this.yaw) * 0.18;
     vrm.scene.rotation.y = this.baseRotY + this.yaw;
-    vrm.scene.updateMatrixWorld(true);
+    // (No full updateMatrixWorld here — solveLeg below updates each leg's hip chain from its
+    // ancestors, so it already sees the new scene position/rotation. One fewer 240-node sweep.)
 
     // Crossover-safe leg separation. A leg is "crossed" when its foot is on the far side of
     // its own hip (leg 0 / VRM-right hip at −x → crossed as its foot goes +x; leg 1 mirror).
@@ -591,7 +602,15 @@ export class ThreeVrmDancer {
     vrm.lookAt?.update(dt);
     vrm.expressionManager?.update();
     vrm.nodeConstraintManager?.update();
-    vrm.springBoneManager?.update(dt);
+    // Skirt/hair physics: cap to ~72 Hz (accumulate dt, step at the cap). Cloth is slow and
+    // reads identically at 72 vs 144 Hz — but this halves the priciest CPU phase at high
+    // refresh. The spring manager updates its chains' world matrices, so a skipped frame just
+    // renders the last settled skirt (the full sweep above already placed every other bone).
+    this.springAccum += dt;
+    if (this.springAccum >= 1 / 72) {
+      vrm.springBoneManager?.update(this.springAccum);
+      this.springAccum = 0;
+    }
 
     for (let p = 0; p < 4; p++) {
       const db = b - this.litPanel[p];
