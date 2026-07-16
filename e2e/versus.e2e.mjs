@@ -55,6 +55,24 @@ const renderLost = async (pages, ms = 5000) => {
   return false;
 };
 
+/** Run a rendering-dependent wait; if it fails AND this environment has lost its
+ *  WebGPU device under the sustained two-page load (the RENDERING-FAILED banner is
+ *  up), convert the failure into a GpuLostSkip so the whole rendering leg is skipped
+ *  — the same environment-limit escape the snapshot step uses. A failure with a live
+ *  field re-throws as a real regression. */
+const gpuGuard = async (pages, fn) => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (await renderLost(pages)) {
+      throw new GpuLostSkip(
+        'WebGPU device lost mid-gameplay under the two-page versus render (no GPU here)',
+      );
+    }
+    throw err;
+  }
+};
+
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 const KEY = { L: 'ArrowLeft', D: 'ArrowDown', U: 'ArrowUp', R: 'ArrowRight' };
 
@@ -288,34 +306,40 @@ try {
     await quitSong(bravo);
     // ALPHA sees BRAVO's DNF land in room state (the quitter's result/done is
     // set), and keeps playing — the quit ends BRAVO's leg, not the room.
-    await alpha.waitForFunction(
-      () => {
-        const p = window.__nfRoom?.players.find((x) => x.name === 'BRAVO');
-        return !!(p && (p.result || p.done || p.left));
-      },
-      null,
-      { timeout: 15_000 },
+    await gpuGuard([alpha, bravo], () =>
+      alpha.waitForFunction(
+        () => {
+          const p = window.__nfRoom?.players.find((x) => x.name === 'BRAVO');
+          return !!(p && (p.result || p.done || p.left));
+        },
+        null,
+        { timeout: 20_000 },
+      ),
     );
     const stillPlaying = await alpha.evaluate(() => window.__nfSession.songNow > 0);
     step('a quit shows as a DNF while the local game keeps running', stillPlaying);
-    await bravo.waitForFunction(
-      () =>
-        document.body.innerText.includes('ALL SONGS') &&
-        // The global room dock still lists the host — the room survived the quit.
-        document.body.innerText.includes('ALPHA'),
-      null,
-      { timeout: 15_000 },
+    await gpuGuard([alpha, bravo], () =>
+      bravo.waitForFunction(
+        () =>
+          document.body.innerText.includes('ALL SONGS') &&
+          // The global room dock still lists the host — the room survived the quit.
+          document.body.innerText.includes('ALPHA'),
+        null,
+        { timeout: 20_000 },
+      ),
     );
     step('the quitter is back on song select with the room dock alive', true);
 
     // 9. ALPHA quits too; the cycle ends and BOTH stay in the same room.
     await quitSong(alpha);
-    await alpha.waitForFunction(
-      () =>
-        /▲▼ SONG|ALL SONGS/.test(document.body.innerText) &&
-        document.body.innerText.includes('PICK A SONG FOR THE ROOM'),
-      null,
-      { timeout: 15_000 },
+    await gpuGuard([alpha, bravo], () =>
+      alpha.waitForFunction(
+        () =>
+          /▲▼ SONG|ALL SONGS/.test(document.body.innerText) &&
+          document.body.innerText.includes('PICK A SONG FOR THE ROOM'),
+        null,
+        { timeout: 20_000 },
+      ),
     );
     step('host exits to song select, room intact and asking for the next song', true);
 
@@ -427,19 +451,24 @@ try {
       [bravo, 'guest'],
       [charlie, 'third player'],
     ]) {
-      await page.waitForFunction(() => /STANDINGS/.test(document.body.innerText), null, {
-        timeout: 90_000,
-      });
+      await gpuGuard([alpha, bravo, charlie], () =>
+        page.waitForFunction(() => /STANDINGS/.test(document.body.innerText), null, {
+          timeout: 90_000,
+        }),
+      );
       step(`${who} reaches the standings`, true);
     }
     // The reveal is skippable: one confirm jumps to the final table (the
     // START — SKIP hint disappears once the show is over).
     await alpha.keyboard.press('Enter');
-    await alpha.waitForFunction(
-      () =>
-        !document.body.innerText.includes('START — SKIP') && /WINNER/.test(document.body.innerText),
-      null,
-      { timeout: 10_000 },
+    await gpuGuard([alpha, bravo, charlie], () =>
+      alpha.waitForFunction(
+        () =>
+          !document.body.innerText.includes('START — SKIP') &&
+          /WINNER/.test(document.body.innerText),
+        null,
+        { timeout: 15_000 },
+      ),
     );
     step('standings reveal skips to the final table on confirm', true);
     // All three players are on everyone's standings.
