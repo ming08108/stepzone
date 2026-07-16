@@ -211,6 +211,9 @@ export class ThreeVrmDancer {
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
   private footPos = [new THREE.Vector3(), new THREE.Vector3()];
+  private footPitch = [0, 0]; // per-foot ankle pitch (toe articulation) — set in stepFeet
+  private qFoot = new THREE.Quaternion();
+  private readonly footAxis = new THREE.Vector3(1, 0, 0);
   private bodyShift = new THREE.Vector3();
   private desiredShift = new THREE.Vector3();
   private yaw = 0;
@@ -580,8 +583,8 @@ export class ThreeVrmDancer {
     const c1 = Math.max(0, -this.footPos[1].x); // VRM left-leg crossedness
     const splay0 = -KNEE_OUT * Math.max(0, 1 - c0 / 0.1);
     const splay1 = KNEE_OUT * Math.max(0, 1 - c1 / 0.1);
-    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 4);
-    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 4);
+    this.solveLeg(this.footLeg[0], this.footPos[0], splay0, 1 + c0 * 4, this.footPitch[0]);
+    this.solveLeg(this.footLeg[1], this.footPos[1], splay1, 1 + c1 * 4, this.footPitch[1]);
 
     // Settle dependent systems around the FINAL pose (spring bones follow the real legs).
     vrm.scene.updateMatrixWorld(true);
@@ -658,24 +661,32 @@ export class ThreeVrmDancer {
   /** Per-foot swing/plant → footPos + support weights; returns extra hip lift for jumps. */
   private stepFeet(beat: number): number {
     const inJump = beat >= this.jumpWin.t0 && beat < this.jumpWin.t1;
+    const bp = beat - Math.floor(beat);
     for (let f = 0; f < 2; f++) {
       const st = this.feet[f];
-      if (beat >= st.t1) {
-        st.plant.copy(st.to);
+      if (beat >= st.t1 || beat < st.t0) {
+        if (beat >= st.t1) st.plant.copy(st.to);
         this.footPos[f].copy(st.plant);
         this.support[f] = 1;
-      } else if (beat < st.t0) {
-        this.footPos[f].copy(st.plant);
-        this.support[f] = 1;
+        // Planted foot isn't dead-still: a small ankle roll on the beat (weight rolling onto
+        // the ball of the foot as she bounces) keeps the standing leg alive.
+        this.footPitch[f] = 0.035 * Math.sin(2 * Math.PI * bp + f * Math.PI);
       } else {
         const u = (beat - st.t0) / (st.t1 - st.t0 || 1);
         this.footPos[f].copy(st.from).lerp(st.to, this.minJerk(u));
         const arc = Math.sin(u * Math.PI);
-        this.footPos[f].y += arc * (inJump ? 0.14 : 0.085); // pick the foot up (less shuffle)
+        // Per-step variation (hash of the land beat) so steps aren't identical stamps — the
+        // lift height, and a small early/late timing skew, differ each step.
+        const h = Math.sin(st.t1 * 49.17) * 7845.31;
+        const vary = 0.75 + 0.5 * (h - Math.floor(h));
+        this.footPos[f].y += arc * (inJump ? 0.14 : 0.09) * vary; // pick the foot up
         // A crossing step — foot heading to the opposite side of its own hip — swings IN
         // FRONT of the standing leg (a +z bulge) instead of straight through it.
         const crossing = f === 0 ? st.to.x > 0.05 : st.to.x < -0.05;
         if (crossing) this.footPos[f].z += arc * 0.2;
+        // Toe leads the swing (foot articulates over the step, not a flat slab gliding) —
+        // toe-down through the lift, settling flat on the plant.
+        this.footPitch[f] = arc * 0.6 * vary;
         this.support[f] = 1 - 0.85 * arc;
       }
     }
@@ -713,7 +724,7 @@ export class ThreeVrmDancer {
     bone.quaternion.copy(this.qP.invert().multiply(this.qW));
   }
 
-  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number, fwdZ = 1): void {
+  private solveLeg(leg: Leg, targetWorld: THREE.Vector3, outX: number, fwdZ = 1, pitch = 0): void {
     leg.hip.updateWorldMatrix(true, false);
     leg.hip.getWorldPosition(this.hipPos);
     const toT = this.sToT.copy(targetWorld).sub(this.hipPos);
@@ -749,8 +760,15 @@ export class ThreeVrmDancer {
       this.sAim.copy(targetWorld).sub(this.kneePos),
     );
     leg.knee.updateWorldMatrix(true, false);
+    // Ankle holds flat in world (footBind), then articulates by `pitch` about its own axis —
+    // toe leading a swing / rolling on the beat — so the foot reads as a foot, not a slab.
     leg.ankle.parent!.getWorldQuaternion(this.qP);
-    leg.ankle.quaternion.copy(this.qP.invert().multiply(leg.footBind));
+    leg.ankle.quaternion.copy(
+      this.qP
+        .invert()
+        .multiply(leg.footBind)
+        .multiply(this.qFoot.setFromAxisAngle(this.footAxis, pitch)),
+    );
   }
 
   /** Render the current pose. In-game: pass the dynamic camera; standalone: omit. */
