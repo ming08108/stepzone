@@ -61,9 +61,9 @@ const SWING_BEATS = 0.55;
 const KNEE_OUT = 0.34;
 
 // Upper-body groove clip (Mixamo, mixamorig rig → retargeted to the VRM humanoid). Only the
-// arms/torso/head read through; the legs are overridden by the chart foot-IK. An energetic
-// hip-hop dance reads far more like an idol performance than the old neutral samba sway.
-const GROOVE_URL = '/threejs-demo/hiphop.fbx';
+// arms/torso/head read through; the legs are overridden by the chart foot-IK. The samba clip
+// has continuous full-body hip/torso sway, which reads livelier than the arm-isolation hip-hop.
+const GROOVE_URL = '/threejs-demo/samba.fbx';
 
 // Placeholder choreography for the ?vrm proving ground / no-chart fallback. A 16-beat
 // routine at 8th-note (half-beat) resolution — alternating quarter steps, fast 8th runs,
@@ -531,18 +531,25 @@ export class ThreeVrmDancer {
     // loaded-side hip and lean slightly into the weight, so she stands ON a leg rather than
     // hovering between both. Foot-IK re-plants afterwards, so the feet stay put while the
     // pelvis rides over them.
-    this.hips.quaternion.slerp(this.hipsRestQuat, 0.82);
-    // Continuous side-to-side hip rock (one cycle/beat) keeps the pelvis alive even between
-    // steps, so she's never a statue holding an IK pose. It rides ON TOP of the weight-
-    // driven contrapposto; the feet stay planted while the hips groove over them.
-    const hipGroove = 0.05 * Math.sin(2 * Math.PI * bp);
-    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.06, 0, this.weight * 0.14 + hipGroove);
+    // Only PARTLY stabilise toward rest — enough to keep the IK sane, but leaving most of
+    // the clip's hip/pelvis sway so the body actually dances (a hard slerp-to-rest froze the
+    // core into a rigid plank). The foot-IK re-plants afterwards, so the hips can swing freely.
+    this.hips.quaternion.slerp(this.hipsRestQuat, 0.45);
+    // Continuous core motion on TOP of the clip + weight-driven contrapposto: a side-to-side
+    // hip rock AND a pelvis twist (one cycle/beat) so the whole torso rolls, not just tilts.
+    const gp = 2 * Math.PI * bp;
+    const hipGroove = 0.08 * Math.sin(gp);
+    const hipTwist = 0.05 * Math.sin(gp);
+    this.eSway.set(-0.02 - 0.05 * dip + this.lean * 0.06, hipTwist, this.weight * 0.14 + hipGroove);
     this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
-    // Torso: LEAN into the weight — the upper body tilts toward the loaded foot so her head
-    // tracks over the support base (reads as balanced, not teetering off-centre), plus a
-    // small counter to the continuous hip rock so the spine still flows (S-curve).
+    // Torso: lean into the weight (head tracks over the support base) and counter-sway/twist
+    // against the pelvis (the classic S-curve) so the spine flows instead of moving as a plank.
     if (this.upperChest) {
-      this.eChest.set(0.02 * dip, -this.weight * 0.04, this.weight * 0.05 - 0.5 * hipGroove);
+      this.eChest.set(
+        0.03 * dip,
+        -this.weight * 0.05 - hipTwist * 0.6,
+        this.weight * 0.06 - 0.6 * hipGroove,
+      );
       this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
     }
     // Only the two hip sockets are read here (for the grounding servo), so update just those
