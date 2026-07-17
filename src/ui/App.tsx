@@ -7,6 +7,7 @@ import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
 import { InputTest } from './InputTest';
 import { VrmTest } from './VrmTest';
+import { PhysDancerTest } from './PhysDancerTest';
 import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
@@ -22,7 +23,15 @@ import { RoomDock } from './RoomDock';
 import { RoomJoinOverlay } from './RoomJoinOverlay';
 
 type View =
-  'menu' | 'playoptions' | 'play' | 'options' | 'calibrate' | 'benchmark' | 'inputtest' | 'vrmtest';
+  | 'menu'
+  | 'playoptions'
+  | 'play'
+  | 'options'
+  | 'calibrate'
+  | 'benchmark'
+  | 'inputtest'
+  | 'vrmtest'
+  | 'phystest';
 
 /** The one-line "what's happening / what to do" for the room dock, given the
  *  current screen — makes a GUEST's inability to pick songs explicit. */
@@ -59,6 +68,7 @@ export function App() {
     const params = new URLSearchParams(location.search);
     if (params.has('bench')) return 'benchmark';
     if (params.has('vrm')) return 'vrmtest';
+    if (params.has('phys')) return 'phystest'; // physics-dancer proving ground
     return 'menu';
   });
   const [req, setReq] = useState<PlayRequest | null>(null);
@@ -139,6 +149,8 @@ export function App() {
     body = <InputTest onBack={() => setView('options')} />;
   } else if (view === 'vrmtest') {
     body = <VrmTest onExit={() => setView('menu')} />;
+  } else if (view === 'phystest') {
+    body = <PhysDancerTest onExit={() => setView('menu')} />;
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else {
