@@ -328,14 +328,15 @@ export function sampleFeet(tl: FootTimeline, b: number, out: SampledFeet): Sampl
     }
   }
 
-  // A jump: both feet swinging toward a jump landing on the same beat → whole body hops.
+  // A jump: both feet swinging toward a jump landing on the same beat → whole body hops. A clean,
+  // committed launch arc (peaks mid-air) that matches the feet's own arc — the anticipation CROUCH
+  // before takeoff and the landing absorb are handled by the caller's smoothed CoM (preLoad dip +
+  // land impulse) so there's no raw pop here. Zero at takeoff and landing → continuous.
   out.jumpLift = 0;
   if (sw0 && sw1 && jb0 && jb1 && Math.abs(nl0 - nl1) < 1e-6) {
     const jt0 = nl0 - SWING_BEATS;
     const uj = Math.min(1, Math.max(0, (b - jt0) / SWING_BEATS));
-    const arc = Math.sin(uj * Math.PI);
-    const anticip = uj < 0.2 ? -(0.2 - uj) * 0.4 : 0; // crouch before the leap
-    out.jumpLift = arc * 0.16 + anticip;
+    out.jumpLift = Math.sin(uj * Math.PI) * 0.3; // committed hop (was a timid 0.16)
   }
 
   return out;

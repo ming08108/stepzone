@@ -22,7 +22,15 @@ const MODELS: Record<string, string> = {
 type Knob = { key: string; label: string; min: number; max: number; step: number };
 const KNOBS: Knob[] = [
   { key: 'clipTwist', label: 'Clip rotation (samba spin)', min: 0, max: 1, step: 0.02 },
+  {
+    key: 'clipTwistTorso',
+    label: 'Clip torso twist (samba undulation)',
+    min: 0,
+    max: 1,
+    step: 0.02,
+  },
   { key: 'clipLean', label: 'Clip torso lean', min: 0, max: 1, step: 0.02 },
+  { key: 'groove', label: 'Continuous groove (hip figure-8)', min: 0, max: 1.5, step: 0.05 },
   { key: 'yawAmp', label: 'Turn on single cross', min: 0, max: 1.6, step: 0.02 },
   { key: 'crossTurn', label: 'Turn on full cross (→π spin)', min: 0, max: 3.14, step: 0.05 },
   { key: 'yawRate', label: 'Turn snappiness', min: 1, max: 30, step: 0.5 },
@@ -45,7 +53,9 @@ const KNOBS: Knob[] = [
 ];
 const DEFAULTS: Record<string, number> = {
   clipTwist: 0,
-  clipLean: 0.5,
+  clipTwistTorso: 0.35,
+  clipLean: 0.75,
+  groove: 0.5,
   yawAmp: 0.5,
   crossTurn: 1.8,
   yawRate: 6,

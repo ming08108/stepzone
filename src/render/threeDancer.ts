@@ -187,8 +187,11 @@ export class ThreeVrmDancer {
   // ~authored speed at 128 BPM (2.13 beats/s × 18.2 s ≈ 39 beats/loop).
   tune = {
     clipBeats: 39,
-    clipTwist: 0, // how much of the clip's own Y-rotation to keep (0 = no samba spin; 1 = full)
-    clipLean: 0.5, // how much of the clip's torso LEAN (roll/pitch tilt) to keep (0 = none)
+    clipTwist: 0, // how much of the clip's own HIP Y-rotation to keep (0 = no samba spin; 1 = full)
+    clipTwistTorso: 0.35, // how much of the clip's SPINE/CHEST twist to keep — the samba undulation
+    // that reads as flow (hips stay at clipTwist so the crossover yaw/IK frame is undisturbed)
+    clipLean: 0.75, // how much of the clip's torso LEAN (roll/pitch tilt) to keep (0 = none)
+    groove: 0.5, // continuous beat-locked hip figure-8 (undulation that persists WHILE stepping)
     yawAmp: 0.5, // turn on a SINGLE cross (one leg over the line)
     crossTurn: 1.8, // turn on a FULL double-cross (both feet swapped) — up to π = a full spin around
     yawSign: 1, // which way the crossover pivot turns (±1) — flip on the VRM0-mirrored rig
@@ -222,6 +225,13 @@ export class ThreeVrmDancer {
   private sYaw = [0, 0]; // body yaw
   private sLeanR = [0, 0]; // upper-body lean INTO lateral travel (roll) — "commit, catch, settle"
   private sLeanP = [0, 0]; // upper-body lean into fore/aft travel (pitch)
+  // Kinetic-chain lag: stage 2 (chest) chases stage 1 (spine), stage 3 (upperChest/head) chases 2,
+  // so a lean travels UP the spine as a wave (pelvis leads, shoulders trail) instead of tilting rigidly.
+  private sLean2R = [0, 0];
+  private sLean2P = [0, 0];
+  private sLean3R = [0, 0];
+  private sLean3P = [0, 0];
+  private comBoostLP = 0; // low-passed adaptive-CoM-stiffness boost (kills the onset jerk on big shifts)
   private sHeadR = [0, 0]; // head stabilization roll
   private sHeadY = [0, 0]; // head gaze yaw toward the next step
   private sChestY = [0, 0]; // torso opposition twist (arms follow the stepping foot)
@@ -646,13 +656,14 @@ export class ThreeVrmDancer {
   /** Post-multiply the weight-lean Δ onto a centre-line bone's CLIP pose (bone = clip · Δ). The
    *  lean is distributed up the spine (cumulative 1.0 at the top) so the shoulders lead — the body
    *  reaches into its travel. No rest quat: humanoid.update() already deposited the clip pose. */
-  private writeSpine(bone: THREE.Object3D | null, wgt: number): void {
+  private writeSpine(bone: THREE.Object3D | null, wgt: number, leanP: number, leanR: number): void {
     if (!bone) return;
     // pitch = weight-lean + breathing (chest opens on the inhale); yaw = step-opposition twist.
+    // leanP/leanR come from this segment's cascade stage, so the shoulders trail the pelvis.
     this.eChest.set(
-      (LEAN_PITCH_SIGN * this.sLeanP[0] + PELVIS_PITCH_SIGN * this._breath) * wgt,
+      (LEAN_PITCH_SIGN * leanP + PELVIS_PITCH_SIGN * this._breath) * wgt,
       this.sChestY[0] * wgt,
-      LEAN_ROLL_SIGN * this.sLeanR[0] * wgt,
+      LEAN_ROLL_SIGN * leanR * wgt,
     );
     bone.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
   }
@@ -697,11 +708,15 @@ export class ThreeVrmDancer {
     // scene-yaw crossover pivot instead; the clip keeps only its roll/pitch sway (swing-twist
     // decomposition leaves those). clipTwist>0 dials the samba rotation back in if wanted.
     const tt = this.tune.clipTwist;
+    const ttT = this.tune.clipTwistTorso;
     const cl = this.tune.clipLean;
+    // HIPS keep only `clipTwist` (default 0) — a samba hip-spin would fight the crossover yaw and the
+    // foot-IK frame. But the SPINE/CHEST keep `clipTwistTorso` of the authored twist: that torso
+    // undulation is the single richest flow source in the clip, and it moves no feet/CoM/yaw signal.
     this.dampTwist(this.hips, tt);
-    this.dampTwist(this.spine, tt);
-    this.dampTwist(this.chest, tt);
-    this.dampTwist(this.upperChest, tt);
+    this.dampTwist(this.spine, ttT);
+    this.dampTwist(this.chest, ttT);
+    this.dampTwist(this.upperChest, ttT);
     // Cancel/scale the clip's torso LEAN (roll/pitch) on the spine — it can read oddly against the
     // balance model's own lean. (Hips keep their sway; only the upper torso tilt is scaled.)
     this.dampSwing(this.spine, cl);
@@ -789,8 +804,12 @@ export class ThreeVrmDancer {
     const comTgtX = tgtX * commitX;
     const comTgtZ = tgtZ * commitZ;
     const comErr = Math.hypot(comTgtX - this.sComX[0], comTgtZ - this.sComZ[0]);
-    const stiffK =
-      this.tune.comStiff * tempo * (1 + 0.8 * THREE.MathUtils.clamp((comErr - 0.1) / 0.18, 0, 1));
+    // LOW-PASS the boost so ω ramps smoothly (an instantaneous jump in stiffness was a visible jerk
+    // at the onset of a big shift). Slightly lower peak (1.6× vs 1.8×) and ζ 0.75→0.68 for carry —
+    // the weight arrives with a little momentum instead of braking dead.
+    const boostRaw = THREE.MathUtils.clamp((comErr - 0.12) / 0.18, 0, 1);
+    this.comBoostLP += (boostRaw - this.comBoostLP) * (cut ? 1 : 1 - Math.exp(-dt / 0.03));
+    const stiffK = this.tune.comStiff * tempo * (1 + 0.8 * this.comBoostLP);
     this.sp2(this.sComX, comTgtX, stiffK, 0.75, dt, cut);
     this.sp2(this.sComZ, comTgtZ, stiffK, 0.75, dt, cut);
 
@@ -802,19 +821,28 @@ export class ThreeVrmDancer {
     this.sp2(
       this.sLeanR,
       THREE.MathUtils.clamp(0.12 * this.sComX[1] + this.tune.leanRoll * errX, -0.22, 0.22),
-      10,
-      1,
+      9,
+      0.65, // underdamped: the torso catches into the travel and settles (follow-through), not dead-beat
       dt,
       cut,
     );
     this.sp2(
       this.sLeanP,
       THREE.MathUtils.clamp(0.1 * this.sComZ[1] + this.tune.leanPitch * errZ, -0.15, 0.18),
-      10,
-      1,
+      9,
+      0.65,
       dt,
       cut,
     );
+
+    // Cascade the lean UP the spine as a wave: chest (stage 2) chases the spine (stage 1),
+    // upperChest/head (stage 3) chase the chest. Each stage lags ≈1/ω (~110/155/220 ms) → a
+    // cumulative ~0.3–0.5 beat whip at 128 BPM, so the shoulders trail the pelvis and the head
+    // settles last, instead of the whole torso tilting as one rigid rod.
+    this.sp2(this.sLean2R, this.sLeanR[0], 6.5, 0.6, dt, cut);
+    this.sp2(this.sLean2P, this.sLeanP[0], 6.5, 0.6, dt, cut);
+    this.sp2(this.sLean3R, this.sLean2R[0], 4.5, 0.55, dt, cut);
+    this.sp2(this.sLean3P, this.sLean2P[0], 4.5, 0.55, dt, cut);
 
     // Vertical CoM — a small pre-beat pump (dancers entrain even between steps) plus a downward
     // IMPULSE on every foot land, scaled by how far that foot travelled: a big crossover sinks
@@ -861,7 +889,16 @@ export class ThreeVrmDancer {
           imminent = Math.max(imminent, Math.max(0, 1 - Math.abs(ttl - 0.62) / 0.22));
       }
     }
-    const preLoad = this.tune.preLoad * imminent * this.legLen * 0.03;
+    // A JUMP takeoff (both feet planted, landing on the SAME upcoming beat) loads DEEPER — you sink
+    // to spring off both legs. This is the anticipation crouch for the leap; smoothed by the sComY
+    // spring so it eases in over the ~0.6 beat before takeoff instead of popping.
+    const jumpSoon =
+      S.swingU[0] < 0.01 &&
+      S.swingU[1] < 0.01 &&
+      Math.abs(S.nextLand[0] - S.nextLand[1]) < 1e-6 &&
+      S.nextLand[0] - b > 0 &&
+      S.nextLand[0] - b < 1;
+    const preLoad = this.tune.preLoad * imminent * this.legLen * (jumpSoon ? 0.15 : 0.045);
     this.sp2(
       this.sComY,
       -pumpAmp * pulse(phi + 0.12) - crouch - kneeSoft - preLoad,
@@ -889,11 +926,31 @@ export class ThreeVrmDancer {
     const idle = this.tune.idleSway * calm;
     const idleYaw = idle * 0.05 * (Math.sin(now * 0.61) + 0.5 * Math.sin(now * 1.13 + 2.1));
     const idleRoll = idle * 0.045 * (Math.sin(now * 0.47 + 1.3) + 0.5 * Math.sin(now * 0.89 + 0.4));
+    // Continuous GROOVE: a beat-locked hip figure-8 — roll at half-time, pitch at beat-time (a
+    // lissajous) — that persists WHILE stepping, so she rides the music instead of only reacting to
+    // steps. Pure centre-line ROTATION (no CoM/foot/yaw term) so it can't fight the weight shift or
+    // the crossover latch, and by construction leaves the balance-battery metrics untouched. Fades
+    // out on jumps (both airborne) and crossfades down as she goes idle (the drift takes over).
+    const airborne = u0 > 0.05 && u1 > 0.05 ? 1 : 0;
+    const gAmt = this.tune.groove * (1 - 0.7 * airborne) * (1 - 0.4 * calm);
+    const gRoll = gAmt * 0.045 * Math.sin(Math.PI * b + 0.9);
+    const gPitch = gAmt * 0.022 * Math.sin(2 * Math.PI * b + 1.6);
+    const gYaw = gAmt * 0.03 * Math.sin(Math.PI * b + 0.25);
     // Opposition: the SWINGING foot pulls the opposite shoulder forward (the natural arm/torso
     // counter-twist of a step). Ties the clip's arms to the ACTUAL footwork — otherwise they just
     // play the loop regardless of where she steps. eased so it flows.
     const opp = (1 - s1) * u1 - (1 - s0) * u0; // >0 → right foot swinging
-    this.sp2(this.sChestY, ARM_OPP_SIGN * this.tune.armSwing * 0.5 * opp, 8, 1, dt, cut);
+    // Torso counter-twist from the swinging foot (arms follow), PLUS a fraction of the gaze so the
+    // torso — not just the head — pre-turns toward the next step (anticipation). Underdamped so the
+    // counterswing rings through for ~half a beat instead of stopping dead.
+    this.sp2(
+      this.sChestY,
+      ARM_OPP_SIGN * this.tune.armSwing * 0.5 * opp + 0.4 * this.sHeadY[0],
+      6,
+      0.55,
+      dt,
+      cut,
+    );
     // Gaze: the head leads toward the foot she's about to step, ramping in over the last ~1.2 beats.
     const gAhead = Math.min(S.nextLand[0] - b, S.nextLand[1] - b);
     const gi = S.nextLand[0] - b <= S.nextLand[1] - b ? 0 : 1;
@@ -906,7 +963,7 @@ export class ThreeVrmDancer {
         (1 - gAhead / 1.2) *
         0.35;
     }
-    this.sp2(this.sHeadY, gazeTgt, 5, 1, dt, cut);
+    this.sp2(this.sHeadY, gazeTgt, 5, 0.85, dt, cut);
 
     // ---- Pelvis Δ: contrapposto + weight-lean, post-multiplied onto the clip's hip sway.
     // The clip (hips gain 0.55) supplies the samba groove; this adds the foot-coupled physics.
@@ -922,9 +979,9 @@ export class ThreeVrmDancer {
       0.25,
     ); // hips open toward the forward foot
     this.eSway.set(
-      pelvisPitch + 0.35 * LEAN_PITCH_SIGN * this.sLeanP[0],
-      pelvisYaw + idleYaw,
-      pelvisRoll + 0.35 * LEAN_ROLL_SIGN * this.sLeanR[0] + idleRoll,
+      pelvisPitch + 0.35 * LEAN_PITCH_SIGN * this.sLeanP[0] + gPitch,
+      pelvisYaw + idleYaw + gYaw,
+      pelvisRoll + 0.35 * LEAN_ROLL_SIGN * this.sLeanR[0] + idleRoll + gRoll,
     );
     this.hips.quaternion.multiply(this.qSway.setFromEuler(this.eSway));
     this._pelvisPitch = pelvisPitch;
@@ -933,12 +990,19 @@ export class ThreeVrmDancer {
     // ---- Spine/chest: the weight-lean, distributed spine→chest→upperChest (cumulative 1.0 so
     // the shoulders lead the pelvis into the travel). The clip owns the torso's dance sway; this
     // only adds the reach, composed multiplicatively (bone = clip · Δ), so it can't fight the clip.
-    this.writeSpine(this.spine, 0.3);
-    this.writeSpine(this.chest, 0.3);
-    this.writeSpine(this.upperChest, 0.4);
+    this.writeSpine(this.spine, 0.3, this.sLeanP[0], this.sLeanR[0]); // stage 1 leads
+    this.writeSpine(this.chest, 0.3, this.sLean2P[0], this.sLean2R[0]); // stage 2 trails
+    this.writeSpine(this.upperChest, 0.4, this.sLean3P[0], this.sLean3R[0]); // stage 3 trails most
+    // Counter-groove on the upper torso: rotate against the hip figure-8 so it reads as UNDULATION
+    // (hips lead one way, shoulders answer) rather than a whole-body wobble.
+    if (this.upperChest) {
+      this.eChest.set(-0.4 * gPitch, -0.4 * gYaw, -0.5 * gRoll);
+      this.upperChest.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
+    }
 
     // ---- Head: vestibular stabilization (eyes level) + beat nod + GAZE toward the next step.
-    this.sp2(this.sHeadR, -0.4 * LEAN_ROLL_SIGN * this.sLeanR[0], 7, 1, dt, cut);
+    // Keys off the TOP cascade stage so the head settles last (the tail of the spine wave).
+    this.sp2(this.sHeadR, -0.4 * LEAN_ROLL_SIGN * this.sLean3R[0], 7, 1, dt, cut);
     if (this.head) {
       this.eChest.set(0.03 * pulse(phi + 0.12), this.sHeadY[0], this.sHeadR[0]);
       this.head.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
