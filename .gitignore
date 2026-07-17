@@ -28,6 +28,10 @@ todos*.txt
 .vercel
 .env*
 
+# RL dance project — derived chart timelines (thousands of files, regenerable
+# via `npm run extract:charts`; never commit)
+data/chart-timelines/
+
 # Local dev/verify scratch (not committed)
 .tmpbench/
 robot-test.html

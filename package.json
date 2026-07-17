@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "e2e": "node e2e/run.mjs",
+    "extract:charts": "vite-node scripts/extractCharts.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
