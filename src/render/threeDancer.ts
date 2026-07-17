@@ -112,6 +112,41 @@ export interface ThreeVrmDancerOpts {
   animUrl?: string;
 }
 
+/** The dancer's tunable motion knobs — the SINGLE source of truth. The in-game attract dancer uses
+ *  these code defaults directly; the ?vrm proving ground imports them for its slider defaults so the
+ *  two can't drift out of sync. Each ThreeVrmDancer gets its own mutable copy (the ?vrm UI writes to
+ *  that copy live, which build() reads every frame). clipBeats beat-locks the 18.2 s arm clip to
+ *  ~authored speed at 128 BPM (2.13 beats/s × 18.2 s ≈ 39 beats/loop). */
+export const DEFAULT_TUNE = {
+  clipBeats: 39,
+  clipTwist: 0, // how much of the clip's own HIP Y-rotation to keep (0 = no samba spin; 1 = full)
+  clipTwistTorso: 0.35, // how much of the clip's SPINE/CHEST twist to keep — the samba undulation
+  // that reads as flow (hips stay at clipTwist so the crossover yaw/IK frame is undisturbed)
+  clipLean: 0.75, // how much of the clip's torso LEAN (roll/pitch tilt) to keep (0 = none)
+  groove: 0.5, // continuous beat-locked hip figure-8 (undulation that persists WHILE stepping)
+  yawAmp: 0.5, // turn on a SINGLE cross (one leg over the line)
+  crossTurn: 1.8, // turn on a FULL double-cross (both feet swapped) — up to π = a full spin around
+  yawSign: 1, // which way the crossover pivot turns (±1) — flip on the VRM0-mirrored rig
+  yawRate: 6, // turn snappiness — drives the yaw spring stiffness AND the teleport-backstop cap
+  commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
+  commitZ: 0.5, // fore/aft weight shift
+  comStiff: 9, // CoM spring stiffness (higher = snappier weight transfer)
+  leanRoll: 0.45, // upper-body lean into lateral travel
+  leanPitch: 0.35, // upper-body lean into fore/aft travel
+  pelvisRoll: 0.09, // contrapposto hip hike over the loaded leg
+  bounce: 1.0, // vertical impact-bounce scale
+  kneeSplit: 4.0, // crossover knee depth-split strength (anti-clip)
+  // ---- naturalness layers (additive, small) ----
+  armSwing: 0.5, // torso counter-twist coupled to the stepping foot (opposition) → arms follow
+  gaze: 0.5, // head leads toward the foot she's about to step
+  breath: 0.5, // slow breathing rise/fall (strongest during holds)
+  idleSway: 0.5, // subtle non-repeating body drift when she's not busy stepping
+  kneeSoft: 0.5, // plié — she sinks onto the weight-bearing leg (knees soften under load)
+  preLoad: 0.5, // a small anticipatory dip just before she launches into a step
+  footRoll: 1.0, // heel-toe articulation of the swinging foot (push off the ball, heel-strike)
+};
+export type DancerTune = typeof DEFAULT_TUNE;
+
 export class ThreeVrmDancer {
   private opts: ThreeVrmDancerOpts;
   private renderer!: THREE.WebGPURenderer;
@@ -185,34 +220,9 @@ export class ThreeVrmDancer {
   // dt-correctly. The `tune` knobs are read live every frame (the ?vrm UI writes to them), so
   // the dancer can be dialed in without a rebuild. clipBeats beat-locks the 18.2 s arm clip to
   // ~authored speed at 128 BPM (2.13 beats/s × 18.2 s ≈ 39 beats/loop).
-  tune = {
-    clipBeats: 39,
-    clipTwist: 0, // how much of the clip's own HIP Y-rotation to keep (0 = no samba spin; 1 = full)
-    clipTwistTorso: 0.35, // how much of the clip's SPINE/CHEST twist to keep — the samba undulation
-    // that reads as flow (hips stay at clipTwist so the crossover yaw/IK frame is undisturbed)
-    clipLean: 0.75, // how much of the clip's torso LEAN (roll/pitch tilt) to keep (0 = none)
-    groove: 0.5, // continuous beat-locked hip figure-8 (undulation that persists WHILE stepping)
-    yawAmp: 0.5, // turn on a SINGLE cross (one leg over the line)
-    crossTurn: 1.8, // turn on a FULL double-cross (both feet swapped) — up to π = a full spin around
-    yawSign: 1, // which way the crossover pivot turns (±1) — flip on the VRM0-mirrored rig
-    yawRate: 6, // turn snappiness — drives the yaw spring stiffness AND the teleport-backstop cap
-    commitX: 0.6, // how far the pelvis shifts toward the weight-bearing foot
-    commitZ: 0.5, // fore/aft weight shift
-    comStiff: 9, // CoM spring stiffness (higher = snappier weight transfer)
-    leanRoll: 0.45, // upper-body lean into lateral travel
-    leanPitch: 0.35, // upper-body lean into fore/aft travel
-    pelvisRoll: 0.09, // contrapposto hip hike over the loaded leg
-    bounce: 1.0, // vertical impact-bounce scale
-    kneeSplit: 4.0, // crossover knee depth-split strength (anti-clip)
-    // ---- naturalness layers (additive, small) ----
-    armSwing: 0.5, // torso counter-twist coupled to the stepping foot (opposition) → arms follow
-    gaze: 0.5, // head leads toward the foot she's about to step
-    breath: 0.5, // slow breathing rise/fall (strongest during holds)
-    idleSway: 0.5, // subtle non-repeating body drift when she's not busy stepping
-    kneeSoft: 0.5, // plié — she sinks onto the weight-bearing leg (knees soften under load)
-    preLoad: 0.5, // a small anticipatory dip just before she launches into a step
-    footRoll: 1.0, // heel-toe articulation of the swinging foot (push off the ball, heel-strike)
-  };
+  // A per-instance mutable copy of the shared defaults (the ?vrm UI writes to it live). See
+  // DEFAULT_TUNE above for the single source of truth shared with the ?vrm proving ground.
+  tune: DancerTune = { ...DEFAULT_TUNE };
   private prevBeat = 0;
   private bps = 2.13; // smoothed tempo (beats/sec ≈ 128 BPM) — scales the spring stiffness
   private holdBeats = 0; // beats since any foot landed (idle-groove gain)

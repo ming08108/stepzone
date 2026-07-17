@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { ThreeVrmDancer } from '../render/threeDancer';
+import { ThreeVrmDancer, DEFAULT_TUNE } from '../render/threeDancer';
 
 const MODELS: Record<string, string> = {
   miku4: '/models/Miku4.vrm',
@@ -51,31 +51,9 @@ const KNOBS: Knob[] = [
   { key: 'footRoll', label: 'Heel-toe foot roll', min: 0, max: 1.5, step: 0.05 },
   { key: 'clipBeats', label: 'Arm speed (beats/loop)', min: 12, max: 80, step: 1 },
 ];
-const DEFAULTS: Record<string, number> = {
-  clipTwist: 0,
-  clipTwistTorso: 0.35,
-  clipLean: 0.75,
-  groove: 0.5,
-  yawAmp: 0.5,
-  crossTurn: 1.8,
-  yawRate: 6,
-  commitX: 0.6,
-  commitZ: 0.5,
-  comStiff: 9,
-  leanRoll: 0.45,
-  leanPitch: 0.35,
-  pelvisRoll: 0.09,
-  bounce: 1.0,
-  kneeSplit: 4.0,
-  armSwing: 0.5,
-  gaze: 0.5,
-  breath: 0.5,
-  idleSway: 0.5,
-  kneeSoft: 0.5,
-  preLoad: 0.5,
-  footRoll: 1.0,
-  clipBeats: 39,
-};
+// Slider defaults come STRAIGHT from the dancer's own DEFAULT_TUNE (single source of truth) so the
+// ?vrm proving ground can never drift out of sync with what the in-game attract dancer actually uses.
+const DEFAULTS: Record<string, number> = { ...DEFAULT_TUNE };
 
 export function VrmTest({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
