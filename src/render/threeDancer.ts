@@ -227,6 +227,9 @@ export class ThreeVrmDancer {
   private sChestY = [0, 0]; // torso opposition twist (arms follow the stepping foot)
   private _breath = 0; // current breathing offset (for the spine write)
   private sSep = [0, 0]; // smoothed crossover front/back split direction (+1 foot0 in front)
+  private crossDir = 0; // LATCHED double-cross turn direction (0 = disengaged) — holds a committed
+  // facing through a sustained crossover instead of flipping with the per-beat front-foot choice
+  private sCrossCtr = [0, 0]; // slow-smoothed body x used as the crossedness centre (filters sway)
   private sepFb = 0; // closed-loop knee-separation feedback (from last frame's measured gap)
   private sepAmtPrev = 0; // last frame's split amount → this frame's crouch coupling
   private spine: THREE.Object3D | null = null;
@@ -336,30 +339,30 @@ export class ThreeVrmDancer {
         };
         // (1) CENTER = scene root: physics relative to the moving body, so the ~2 m/s weight-shift
         //     travel + crossover yaw don't fling TORSO/HEAD-anchored cloth (that flung A's cardigan
-        //     hem into a fake floor-length skirt). Leg-anchored cloth is deliberately NOT absorbed.
+        //     hem into a fake floor-length skirt).
         j.center = vrm.scene;
         // (2) DRAG FLOOR everywhere: VRoid ships several chains with dragForce 0 (undamped); a floor
         //     is inert at rest, it just lets cloth settle instead of ringing. (VRoid's own hair ≈0.4.)
         j.settings.dragForce = Math.max(j.settings.dragForce, 0.35);
-        // (3) PIN leg-anchored cloth. VRoid parents the coat-tail chains (J_Sec_*_CoatSkirt*) to the
-        //     LOWER-LEG bones with drag 0 — and the foot-IK pumps the knees every beat, driving them
-        //     to a ~176° flail = a floor-length fake "skirt" (AvatarSample_C, and A's residual). The
-        //     centre can't help (the excitation is leg-local). Measured: at 165° flail it's a full
-        //     bell; even stiffness 8/drag 0.9 leaves ~35° (still a skirt) — it only reads as PANTS
-        //     when the panels hang near-flush (rigid, following the leg). Detect by walking up to a
-        //     leg bone and pin hard so the coat rides the shin instead of resonating. Hair
-        //     (head/neck-anchored) is untouched.
-        let anc: THREE.Object3D | null = joint.bone?.parent ?? null;
-        for (let k = 0; k < 6 && anc; k++, anc = anc.parent) {
-          if (/(?:upper|lower)?leg|knee|shin|thigh/i.test(anc.name)) {
-            j.settings.stiffness = Math.max(j.settings.stiffness, 40);
-            j.settings.dragForce = Math.max(j.settings.dragForce, 0.96);
-            break;
-          }
-        }
       }
       vrm.springBoneManager.setInitState(); // seed verlet state in centre space, matrices current
     }
+
+    // ---- Strip the long-coat / skirt cloth panels (the real "skirt" fix) ----
+    // AvatarSample_C is a guy in a JACKET + baggy CARGO PANTS; B is a top + shorts. But VRoid also
+    // dressed them in a floor-length COAT/SKIRT layer, and our aggressive foot-IK (deep pliés, wide
+    // crossovers) fans that layer into a floor-length "skirt" bell that buries the trousers — which
+    // is exactly what read as "the guy is wearing a skirt". The coat/skirt is baked geometry, not a
+    // spring artifact (it's there with springs frozen), so no amount of pinning/damping removes it.
+    // It lives in the SAME mesh + material as the jacket, so it can't be hidden per-material either.
+    // What DOES isolate it: the coat/skirt verts are skin-weighted to the skirt spring chains
+    // (J_Sec_*Skirt* / *CoatSkirt*) or — for the Tops/jacket mesh's long tail — to the leg bones,
+    // whereas the real trousers live in the Bottoms mesh on the leg bones and the jacket torso lives
+    // on the spine/arms. So: collapse every garment vert whose dominant bone is a skirt chain, plus
+    // (in the Tops mesh only) every vert on a leg bone, into that mesh's waist (its hips-weighted
+    // centroid) and re-bind it to the hips. The panels vanish inside the jacket; the cargo pants /
+    // shorts underneath remain. Confirmed against the byte-identical madjin/vrm-samples source.
+    stripCoatSkirtCloth(vrm);
 
     // Rim light on the MToon materials. VRoid's dark clothing is a near-black diffuse texture with
     // white color/shade factors, so albedo×light ≈ 0 and toon shading can't lift it — a black skirt
@@ -745,7 +748,16 @@ export class ThreeVrmDancer {
     } else if (u0 > 0.05 || u1 > 0.05) {
       const sw = u0 >= u1 ? 0 : 1; // the swinging foot
       const st = sw === 0 ? 1 : 0; // the planted stance foot bearing weight
-      const k = S.swingU[sw] * S.swingU[sw]; // commit late — weight arrives ~at the land
+      // Commit LATER the farther the swinging foot must travel. A short step can transfer weight
+      // early-ish (u²), but a big crossover reach must NOT pull the CoM across the body while that
+      // foot is still airborne — keep the weight on the planted foot until the step lands, or she
+      // leans out over nothing. Scale the exponent by reach: u² (short) → u⁴ (full crossover).
+      const reach = Math.hypot(
+        S.dest[sw].x - this.footPos[st].x,
+        S.dest[sw].z - this.footPos[st].z,
+      );
+      const late = THREE.MathUtils.clamp(reach / 0.4, 0, 1);
+      const k = Math.pow(S.swingU[sw], 2 + 2 * late);
       tgtX = this.footPos[st].x * (1 - k) + S.dest[sw].x * k;
       tgtZ = this.footPos[st].z * (1 - k) + S.dest[sw].z * k;
     } else {
@@ -756,11 +768,31 @@ export class ThreeVrmDancer {
     // PARTIAL commit (~0.6): the pelvis leans TOWARD the weight foot without stacking directly
     // over it — full commit read as over-exaggerated once the translation actually rendered. She
     // stays inside her support base (both feet), so it's a natural weight shift, not a topple.
+    // BUT the partial commit only makes sense when the feet are APART (a real support base to stay
+    // inside). When they collapse onto ONE spot — a stomp, both feet to the same pad, a footswitch,
+    // a jump-together — the base IS that point, so the weight must sit fully over it or she looks
+    // like she's leaning off her own feet. Scale the commit toward 1 as the feet come together.
+    const footSpread = Math.hypot(
+      this.footPos[0].x - this.footPos[1].x,
+      this.footPos[0].z - this.footPos[1].z,
+    );
+    const together = 1 - THREE.MathUtils.clamp(footSpread / 0.3, 0, 1); // 1 = coincident, 0 = ≥0.3 apart
+    const commitX = THREE.MathUtils.lerp(this.tune.commitX, 1, together);
+    const commitZ = THREE.MathUtils.lerp(this.tune.commitZ, 1, together);
     // Soft spring (ω≈9) so the pelvis FLOWS foot to foot instead of snapping. ζ=0.75 settles.
-    const comTgtX = tgtX * this.tune.commitX;
-    const comTgtZ = tgtZ * this.tune.commitZ;
-    this.sp2(this.sComX, comTgtX, this.tune.comStiff * tempo, 0.75, dt, cut);
-    this.sp2(this.sComZ, comTgtZ, this.tune.comStiff * tempo, 0.75, dt, cut);
+    // DISTANCE-ADAPTIVE stiffness: a big/fast weight transfer (a crossover reaches the support foot
+    // way out to one side, a stomp snaps both feet across the pad) leaves the soft spring lagging —
+    // the CoM trails at centre while the only planted foot is 0.24 out, which reads as leaning off
+    // her feet. Stiffen the spring up to ~1.8× when the CoM is far behind its target so it catches
+    // up on the big shifts, while normal foot-to-foot stepping keeps the soft, flowing ω. ζ holds,
+    // so it's faster tracking, not a snap.
+    const comTgtX = tgtX * commitX;
+    const comTgtZ = tgtZ * commitZ;
+    const comErr = Math.hypot(comTgtX - this.sComX[0], comTgtZ - this.sComZ[0]);
+    const stiffK =
+      this.tune.comStiff * tempo * (1 + 0.8 * THREE.MathUtils.clamp((comErr - 0.1) / 0.18, 0, 1));
+    this.sp2(this.sComX, comTgtX, stiffK, 0.75, dt, cut);
+    this.sp2(this.sComZ, comTgtZ, stiffK, 0.75, dt, cut);
 
     // Lean-and-catch: the upper body leans INTO the travel (velocity) and toward the not-yet-
     // reached target (error), then settles as the CoM arrives — a fast shift reads as a committed
@@ -933,7 +965,13 @@ export class ThreeVrmDancer {
     // term made that foot falsely read as crossed, pushing the yaw further the SAME way — she
     // turned the wrong way. Translation-only has no feedback: a U/D step reads c≈0 (no turn), an
     // L/R crossover reads a clean ±0.3.
-    const bodyX = this.sComX[0];
+    // Centre = a SLOW-smoothed body x, not the per-beat weight-shift comX itself. The weight shift
+    // sways comX left/right every beat; measuring crossedness against it made each foot's "how
+    // crossed" value pulse at the beat rate, which pumped the crossover-turn magnitude ~57° per beat
+    // on a sustained cross. The slow centre still tracks genuine lateral travel but filters the beat-
+    // rate sway, and carries no yaw term, so there's still no wrong-way feedback.
+    this.sp2(this.sCrossCtr, this.sComX[0], 4, 1, dt, cut);
+    const bodyX = this.sCrossCtr[0];
     const lx0 = this.footPos[0].x - bodyX;
     const lx1 = this.footPos[1].x - bodyX;
     const c0 = Math.max(0, lx0); // VRM right leg (hip −x) reaching past centre to +x
@@ -953,7 +991,21 @@ export class ThreeVrmDancer {
     // continuous front-foot choice sSep — so a full swap sends her turning right around and the
     // legs come fully undone instead of scissoring.
     const single = Math.tanh((c0 - c1) / 0.18);
-    const dblT = this.sSep[0] * Math.min(1, Math.min(c0, c1) / 0.22);
+    // LATCH the double-cross turn direction. Its magnitude (min(c0,c1) — how double-crossed she is)
+    // is continuous, but its raw direction (the front-foot choice sSep) alternates EVERY beat as
+    // each foot swings and the weight shifts, which flipped the target facing sign beat-to-beat and
+    // whipped the body ±90° back and forth through a sustained crossover. Instead: commit to a
+    // facing the moment a real double-cross engages and HOLD it (hysteresis) until the feet uncross,
+    // so she turns ~90° once to undo the X and stays there. crossDir resets on a cut (song restart).
+    const dbl = Math.min(c0, c1);
+    if (cut) this.crossDir = 0;
+    if (this.crossDir === 0) {
+      if (dbl > 0.12) this.crossDir = this.sSep[0] >= 0 ? 1 : -1; // engage: commit to a direction
+    } else if (dbl < 0.05) {
+      this.crossDir = 0; // released: feet uncrossed, let the turn decay back to forward
+    }
+    const dblDir = this.crossDir || (this.sSep[0] >= 0 ? 1 : -1); // sSep only during the brief ramp-in
+    const dblT = dblDir * Math.min(1, dbl / 0.22);
     const yawTarget =
       this.tune.yawSign *
       THREE.MathUtils.clamp(
@@ -1300,4 +1352,78 @@ export class ThreeVrmDancer {
     this.rt?.dispose();
     this.renderer?.dispose();
   }
+}
+
+/** Remove the floor-length coat / skirt cloth panels from a VRoid AvatarSample so our aggressive
+ *  dance IK can't fan them into a fake "skirt" over the trousers. See the call site in init() for
+ *  the full rationale. For each clothing mesh, every vertex whose dominant bone is a skirt spring
+ *  chain (…Skirt…/…CoatSkirt…) — or, in the Tops/jacket mesh, a leg bone (its long coat tail) — is
+ *  collapsed into the mesh's waist (the centroid of its hips-weighted verts) and re-bound to the
+ *  hips, so those triangles degenerate and hide inside the torso. The Bottoms trousers (leg-bone
+ *  weighted, in a non-Tops mesh) and the jacket torso (spine/arm weighted) are left untouched. */
+function stripCoatSkirtCloth(vrm: VRM): void {
+  const SKIRT_BONE = /Skirt/i; // matches J_Sec_*_Skirt* AND J_Sec_*_CoatSkirt*
+  const LEG_BONE = /UpperLeg|LowerLeg|Knee|Shin|Thigh/i;
+  vrm.scene.traverse((o) => {
+    const mesh = o as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const matName = (mat as THREE.Material | undefined)?.name ?? '';
+    if (!/Tops|Bottoms/i.test(matName)) return; // only the clothing meshes
+    const isTops = /Tops/i.test(matName);
+    const bones = mesh.skeleton.bones;
+    const hipsIdx = bones.findIndex((b) => /Hips/i.test(b.name));
+    if (hipsIdx < 0) return;
+    const g = mesh.geometry;
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const si = g.attributes.skinIndex as THREE.BufferAttribute;
+    const sw = g.attributes.skinWeight as THREE.BufferAttribute;
+    const dominantBone = (v: number): string => {
+      let best = -1;
+      let bw = -1;
+      for (let k = 0; k < 4; k++) {
+        const w = sw.getComponent(v, k);
+        if (w > bw) {
+          bw = w;
+          best = si.getComponent(v, k);
+        }
+      }
+      return best < 0 ? '' : bones[best].name;
+    };
+    // Collapse target = centroid of this mesh's hips-weighted verts (its waistband / jacket hem).
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    let cn = 0;
+    for (let v = 0; v < pos.count; v++) {
+      for (let k = 0; k < 4; k++) {
+        if (si.getComponent(v, k) === hipsIdx && sw.getComponent(v, k) > 0.5) {
+          cx += pos.getX(v);
+          cy += pos.getY(v);
+          cz += pos.getZ(v);
+          cn++;
+          break;
+        }
+      }
+    }
+    if (cn === 0) return; // no waist anchor to hide the panels behind — leave the mesh alone
+    cx /= cn;
+    cy /= cn;
+    cz /= cn;
+    let collapsed = 0;
+    for (let v = 0; v < pos.count; v++) {
+      const nm = dominantBone(v);
+      if (!(SKIRT_BONE.test(nm) || (isTops && LEG_BONE.test(nm)))) continue;
+      pos.setXYZ(v, cx, cy, cz);
+      si.setXYZW(v, hipsIdx, 0, 0, 0);
+      sw.setXYZW(v, 1, 0, 0, 0);
+      collapsed++;
+    }
+    if (collapsed > 0) {
+      pos.needsUpdate = true;
+      si.needsUpdate = true;
+      sw.needsUpdate = true;
+      g.computeBoundingSphere();
+    }
+  });
 }
