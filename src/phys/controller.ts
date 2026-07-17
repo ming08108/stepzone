@@ -86,7 +86,9 @@ export const DEFAULT_KNOBS: BrainKnobs = {
   bounce: 0.02,
   armSwing: 0.35,
   twist: 0.18,
-  panicVel: 0.55,
+  // Fire the recovery reflex only for genuine runaways — ordinary dance
+  // weight shifts peak around 0.6-0.9 m/s and must NOT hijack choreography.
+  panicVel: 1.1,
 };
 
 interface ActiveStep {
@@ -115,10 +117,9 @@ export class DanceBrain {
   private step: ActiveStep | null = null;
   private lastStepBeat = -1;
   private planted: [THREE.Vector3, THREE.Vector3];
-  /** Where the balance layer wants the CoM this tick (world, y included) —
-   *  read by the sim's stabilizer assist. */
+  /** Where the balance layer wants the CoM this tick (x,z world; y is a
+   *  unitless height factor) — read by the sim's stabilizer assist. */
   readonly comDesire = new THREE.Vector3();
-  private restComY = 0;
 
   // scratch
   private readonly _v1 = new THREE.Vector3();
@@ -156,9 +157,19 @@ export class DanceBrain {
   }
 
   /** The foot currently planned to be swinging, for debug UIs. */
-  get activeStep(): { foot: 0 | 1; target: THREE.Vector3; recovery: boolean } | null {
+  get activeStep(): {
+    foot: 0 | 1;
+    target: THREE.Vector3;
+    recovery: boolean;
+    endBeat: number;
+  } | null {
     return this.step
-      ? { foot: this.step.foot, target: this.step.target, recovery: this.step.recovery }
+      ? {
+          foot: this.step.foot,
+          target: this.step.target,
+          recovery: this.step.recovery,
+          endBeat: this.step.endBeat,
+        }
       : null;
   }
 
@@ -173,12 +184,29 @@ export class DanceBrain {
     for (const [, arr] of t) arr.length = 0; // fresh goals every tick
     const phase = beat - Math.floor(beat);
 
+    // ------------------------------------------------ stability gate
+    // If the body is toppling (pelvis well off vertical or CoM running),
+    // choreography SUSPENDS: no new steps, current step aborted, groove
+    // zeroed. Legs flailing through a fall is the single worst-looking
+    // failure mode; a dancer who stumbles just... stops and recovers.
+    // Gate on the THORAX (world-servoed upright — its tilt means genuine
+    // trouble; the pelvis legitimately rides tilted under dance loads) and
+    // the pelvis velocity (the CoM reading is polluted by the swing leg).
+    const vXZ0 = Math.hypot(st.pelvisVel.x, st.pelvisVel.z);
+    const stable = st.thoraxUp > 0.7 && vXZ0 < 1.6;
+    if (!stable && this.step && !this.step.recovery) {
+      this.planted[this.step.foot].copy(st.feet[this.step.foot].pos);
+      this.planted[this.step.foot].y = this.ankleY;
+      this.step = null;
+    }
+    const calm = stable ? 1 : 0;
+
     // ------------------------------------------------ step machine
     // Commit a new pattern step at each integer beat; steps run [.05, .95] of
     // the beat so there's always a moment of double support around the beat
     // itself (that's when a dancer "hits" the move).
     const beatIdx = Math.floor(beat);
-    if (!this.step && beatIdx > this.lastStepBeat && phase >= 0.05) {
+    if (!this.step && stable && beatIdx > this.lastStepBeat && phase >= 0.05) {
       this.lastStepBeat = beatIdx;
       const n = this.pattern.length;
       const pat = n ? this.pattern[((beatIdx % n) + n) % n] : null;
@@ -199,6 +227,23 @@ export class DanceBrain {
           endBeat: beatIdx + 0.95,
           recovery: false,
         };
+      } else {
+        // Rest beat: if stumbles have dragged a foot off its spot, use the
+        // free beat to step it HOME — this is what keeps the whole dance
+        // anchored to the pad instead of random-walking away.
+        const d0 = this.planted[0].distanceTo(this.home[0]);
+        const d1 = this.planted[1].distanceTo(this.home[1]);
+        const worst: 0 | 1 = d0 >= d1 ? 0 : 1;
+        if (Math.max(d0, d1) > 0.12) {
+          this.step = {
+            foot: worst,
+            target: this.home[worst].clone(),
+            from: st.feet[worst].pos.clone(),
+            startBeat: beatIdx + 0.05,
+            endBeat: beatIdx + 0.95,
+            recovery: false,
+          };
+        }
       }
     }
     // Recovery reflex: CoM running away in double support → catch step.
@@ -249,13 +294,26 @@ export class DanceBrain {
       comDes.x *= 0.92;
     } else {
       comDes.copy(this.planted[0]).add(this.planted[1]).multiplyScalar(0.5);
-      comDes.x += ramp * K.sway * Math.sin(Math.PI * beat);
+      // Blend toward the pad centre so the body always gravitates home.
+      comDes.x *= 0.75;
+      comDes.z *= 0.75;
+      comDes.x += ramp * calm * K.sway * Math.sin(Math.PI * beat);
+    }
+    // Planted anchors leak slowly toward home (~2.5 s time constant at the
+    // 480 Hz tick) — centimetre-scale foot drag is invisible, and it stops
+    // stumble-displaced plants from becoming the new normal.
+    for (let f = 0 as 0 | 1; f <= 1; f++) {
+      if (f !== swingFoot) this.planted[f].lerp(this.home[f], 0.0009);
     }
     // A small forward bias keeps the CoM on the toe side of the ankle — the
     // side with the long lever, where the ankle has real authority.
     comDes.z += 0.01;
-    if (this.restComY === 0) this.restComY = st.com.y; // first tick = standing rest
-    this.comDesire.copy(comDes);
+    // The harness reference must be ABSOLUTE while stumbling: the planted
+    // anchors chase the pelvis during a stumble (catch reflex), so a harness
+    // that follows them follows HER — she'd moonwalk off the stage one
+    // stumble at a time. Unstable → the harness pulls toward the pad centre.
+    if (stable) this.comDesire.copy(comDes);
+    else this.comDesire.set(0, 0, 0.01);
     const errX = st.com.x - comDes.x;
     const errZ = st.com.z - comDes.z;
 
@@ -280,10 +338,22 @@ export class DanceBrain {
     // Each planted leg is IK'd from its hip socket to where its ankle
     // actually is; the groove bounce shortens the effective leg on the beat,
     // so the dip is the knees genuinely giving way under the body's weight.
-    const dip = Math.sin(Math.PI * phase);
+    const dip = Math.sin(Math.PI * phase) * calm;
     const shorten = ramp * K.bounce * dip * dip;
     for (let f = 0 as 0 | 1; f <= 1; f++) {
       if (f === swingFoot) continue;
+      // While UNSTABLE, forget choreography spots: drive each foot straight
+      // DOWN under its own hip socket — the human catch reflex. Without this
+      // a stumble under the assist harness leaves her sitting in mid-air
+      // with the legs curled up.
+      if (!stable) {
+        const under = this._v4
+          .copy(this.socketLocal[f])
+          .applyQuaternion(st.pelvisQ)
+          .add(st.pelvisPos);
+        under.y = this.ankleY;
+        this.planted[f].copy(under);
+      }
       // The knee targets the DESIRED leg extension (nominal length minus the
       // groove dip), never the current one — targeting current geometry is a
       // positive feedback loop (sink → shorter leg → deeper flexion target →
@@ -301,11 +371,13 @@ export class DanceBrain {
       const lat = clamp(-(0.45 * errX + 0.28 * st.comVel.x), -0.05, 0.05);
       const side = this.home[f].x < 0 ? 1 : -1;
       const extension = (this.l1[f] + this.l2[f]) * (1 - shorten) * (1 + lat * side);
-      this.solveLeg(st, f, this.planted[f], extension, 1.0, 0.35);
+      this.solveLeg(st, f, this.planted[f], extension, 1.0, stable ? 0.35 : 0.8);
     }
-    // The assist supports the body at the groove's intended height, so the
-    // dip stays visible even under full stabilization.
-    this.comDesire.y = this.restComY * (1 - shorten);
+    // Height FACTOR (unitless) for the assist harness: dips stay visible
+    // even under full stabilization. The 0.97 slack matters — holding the
+    // pelvis at FULL leg extension leaves the feet dangling at zero ground
+    // pressure; slightly lower and the legs genuinely bear weight.
+    this.comDesire.y = 0.97 * (1 - shorten * 1.6);
 
     // ------------------------------------------------ swing leg
     if (swing) {
@@ -358,22 +430,25 @@ export class DanceBrain {
     }
 
     // ------------------------------------------------ groove upper body
-    const tw = ramp * K.twist * Math.sin(Math.PI * beat);
-    const sideLean = ramp * 0.35 * K.sway * Math.sin(Math.PI * beat + 0.6);
+    const tw = ramp * calm * K.twist * Math.sin(Math.PI * beat);
+    const sideLean = ramp * calm * 0.35 * K.sway * Math.sin(Math.PI * beat + 0.6);
+    // Trunk and head targets are WORLD-upright (plus the groove twist/lean):
+    // pelvis-relative targets fold the whole trunk over whenever the pelvis
+    // errs — the "bowing" failure. World goals make the spine actively fight
+    // to stay vertical no matter what the hips do. (No forward-pitch bias:
+    // any steady forward component rectifies into a forward walk.)
     const waistQ = new THREE.Quaternion()
       .setFromAxisAngle(Y, tw)
       .multiply(this._q1.setFromAxisAngle(new THREE.Vector3(0, 0, 1), sideLean));
-    set(t, 'waist', waistQ, 'local');
-    // No forward-pitch bias here: every steady forward component in an
-    // upper-body target rectifies into a forward walk through the ankles.
-    set(t, 'upperBack', new THREE.Quaternion().setFromAxisAngle(Y, tw * 0.7), 'local');
-    set(t, 'neckJ', new THREE.Quaternion().setFromAxisAngle(Y, -tw * 0.6), 'local');
+    set(t, 'waist', waistQ, 'worldChild');
+    set(t, 'upperBack', new THREE.Quaternion().setFromAxisAngle(Y, tw * 0.7), 'worldChild');
+    set(t, 'neckJ', new THREE.Quaternion().setFromAxisAngle(Y, -tw * 0.6), 'worldChild');
 
     // Arms: opposition swing from an arms-down rest (the rig binds in T-pose,
     // so "down" is itself a muscle posture — she pulls her arms down on spawn).
     for (let sIdx = 0 as 0 | 1; sIdx <= 1; sIdx++) {
       const sign = sIdx === 0 ? -1 : 1; // left arm rotates −z to drop, right +z
-      const osc = Math.sin(Math.PI * beat + (sIdx === 0 ? 0 : Math.PI));
+      const osc = calm * Math.sin(Math.PI * beat + (sIdx === 0 ? 0 : Math.PI));
       const down = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), sign * 1.25);
       const fwd = this._q2.setFromAxisAngle(X, -K.armSwing * osc);
       down.premultiply(fwd);

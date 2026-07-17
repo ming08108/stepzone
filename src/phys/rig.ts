@@ -196,12 +196,17 @@ export interface RigState {
   com: THREE.Vector3;
   comVel: THREE.Vector3;
   pelvisPos: THREE.Vector3;
+  pelvisVel: THREE.Vector3;
   pelvisQ: THREE.Quaternion;
   feet: [RigStateFoot, RigStateFoot]; // [left, right]
   footQ: [THREE.Quaternion, THREE.Quaternion];
   /** Measured world pitch of each shin (rotation about +x; >0 = leaning
    *  forward). The ankle keeps the foot flat against the REAL tilt. */
   shinPitch: [number, number];
+  /** Y-component of the THORAX's up vector — the stability signal. (The
+   *  pelvis rides tilted under dance loads by design; the trunk is what is
+   *  servoed world-upright, so its tilt means genuine trouble.) */
+  thoraxUp: number;
 }
 
 export interface PhysRigOpts {
@@ -276,6 +281,7 @@ export class PhysRig {
     const hipL = V(skel.hipSocket[0]);
     this.legLen = hipL.distanceTo(kneeL) + kneeL.distanceTo(ankleL);
     this.hipHeight = (skel.hipSocket[0].y + skel.hipSocket[1].y) / 2;
+    this.pelvisRestY = skel.hips.y;
 
     this.build();
   }
@@ -704,39 +710,45 @@ export class PhysRig {
   }
 
   /**
-   * Stabilizer assist — TRAINING WHEELS, not a muscle. A capped external
-   * wrench on the pelvis that nudges the centre of mass toward `comDes` and
-   * the pelvis toward upright. Hand-tuned torque control alone cannot keep a
-   * ragdoll balanced through a dance (that's an RL-policy-sized problem);
-   * this stands in for that policy so the rest of the system — real masses,
-   * muscle limits, contacts, momentum — can be exercised and seen. strength
-   * 0 = pure physics; ~0.35 = reliable; 1 = firmly held.
+   * Stabilizer assist — TRAINING WHEELS, not a muscle. An external wrench
+   * that holds the PELVIS like a marionette harness: position spring toward
+   * the controller's desired point (x,z; y scaled by `comDes.y`, a unitless
+   * height factor) plus an upright orientation spring. Hand-tuned torque
+   * control alone cannot keep a ragdoll balanced through a dance (that's an
+   * RL-policy-sized problem); this stands in for that policy so the rest of
+   * the system — real masses, muscle limits, contacts, momentum — can be
+   * exercised and seen. strength 0 = pure physics; 1 = firmly held (the
+   * harness must actually be firm — a weak harness lets her face-plant and
+   * then DRAGS her around the floor, which reads far worse than either
+   * extreme).
    */
   applyAssist(comDes: THREE.Vector3, strength: number): void {
     if (strength <= 0) return;
     const pel = this.bodies.get('pelvis')!;
-    const st = this.readState(this._assistState ?? (this._assistState = this.readState()));
     const h = this.world.timestep;
-    // Spring on the CoM (applied at the pelvis) — horizontal balance plus
-    // vertical support toward the controller's intended height (y).
-    const fx = clampNum(600 * (comDes.x - st.com.x) - 120 * st.comVel.x, -250, 250) * strength;
-    const fz = clampNum(600 * (comDes.z - st.com.z) - 120 * st.comVel.z, -250, 250) * strength;
-    const fy =
-      comDes.y > 0
-        ? clampNum(900 * (comDes.y - st.com.y) - 160 * st.comVel.y, -300, 500) * strength
-        : 0;
+    const p = pel.translation();
+    const v = pel.linvel();
+    const targetY = this.pelvisRestY * (comDes.y > 0 ? comDes.y : 1);
+    const fx = clampNum(2600 * (comDes.x - p.x) - 380 * v.x, -420, 420) * strength;
+    const fz = clampNum(2600 * (comDes.z - p.z) - 380 * v.z, -420, 420) * strength;
+    const fy = clampNum(3200 * (targetY - p.y) - 420 * v.y, -420, 750) * strength;
     pel.applyImpulse({ x: fx * h, y: fy * h, z: fz * h }, true);
-    // Upright torque on the pelvis.
+    // GENTLE upright torque on the pelvis. Deliberately weak: the pelvis
+    // must stay free to rotate with the dance (a strong hold acts as a huge
+    // angular damper — she tips during a transient and is then calmly PINNED
+    // to the floor). The trunk's world-upright muscle servos own the visible
+    // posture; this only biases the pelvis.
     const q = pel.rotation();
     this._q1.set(q.x, q.y, q.z, q.w).invert(); // rotation back to identity
     errToWorldTorque(this._q1, null, this._v1);
     const w = pel.angvel();
-    this._v1.multiplyScalar(60).sub(this._v2.set(w.x * 10, w.y * 10, w.z * 10));
-    this._v1.clampLength(0, 140).multiplyScalar(strength * h);
+    this._v1.multiplyScalar(320).sub(this._v2.set(w.x * 42, w.y * 42, w.z * 42));
+    this._v1.clampLength(0, 420).multiplyScalar(strength * h);
     pel.applyTorqueImpulse({ x: this._v1.x, y: this._v1.y, z: this._v1.z }, true);
   }
 
-  private _assistState: RigState | null = null;
+  /** Pelvis rest height (world) — the assist's reference. */
+  readonly pelvisRestY: number;
 
   // ---------------------------------------------------------------- readback
 
@@ -747,6 +759,7 @@ export class PhysRig {
         com: new THREE.Vector3(),
         comVel: new THREE.Vector3(),
         pelvisPos: new THREE.Vector3(),
+        pelvisVel: new THREE.Vector3(),
         pelvisQ: new THREE.Quaternion(),
         feet: [
           { pos: new THREE.Vector3(), contact: true },
@@ -754,6 +767,7 @@ export class PhysRig {
         ],
         footQ: [new THREE.Quaternion(), new THREE.Quaternion()],
         shinPitch: [0, 0],
+        thoraxUp: 1,
       } as RigState);
     st.com.set(0, 0, 0);
     st.comVel.set(0, 0, 0);
@@ -774,8 +788,10 @@ export class PhysRig {
     st.comVel.multiplyScalar(1 / m);
     const pel = this.bodies.get('pelvis')!;
     const pp = pel.translation();
+    const pv = pel.linvel();
     const pq = pel.rotation();
     st.pelvisPos.set(pp.x, pp.y, pp.z);
+    st.pelvisVel.set(pv.x, pv.y, pv.z);
     st.pelvisQ.set(pq.x, pq.y, pq.z, pq.w);
     for (let side = 0 as 0 | 1; side <= 1; side++) {
       const f = this.bodies.get(side === 0 ? 'footL' : 'footR')!;
@@ -790,6 +806,8 @@ export class PhysRig {
       const sq = this.bodies.get(side === 0 ? 'shinL' : 'shinR')!.rotation();
       st.shinPitch[side] = 2 * Math.atan2(sq.x, sq.w);
     }
+    const tq = this.bodies.get('thorax')!.rotation();
+    st.thoraxUp = 1 - 2 * (tq.x * tq.x + tq.z * tq.z);
     return st;
   }
 

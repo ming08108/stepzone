@@ -14,3 +14,5 @@ api/*.js
 # Local dev/verify harness (temp, not shipped)
 robot-test.html
 .*.mjs
+
+caps/

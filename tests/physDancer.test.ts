@@ -78,12 +78,17 @@ describe('physics dancer', () => {
     let worst = 0;
     let sum = 0;
     let samples = 0;
-    let prevStep: { foot: 0 | 1; target: { x: number; z: number }; recovery: boolean } | null =
-      null;
-    run(sim, 20, () => {
+    let prevStep: {
+      foot: 0 | 1;
+      target: { x: number; z: number };
+      recovery: boolean;
+      endBeat: number;
+    } | null = null;
+    run(sim, 35, () => {
       const cur = sim.brain.activeStep;
-      if (prevStep && !cur && !prevStep.recovery) {
-        // A step just ended — measure landing error.
+      // Measure only steps that RAN TO COMPLETION — the stability gate may
+      // abort a step mid-swing (by design), which isn't a landing at all.
+      if (prevStep && !cur && !prevStep.recovery && sim.beat >= prevStep.endBeat - 0.02) {
         const st = sim.rig.readState();
         const f = st.feet[prevStep.foot].pos;
         const err = Math.hypot(f.x - prevStep.target.x, f.z - prevStep.target.z);
@@ -92,10 +97,15 @@ describe('physics dancer', () => {
         samples++;
       }
       prevStep = cur
-        ? { foot: cur.foot, target: { x: cur.target.x, z: cur.target.z }, recovery: cur.recovery }
+        ? {
+            foot: cur.foot,
+            target: { x: cur.target.x, z: cur.target.z },
+            recovery: cur.recovery,
+            endBeat: cur.endBeat,
+          }
         : null;
     });
-    expect(samples).toBeGreaterThan(8);
+    expect(samples).toBeGreaterThan(6);
     const mean = sum / samples;
     console.log(
       `landing error over ${samples} steps: mean ${mean.toFixed(3)} m, worst ${worst.toFixed(3)} m`,

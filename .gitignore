@@ -39,3 +39,5 @@ vrm-test.html
 # derivative Miku4.vrm (see public/models/MODELS_LICENSE.md), explicitly allowed.
 public/models/Miku*.vrm
 !public/models/Miku4.vrm
+
+caps/
