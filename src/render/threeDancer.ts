@@ -72,7 +72,7 @@ const GAZE_SIGN = 1; // head-turn direction toward the next step
 // How far the knees splay OUTWARD (per leg, relative to the forward bend direction). A
 // slightly turned-out stance keeps the two thighs from converging and clipping when the
 // feet come close or cross — real legs don't bend in perfectly parallel planes.
-const KNEE_OUT = 0.34;
+const KNEE_OUT = 0.2;
 
 // Upper-body groove clip (Mixamo, mixamorig rig → retargeted to the VRM humanoid). Only the
 // arms/torso/head read through; the legs are overridden by the chart foot-IK. The samba clip
