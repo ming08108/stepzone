@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>DDR RL — training fleet</title>
+    <!--
+      Standalone production dashboard for the DDR RL training fleet.
+
+      Deliberately self-contained vanilla JS — NO build step, NO imports from
+      src/ — so it ships independently of the React app (whose ?experiments
+      route lives in still-unlanded WIP). Served statically at
+      https://stepzone-omega.vercel.app/experiments.html.
+
+      Polls /api/experiments every 15s (the PUSH feed: training boxes self-report
+      via /api/experiments-push with a per-fleet token). Renders one card per
+      experiment — status dot, key DDR metrics, box + $/hr, a canvas sparkline of
+      `natural` — mirroring src/ui/ExperimentsDashboard.tsx. When a card carries
+      ws_public it links out to the in-app Isaac viewer URL for that stream.
+    -->
+    <style>
+      :root {
+        --bg: #0f1220;
+        --panel: #151830;
+        --panel-hi: #1b1f3a;
+        --border: #232842;
+        --text: #cdd6f4;
+        --muted: #6b7394;
+        --dim: #8b93b8;
+        --running: #8fead0;
+        --stale: #e6c15a;
+        --dead: #e0556a;
+        --prov: #8fb6ea;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          12px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 28px 24px 48px;
+      }
+      .head {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 700;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .status-line {
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 20px;
+      }
+      .status-line .warn {
+        color: var(--stale);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        transition:
+          background 120ms,
+          border-color 120ms;
+      }
+      a.card {
+        cursor: pointer;
+        text-decoration: none;
+        color: inherit;
+      }
+      a.card:hover {
+        background: var(--panel-hi);
+        border-color: #33406e;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .name {
+        font-size: 14px;
+        font-weight: 600;
+        flex: 1 1 auto;
+      }
+      .tag {
+        font-size: 10px;
+        letter-spacing: 0.3px;
+      }
+      .tag.badge {
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 1px 6px;
+      }
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .meta .box {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .meta .m {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .metrics {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        row-gap: 10px;
+      }
+      .metric {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 60px;
+      }
+      .metric .k {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.3px;
+      }
+      .metric .v {
+        color: var(--text);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      .spark-k {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.3px;
+      }
+      canvas {
+        display: block;
+      }
+      .empty {
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="head">
+        <h1>DDR RL — training fleet</h1>
+        <span class="sub" id="summary"></span>
+      </div>
+      <div class="status-line" id="statusLine">loading /api/experiments…</div>
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <script>
+      'use strict';
+      const FEED_URL = '/api/experiments';
+      const POLL_MS = 15000;
+
+      const STATUS_META = {
+        running: { color: 'var(--running)', label: 'running' },
+        stale: { color: 'var(--stale)', label: 'stale' },
+        dead: { color: 'var(--dead)', label: 'dead' },
+        unreachable: { color: 'var(--dead)', label: 'unreachable' },
+        provisioning: { color: 'var(--prov)', label: 'provisioning' },
+      };
+
+      let lastPayload = null;
+      let lastError = null;
+      let fetchedAt = 0;
+
+      const el = (id) => document.getElementById(id);
+
+      function fmtPct(v) {
+        return v == null || !isFinite(v) ? '—' : Math.round(v * 100) + '%';
+      }
+      function fmt(v, d) {
+        return v == null || !isFinite(v) ? '—' : v.toFixed(d);
+      }
+      function fmtInt(v) {
+        return v == null || !isFinite(v) ? '—' : Math.round(v).toLocaleString();
+      }
+      function fmtSteps(v) {
+        if (v == null || !isFinite(v)) return '—';
+        if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+        if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+        if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+        return String(Math.round(v));
+      }
+      function ageLabel(iso) {
+        if (!iso) return 'no data';
+        const t = Date.parse(iso);
+        if (!isFinite(t)) return 'no data';
+        const s = Math.max(0, (Date.now() - t) / 1000);
+        if (s < 60) return Math.round(s) + 's ago';
+        if (s < 3600) return Math.round(s / 60) + 'm ago';
+        return Math.round(s / 3600) + 'h ago';
+      }
+
+      // ws_public → in-app Isaac viewer URL (linked out, since this static page
+      // is not the SPA). null when there's no stream.
+      function streamHref(exp) {
+        const ws = exp.ws_public;
+        return ws && ws.length ? '/?isaacviewer&ws=' + encodeURIComponent(ws) : null;
+      }
+
+      function sparkline(data) {
+        const W = 168,
+          H = 34,
+          dpr = window.devicePixelRatio || 1;
+        const pts = (data || []).filter((v) => isFinite(v));
+        const c = document.createElement('canvas');
+        c.width = W * dpr;
+        c.height = H * dpr;
+        c.style.width = W + 'px';
+        c.style.height = H + 'px';
+        const ctx = c.getContext('2d');
+        ctx.scale(dpr, dpr);
+        if (pts.length < 2) {
+          ctx.fillStyle = '#6b7394';
+          ctx.font = '11px ui-monospace, monospace';
+          ctx.fillText('no history yet', 0, 20);
+          return c;
+        }
+        const lo = Math.min(...pts),
+          hi = Math.max(...pts);
+        const span = hi - lo || 1,
+          pad = span * 0.12;
+        const y0 = lo - pad,
+          y1 = hi + pad,
+          yr = y1 - y0 || 1;
+        const x = (i) => (i / (pts.length - 1)) * (W - 2) + 1;
+        const y = (v) => H - 2 - ((v - y0) / yr) * (H - 4);
+        // area
+        ctx.beginPath();
+        ctx.moveTo(1, H - 1);
+        pts.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+        ctx.lineTo(W - 1, H - 1);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(143,234,208,0.10)';
+        ctx.fill();
+        // line
+        ctx.beginPath();
+        pts.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+        ctx.strokeStyle = 'rgba(143,234,208,0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // last dot
+        ctx.beginPath();
+        ctx.arc(x(pts.length - 1), y(pts[pts.length - 1]), 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#8fead0';
+        ctx.fill();
+        return c;
+      }
+
+      function metricEl(k, v) {
+        const d = document.createElement('div');
+        d.className = 'metric';
+        const kk = document.createElement('span');
+        kk.className = 'k';
+        kk.textContent = k;
+        const vv = document.createElement('span');
+        vv.className = 'v';
+        vv.textContent = v;
+        d.append(kk, vv);
+        return d;
+      }
+
+      function card(exp) {
+        const meta = STATUS_META[exp.status] || STATUS_META.dead;
+        const m = exp.metrics || {};
+        const href = streamHref(exp);
+        const root = document.createElement(href ? 'a' : 'div');
+        root.className = 'card';
+        if (href) {
+          root.href = href;
+          root.target = '_blank';
+          root.rel = 'noopener';
+        }
+
+        // header
+        const head = document.createElement('div');
+        head.className = 'row';
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = meta.color;
+        dot.style.boxShadow = '0 0 8px ' + meta.color;
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = exp.name;
+        head.append(dot, name);
+        if (href) {
+          const t = document.createElement('span');
+          t.className = 'tag';
+          t.style.color = meta.color;
+          t.textContent = meta.label;
+          head.append(t);
+        } else {
+          const t = document.createElement('span');
+          t.className = 'tag badge';
+          t.textContent = 'no stream';
+          head.append(t);
+        }
+        root.append(head);
+
+        // sub meta
+        const sub = document.createElement('div');
+        sub.className = 'meta';
+        const box = document.createElement('span');
+        box.className = 'box';
+        box.textContent = exp.box || '';
+        const cost = document.createElement('span');
+        cost.className = 'm';
+        cost.textContent = '$' + Number(exp.cost_per_hr || 0).toFixed(2) + '/hr';
+        const age = document.createElement('span');
+        age.className = 'm';
+        age.textContent = '· ' + ageLabel(exp.last_update);
+        sub.append(box, cost, age);
+        root.append(sub);
+
+        if (exp.note) {
+          const n = document.createElement('div');
+          n.className = 'm';
+          n.style.fontStyle = 'italic';
+          n.textContent = exp.note;
+          root.append(n);
+        }
+
+        // metrics grid
+        const mg = document.createElement('div');
+        mg.className = 'metrics';
+        mg.append(metricEl('natural', fmtPct(m.natural)));
+        mg.append(metricEl('attempt', fmtPct(m.attempt)));
+        mg.append(metricEl('timing', m.timing_ms != null ? fmt(m.timing_ms, 1) + 'ms' : '—'));
+        if (m.tier_perfect != null) mg.append(metricEl('perfect', fmtPct(m.tier_perfect)));
+        if (m.tier_great != null) mg.append(metricEl('great', fmtPct(m.tier_great)));
+        if (m.jump_clean != null) mg.append(metricEl('jumps', fmtPct(m.jump_clean)));
+        if (m.hold_completion != null) mg.append(metricEl('holds', fmtPct(m.hold_completion)));
+        mg.append(metricEl('step', fmtInt(exp.step)));
+        mg.append(metricEl('timesteps', fmtSteps(m.timesteps)));
+        root.append(mg);
+
+        // sparkline
+        const sp = document.createElement('div');
+        const spk = document.createElement('span');
+        spk.className = 'spark-k';
+        spk.textContent = 'natural (last N)';
+        sp.append(spk, document.createElement('br'), sparkline(exp.history));
+        root.append(sp);
+
+        return root;
+      }
+
+      function render() {
+        const exps = (lastPayload && lastPayload.experiments) || [];
+        const running = exps.filter((e) => e.status === 'running').length;
+        el('summary').textContent = exps.length + ' experiments · ' + running + ' running';
+
+        let line = lastPayload
+          ? 'generated ' +
+            ageLabel(lastPayload.generated_at) +
+            ' · polled ' +
+            ageLabel(new Date(fetchedAt).toISOString()) +
+            ' · refreshes every 15s'
+          : 'loading /api/experiments…';
+        el('statusLine').innerHTML = '';
+        el('statusLine').append(document.createTextNode(line));
+        if (lastError) {
+          const w = document.createElement('span');
+          w.className = 'warn';
+          w.textContent = ' · fetch error: ' + lastError + ' (keeping last data)';
+          el('statusLine').append(w);
+        }
+
+        const grid = el('grid');
+        grid.innerHTML = '';
+        if (exps.length === 0 && !lastError) {
+          const e = document.createElement('div');
+          e.className = 'empty';
+          e.textContent = 'No experiments in the feed yet. Are the training boxes pushing?';
+          grid.append(e);
+          return;
+        }
+        for (const exp of exps) grid.append(card(exp));
+      }
+
+      async function load() {
+        try {
+          const res = await fetch(FEED_URL + '?t=' + Date.now(), { cache: 'no-store' });
+          if (!res.ok) {
+            let detail = 'HTTP ' + res.status;
+            try {
+              const b = await res.json();
+              if (b && b.message) detail = b.message;
+            } catch (e) {
+              /* non-JSON */
+            }
+            throw new Error(detail);
+          }
+          lastPayload = await res.json();
+          lastError = null;
+          fetchedAt = Date.now();
+        } catch (e) {
+          lastError = e && e.message ? e.message : String(e);
+        }
+        render();
+      }
+
+      load();
+      setInterval(load, POLL_MS);
+    </script>
+  </body>
+</html>

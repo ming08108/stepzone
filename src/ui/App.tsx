@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Play } from './Play';
 import { PlayerOptions } from './PlayerOptions';
 import { SongSelect } from './SongSelect';
@@ -7,6 +7,11 @@ import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
 import { InputTest } from './InputTest';
 import { VrmTest } from './VrmTest';
+// Code-split: IsaacViewer pulls in three/webgpu; keep it out of the main bundle.
+const IsaacViewer = lazy(() => import('./IsaacViewer').then((m) => ({ default: m.IsaacViewer })));
+const ExperimentsDashboard = lazy(() =>
+  import('./ExperimentsDashboard').then((m) => ({ default: m.ExperimentsDashboard })),
+);
 import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
@@ -22,7 +27,16 @@ import { RoomDock } from './RoomDock';
 import { RoomJoinOverlay } from './RoomJoinOverlay';
 
 type View =
-  'menu' | 'playoptions' | 'play' | 'options' | 'calibrate' | 'benchmark' | 'inputtest' | 'vrmtest';
+  | 'menu'
+  | 'playoptions'
+  | 'play'
+  | 'options'
+  | 'calibrate'
+  | 'benchmark'
+  | 'inputtest'
+  | 'vrmtest'
+  | 'isaacviewer'
+  | 'experiments';
 
 /** The one-line "what's happening / what to do" for the room dock, given the
  *  current screen — makes a GUEST's inability to pick songs explicit. */
@@ -59,6 +73,8 @@ export function App() {
     const params = new URLSearchParams(location.search);
     if (params.has('bench')) return 'benchmark';
     if (params.has('vrm')) return 'vrmtest';
+    if (params.has('isaacviewer')) return 'isaacviewer';
+    if (params.has('experiments')) return 'experiments';
     return 'menu';
   });
   const [req, setReq] = useState<PlayRequest | null>(null);
@@ -139,6 +155,18 @@ export function App() {
     body = <InputTest onBack={() => setView('options')} />;
   } else if (view === 'vrmtest') {
     body = <VrmTest onExit={() => setView('menu')} />;
+  } else if (view === 'isaacviewer') {
+    body = (
+      <Suspense fallback={null}>
+        <IsaacViewer onExit={() => setView('menu')} />
+      </Suspense>
+    );
+  } else if (view === 'experiments') {
+    body = (
+      <Suspense fallback={null}>
+        <ExperimentsDashboard onExit={() => setView('menu')} />
+      </Suspense>
+    );
   } else if (view === 'calibrate') {
     body = <Calibrate onBack={() => setView('options')} />;
   } else {
