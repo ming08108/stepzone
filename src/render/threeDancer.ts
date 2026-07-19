@@ -49,6 +49,15 @@ export interface DancerCamera {
   target?: readonly [number, number, number];
 }
 
+/** An alternative per-frame animation source for the dancer. When one is
+ *  installed via setPoseDriver, build() hands posing to it INSTEAD of the
+ *  procedural balance model. It owns writing the VRM's
+ *  bones (+ humanoid/spring-bone settle). Any throw drops the driver and this frame
+ *  (and every subsequent one) falls back to the procedural dancer. Default: none. */
+export interface DancerPoseDriver {
+  update(vrm: VRM, now: number, beat: number, dt: number): void;
+}
+
 // Panel → floor position (metres). L/R straddle x; U far (−z), D near (+z). Kept fairly narrow:
 // a 60 cm L↔R split reads as an unnatural sumo stance AND stretches long garments (a jacket/coat
 // hem skinned to the legs tents out into a "skirt" on the a/b/c samples). ~48 cm looks natural.
@@ -179,6 +188,9 @@ export class ThreeVrmDancer {
 
   ready = false;
   private disposed = false;
+  // Optional external animation source (RL student net). null → procedural dancer.
+  private poseDriver: DancerPoseDriver | null = null;
+  private poseDriverFailed = false;
 
   // scratch
   private readonly FWD = new THREE.Vector3(0, 0, 1);
@@ -678,9 +690,33 @@ export class ThreeVrmDancer {
     bone.quaternion.multiply(this.qChest.setFromEuler(this.eChest));
   }
 
+  /** Install (or clear) an external animation source. When set, build() delegates
+   *  posing to it and skips the procedural model. Passing null (or a driver throw)
+   *  restores the procedural dancer. See DancerPoseDriver. */
+  setPoseDriver(driver: DancerPoseDriver | null): void {
+    this.poseDriver = driver;
+    this.poseDriverFailed = false;
+  }
+  /** The loaded VRM (for an external pose driver to read/write its bones). */
+  get vrmModel(): VRM {
+    return this.vrm;
+  }
+
   /** Advance one frame: the balance model + arm clip + foot-IK + spring bones. */
   build(now: number, beat: number, dt: number): void {
     if (!this.ready) return;
+    // External animation source (RL student net) takes over posing entirely; on any
+    // throw it's dropped and we fall through to the procedural dancer this frame.
+    if (this.poseDriver && !this.poseDriverFailed) {
+      try {
+        this.poseDriver.update(this.vrm, now, beat, dt);
+        return;
+      } catch (err) {
+        this.poseDriverFailed = true;
+        this.poseDriver = null;
+        console.error('[dancer] pose driver failed, falling back to procedural', err);
+      }
+    }
     const vrm = this.vrm;
     // Guard the clock inputs: a NaN/negative from a song seek/glitch would poison every
     // downstream position. The feet are a pure function of beat, so they can't freeze; the
