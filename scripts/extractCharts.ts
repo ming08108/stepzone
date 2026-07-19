@@ -142,6 +142,9 @@ interface StepOut {
   lCol: number;
   rCol: number;
   jump: boolean;
+  /** Absolute END time (seconds) of that foot's hold/roll, or -1 if not a hold. */
+  lHoldT: number;
+  rHoldT: number;
 }
 
 interface ChartMeta {
@@ -185,7 +188,10 @@ function extractChart(
     // changes / stops / warps via the engine's beat->second conversion.
     const t = timing.getElapsedTimeFromBeat(p.beat);
     const jump = p.lCol >= 0 && p.rCol >= 0;
-    steps.push({ beat: p.beat, t, lCol: p.lCol, rCol: p.rCol, jump });
+    // Hold tail = absolute time at (head beat + hold length in beats); -1 for taps.
+    const lHoldT = p.lHoldLen >= 0 ? timing.getElapsedTimeFromBeat(p.beat + p.lHoldLen) : -1;
+    const rHoldT = p.rHoldLen >= 0 ? timing.getElapsedTimeFromBeat(p.beat + p.rHoldLen) : -1;
+    steps.push({ beat: p.beat, t, lCol: p.lCol, rCol: p.rCol, jump, lHoldT, rHoldT });
     times.push(t);
   }
   if (steps.length === 0) return null;

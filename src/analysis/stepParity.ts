@@ -1191,6 +1191,10 @@ export interface FootStep {
   cols: number;
   lCol: number;
   rCol: number;
+  /** Hold/roll tail length in BEATS for the note under lCol/rCol, or -1 if that
+   *  foot's note isn't a hold head (both holds and rolls count as holds). */
+  lHoldLen: number;
+  rHoldLen: number;
 }
 
 /** Solve foot placement for a dance-single chart and return it per note row, so
@@ -1218,7 +1222,11 @@ export function computeFootPlacements(
       if (fp === LH || fp === LT) lCol = c;
       else if (fp === RH || fp === RT) rCol = c;
     }
-    out.push({ beat: row.beat, cols, lCol, rCol });
+    // Hold/roll tail length (beats) of the note each foot steps on; holdLength is
+    // already -1 for non-hold heads (see note construction ~line 852).
+    const lHoldLen = lCol >= 0 ? row.notes[lCol].holdLength : -1;
+    const rHoldLen = rCol >= 0 ? row.notes[rCol].holdLength : -1;
+    out.push({ beat: row.beat, cols, lCol, rCol, lHoldLen, rHoldLen });
   }
   return out;
 }
