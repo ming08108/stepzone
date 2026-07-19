@@ -43,3 +43,18 @@ vrm-test.html
 # derivative Miku4.vrm (see public/models/MODELS_LICENSE.md), explicitly allowed.
 public/models/Miku*.vrm
 !public/models/Miku4.vrm
+
+# Generated DDR RL fleet status feed (written by isaac-spike/experiments_status.py)
+public/experiments.json
+
+# --- DDR RL local artifacts: large, regenerable, or experiment scratch (never commit) ---
+data/
+outputs/
+wandb/
+*.mp4
+# Abandoned in-browser RL dancer model assets (the ?rldancer harness was removed).
+public/models/rl-dancer/
+# Scratch reference screenshots dropped at the repo root (the shipped ones live in docs/img + public/).
+/c9_*.png
+/itg_song_select.png
+/arrows half filled.png

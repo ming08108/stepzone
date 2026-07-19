@@ -14,3 +14,12 @@ api/*.js
 # Local dev/verify harness (temp, not shipped)
 robot-test.html
 .*.mjs
+
+# Machine-generated fleet feed (experiments_status.py rewrites it every 60s).
+public/experiments.json
+
+# DDR RL local artifacts (gitignored; huge / not source — keep the format check fast + CI-matching).
+data/
+outputs/
+wandb/
+public/models/rl-dancer/
