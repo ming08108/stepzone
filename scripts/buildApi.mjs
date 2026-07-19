@@ -18,6 +18,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const entries = [
   { in: 'src/net/scoresEntry.ts', out: 'scores' },
   { in: 'src/net/versusEntry.ts', out: 'versus' },
+  { in: 'src/net/experimentsEntry.ts', out: 'experiments' },
+  { in: 'src/net/experimentsPushEntry.ts', out: 'experiments-push' },
 ];
 
 await Promise.all(
