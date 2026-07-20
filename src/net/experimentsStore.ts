@@ -37,6 +37,9 @@ export interface ExpPayload {
   history_natural: number[];
   ws_public: string | null;
   box: { gpu: string; dph: number };
+  /** One-line "what is this run trying to do", pushed from the box's
+   *  experiment.json `desc` (not hardcoded); null when the box doesn't set it. */
+  desc?: string | null;
   /** Present when the pusher is v2-aware; absent on legacy pushers. */
   hb?: ExpHeartbeat | null;
 }

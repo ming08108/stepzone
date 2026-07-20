@@ -114,6 +114,8 @@ function parsePush(raw: unknown): { id: string; name: string; payload: ExpPayloa
   const ws_public =
     typeof o.ws_public === 'string' && o.ws_public.length <= 300 ? o.ws_public : null;
 
+  const desc = typeof o.desc === 'string' && o.desc.length > 0 ? o.desc.slice(0, 400) : null;
+
   let box: ExpPayload['box'] = { gpu: 'GPU', dph: 0 };
   if (o.box && typeof o.box === 'object') {
     const b = o.box as Record<string, unknown>;
@@ -136,7 +138,7 @@ function parsePush(raw: unknown): { id: string; name: string; payload: ExpPayloa
     };
   }
 
-  return { id, name, payload: { metrics, history_natural, ws_public, box, hb } };
+  return { id, name, payload: { metrics, history_natural, ws_public, box, desc, hb } };
 }
 
 export function createPushHandler(
@@ -254,6 +256,7 @@ export function createListHandler(
         return {
           id: r.id,
           name: r.name,
+          desc: typeof p.desc === 'string' ? p.desc : null,
           status,
           status_reason: reason,
           last_update: new Date(r.updatedAt).toISOString(),

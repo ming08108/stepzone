@@ -167,6 +167,11 @@
         font-size: 13px;
         font-variant-numeric: tabular-nums;
       }
+      .desc {
+        color: var(--dim);
+        font-size: 11px;
+        line-height: 1.45;
+      }
       .spark-k {
         color: var(--muted);
         font-size: 10px;
@@ -386,6 +391,14 @@
         age.textContent = '· ' + ageLabel(exp.last_update);
         sub.append(box, cost, age);
         root.append(sub);
+
+        // what the run is trying to do (pushed from the box's experiment.json desc)
+        if (exp.desc) {
+          const d = document.createElement('div');
+          d.className = 'desc';
+          d.textContent = exp.desc;
+          root.append(d);
+        }
 
         if (exp.note) {
           const n = document.createElement('div');

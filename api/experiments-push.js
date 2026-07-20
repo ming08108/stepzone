@@ -69,6 +69,7 @@ function parsePush(raw) {
   }
   const history_natural = Array.isArray(o.history_natural) ? o.history_natural.filter(isFiniteNum).slice(-MAX_HISTORY) : [];
   const ws_public = typeof o.ws_public === "string" && o.ws_public.length <= 300 ? o.ws_public : null;
+  const desc = typeof o.desc === "string" && o.desc.length > 0 ? o.desc.slice(0, 400) : null;
   let box = { gpu: "GPU", dph: 0 };
   if (o.box && typeof o.box === "object") {
     const b2 = o.box;
@@ -87,7 +88,7 @@ function parsePush(raw) {
       config_hash: typeof h.config_hash === "string" ? h.config_hash.slice(0, 64) : null
     };
   }
-  return { id, name, payload: { metrics, history_natural, ws_public, box, hb } };
+  return { id, name, payload: { metrics, history_natural, ws_public, box, desc, hb } };
 }
 function createPushHandler(store, token2, now = Date.now) {
   const limiter = new RateLimiter();

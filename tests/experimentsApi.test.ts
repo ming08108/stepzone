@@ -142,6 +142,18 @@ describe('list', () => {
     const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
     expect(typeof body.experiments[0].status_reason).toBe('string');
   });
+
+  it('round-trips the pushed desc (what the run is trying to do)', async () => {
+    await doPush(sample({ desc: 'TREATMENT arm: do jump-gifts teach two-feet jumps?' }));
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].desc).toBe('TREATMENT arm: do jump-gifts teach two-feet jumps?');
+  });
+
+  it('desc defaults to null when not pushed', async () => {
+    await doPush(sample());
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].desc).toBeNull();
+  });
 });
 
 describe('heartbeat-derived status', () => {

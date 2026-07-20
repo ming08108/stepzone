@@ -57,6 +57,7 @@ function createListHandler(store, now = Date.now) {
         return {
           id: r.id,
           name: r.name,
+          desc: typeof p2.desc === "string" ? p2.desc : null,
           status,
           status_reason: reason,
           last_update: new Date(r.updatedAt).toISOString(),
