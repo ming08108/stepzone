@@ -127,10 +127,11 @@ interface HistPoint {
   natural: number | null;
 }
 
-/** ws_public on a *.trycloudflare.com host, else ws_local; null => no stream. */
+/** Prefer the box's self-published ws_public everywhere except a localhost dev
+ * host (where ws_local avoids the internet round-trip); null => no stream. */
 function wsUrlFor(exp: Experiment): string | null {
-  const usePublic = location.hostname.endsWith('trycloudflare.com');
-  const url = usePublic ? exp.ws_public : exp.ws_local;
+  const isLocalDev = location.hostname === 'localhost' || location.hostname.startsWith('127.');
+  const url = (isLocalDev ? exp.ws_local || exp.ws_public : exp.ws_public || exp.ws_local) ?? null;
   return url && url.length ? url : null;
 }
 
