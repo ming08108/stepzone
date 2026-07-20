@@ -16,8 +16,8 @@ var MAX_BODY_BYTES = 32 * 1024;
 var RATE_LIMIT_PER_MIN = 60;
 var RATE_WINDOW_MS = 6e4;
 var WINDOW_MS = 24 * 60 * 60 * 1e3;
-var RUNNING_MS = 5 * 60 * 1e3;
-var STALE_MS = 30 * 60 * 1e3;
+var FRESH_MS = 150 * 1e3;
+var UNREACHABLE_MS = 15 * 60 * 1e3;
 var FROZEN_MS = 10 * 60 * 1e3;
 var MAX_HISTORY = 200;
 var MAX_METRICS = 64;
@@ -85,7 +85,8 @@ function parsePush(raw) {
       trainer_alive: typeof h.trainer_alive === "boolean" ? h.trainer_alive : null,
       tb_last_write: isFiniteNum(h.tb_last_write) ? h.tb_last_write : null,
       step: isFiniteNum(h.step) ? h.step : null,
-      config_hash: typeof h.config_hash === "string" ? h.config_hash.slice(0, 64) : null
+      config_hash: typeof h.config_hash === "string" ? h.config_hash.slice(0, 64) : null,
+      paused: typeof h.paused === "boolean" ? h.paused : null
     };
   }
   return { id, name, payload: { metrics, history_natural, ws_public, box, desc, hb } };
@@ -5363,6 +5364,17 @@ var export_types = ct.types;
 
 // src/net/experimentsStore.ts
 var SAMPLE_FETCH_CAP = 2e4;
+function nonEmptyStr(v2) {
+  return typeof v2 === "string" && v2.trim().length > 0;
+}
+function coalescePayload(prev, next) {
+  if (!prev) return next;
+  return {
+    ...next,
+    desc: nonEmptyStr(next.desc) ? next.desc : prev.desc ?? next.desc ?? null,
+    ws_public: nonEmptyStr(next.ws_public) ? next.ws_public : prev.ws_public ?? null
+  };
+}
 var SCHEMA = [
   `CREATE TABLE IF NOT EXISTS experiments (
      id         TEXT PRIMARY KEY,
@@ -5404,8 +5416,21 @@ var PgExperimentsStore = class {
       `INSERT INTO experiments (id, name, payload, updated_at, last_step, step_changed_at)
        VALUES ($1, $2, $3, to_timestamp($4 / 1000.0), $5, to_timestamp($4 / 1000.0))
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         payload = EXCLUDED.payload,
+         name = CASE
+           WHEN btrim(COALESCE(EXCLUDED.name, '')) <> '' THEN EXCLUDED.name
+           ELSE experiments.name
+         END,
+         payload = EXCLUDED.payload
+           || jsonb_build_object('desc', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'desc', '')) <> ''
+                  THEN EXCLUDED.payload->'desc'
+                ELSE experiments.payload->'desc'
+              END)
+           || jsonb_build_object('ws_public', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'ws_public', '')) <> ''
+                  THEN EXCLUDED.payload->'ws_public'
+                ELSE experiments.payload->'ws_public'
+              END),
          updated_at = EXCLUDED.updated_at,
          last_step = EXCLUDED.last_step,
          step_changed_at = CASE
@@ -5477,8 +5502,8 @@ var MemoryExperimentsStore = class {
     const stepChanged = !prev || prev.lastStep !== step;
     this.rows.set(id, {
       id,
-      name,
-      payload,
+      name: nonEmptyStr(name) ? name : prev?.name ?? name,
+      payload: coalescePayload(prev?.payload ?? null, payload),
       updatedAt: now,
       lastStep: step,
       stepChangedAt: stepChanged ? now : prev?.stepChangedAt ?? now

@@ -11,8 +11,8 @@ function json(status, body) {
 // src/net/experimentsApi.ts
 var MAX_BODY_BYTES = 32 * 1024;
 var WINDOW_MS = 24 * 60 * 60 * 1e3;
-var RUNNING_MS = 5 * 60 * 1e3;
-var STALE_MS = 30 * 60 * 1e3;
+var FRESH_MS = 150 * 1e3;
+var UNREACHABLE_MS = 15 * 60 * 1e3;
 var FROZEN_MS = 10 * 60 * 1e3;
 function isFiniteNum(v2) {
   return typeof v2 === "number" && Number.isFinite(v2);
@@ -22,10 +22,13 @@ function minutes(ms2) {
 }
 function deriveStatus(row, now) {
   const ageMs = now - row.updatedAt;
-  if (ageMs > STALE_MS) return { status: "dead", reason: `no push for ${minutes(ageMs)}m` };
-  if (ageMs > RUNNING_MS) return { status: "stale", reason: `last push ${minutes(ageMs)}m ago` };
+  if (ageMs > UNREACHABLE_MS) return { status: "dead", reason: `no push for ${minutes(ageMs)}m` };
+  if (ageMs > FRESH_MS) {
+    return { status: "unreachable", reason: `no heartbeat for ${minutes(ageMs)}m` };
+  }
   const hb = row.payload?.hb ?? null;
   if (!hb) return { status: "running", reason: "fresh push (legacy pusher, no heartbeat)" };
+  if (hb.paused === true) return { status: "paused", reason: "run paused (self-reported)" };
   if (hb.trainer_alive === false) {
     return { status: "dead-trainer", reason: "fresh push but train.py not running on the box" };
   }
@@ -39,6 +42,9 @@ function deriveStatus(row, now) {
       status: "stalled",
       reason: `step ${step} frozen ${minutes(frozenMs)}m (trainer alive)`
     };
+  }
+  if (hb.trainer_alive !== true) {
+    return { status: "starting", reason: "trainer status unconfirmed (pgrep inconclusive)" };
   }
   return { status: "running", reason: `step ${step} advancing` };
 }
@@ -5313,6 +5319,17 @@ var export_types = ct.types;
 
 // src/net/experimentsStore.ts
 var SAMPLE_FETCH_CAP = 2e4;
+function nonEmptyStr(v2) {
+  return typeof v2 === "string" && v2.trim().length > 0;
+}
+function coalescePayload(prev, next) {
+  if (!prev) return next;
+  return {
+    ...next,
+    desc: nonEmptyStr(next.desc) ? next.desc : prev.desc ?? next.desc ?? null,
+    ws_public: nonEmptyStr(next.ws_public) ? next.ws_public : prev.ws_public ?? null
+  };
+}
 var SCHEMA = [
   `CREATE TABLE IF NOT EXISTS experiments (
      id         TEXT PRIMARY KEY,
@@ -5354,8 +5371,21 @@ var PgExperimentsStore = class {
       `INSERT INTO experiments (id, name, payload, updated_at, last_step, step_changed_at)
        VALUES ($1, $2, $3, to_timestamp($4 / 1000.0), $5, to_timestamp($4 / 1000.0))
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         payload = EXCLUDED.payload,
+         name = CASE
+           WHEN btrim(COALESCE(EXCLUDED.name, '')) <> '' THEN EXCLUDED.name
+           ELSE experiments.name
+         END,
+         payload = EXCLUDED.payload
+           || jsonb_build_object('desc', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'desc', '')) <> ''
+                  THEN EXCLUDED.payload->'desc'
+                ELSE experiments.payload->'desc'
+              END)
+           || jsonb_build_object('ws_public', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'ws_public', '')) <> ''
+                  THEN EXCLUDED.payload->'ws_public'
+                ELSE experiments.payload->'ws_public'
+              END),
          updated_at = EXCLUDED.updated_at,
          last_step = EXCLUDED.last_step,
          step_changed_at = CASE
@@ -5427,8 +5457,8 @@ var MemoryExperimentsStore = class {
     const stepChanged = !prev || prev.lastStep !== step;
     this.rows.set(id, {
       id,
-      name,
-      payload,
+      name: nonEmptyStr(name) ? name : prev?.name ?? name,
+      payload: coalescePayload(prev?.payload ?? null, payload),
       updatedAt: now,
       lastStep: step,
       stepChangedAt: stepChanged ? now : prev?.stepChangedAt ?? now

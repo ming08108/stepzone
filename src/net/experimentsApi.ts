@@ -25,8 +25,13 @@ const RATE_LIMIT_PER_MIN = 60;
 const RATE_WINDOW_MS = 60_000;
 
 const WINDOW_MS = 24 * 60 * 60 * 1000; // rows older than this are not returned
-const RUNNING_MS = 5 * 60 * 1000; // push fresher than this ⇒ trust the heartbeat signals
-const STALE_MS = 30 * 60 * 1000; // push older than RUNNING but within this ⇒ stale
+// Boxes push every ~60s, so a push older than 150s means we've already missed at
+// least one heartbeat. Tightened from the old 5-/30-min bands after a host-stopped
+// box read "running" for minutes: <=150s ⇒ trust the heartbeat; 150s–15min ⇒
+// "unreachable" (no heartbeat — box likely gone/host-stopped, NOT merely stale);
+// >15min ⇒ dead.
+const FRESH_MS = 150 * 1000; // push within this ⇒ trust the heartbeat signals
+const UNREACHABLE_MS = 15 * 60 * 1000; // 150s–15min without a push ⇒ no heartbeat
 const FROZEN_MS = 10 * 60 * 1000; // TB/step frozen this long (trainer alive) ⇒ stalled
 
 const HISTORY_MAX_POINTS = 500; // default per-series bucket cap for the history endpoint
@@ -35,9 +40,13 @@ const HISTORY_HARD_CAP = 2000; // ceiling a caller can request
 const MAX_HISTORY = 200;
 const MAX_METRICS = 64;
 
-/** Derived, server-side status. `running/stale/dead` are age-compatible with the
- *  old age-only values; the rest are new hb-derived signals. */
-export type ExpStatus = 'running' | 'starting' | 'stalled' | 'dead-trainer' | 'stale' | 'dead';
+/** Derived, server-side status. `running/dead` are age-compatible with the old
+ *  age-only values; the rest are hb-derived signals. `unreachable` is the "we've
+ *  lost the heartbeat but it hasn't been long enough to call it dead" band, and
+ *  `paused` is a self-reported idle (not a failure). `stale` is retained for
+ *  backward compat but no longer emitted. */
+export type ExpStatus =
+  'running' | 'starting' | 'stalled' | 'dead-trainer' | 'unreachable' | 'paused' | 'stale' | 'dead';
 
 export interface PushHandler {
   POST(req: Request): Promise<Response>;
@@ -135,6 +144,7 @@ function parsePush(raw: unknown): { id: string; name: string; payload: ExpPayloa
       tb_last_write: isFiniteNum(h.tb_last_write) ? h.tb_last_write : null,
       step: isFiniteNum(h.step) ? h.step : null,
       config_hash: typeof h.config_hash === 'string' ? h.config_hash.slice(0, 64) : null,
+      paused: typeof h.paused === 'boolean' ? h.paused : null,
     };
   }
 
@@ -193,21 +203,29 @@ function minutes(ms: number): number {
 }
 
 /** Server-side status from DISTINCT signals (v2 goal 1), not one age:
- *  - dead   : no push for >30 min (preempted / box gone)
- *  - stale  : no push for 5–30 min (network blip / box mid-cycle)
+ *  - dead        : no push for >15 min (preempted / box gone / host stopped)
+ *  - unreachable : no push for 150s–15 min (missed heartbeats; contact lost but
+ *                  not yet long enough to call dead) — labelled "no heartbeat"
  *  - (fresh push, hb present:)
+ *      paused       : run self-reports paused (intentionally idle — not a failure)
  *      dead-trainer : trainer process not found
- *      starting     : trainer up but no scalars/step yet
+ *      starting     : trainer up but no step yet, OR trainer_alive unconfirmed
  *      stalled      : trainer up but TB/step frozen ≥10 min (the hung-trainer bug)
- *      running      : trainer up and step advancing
+ *      running      : trainer_alive AND a real (non-null) step that's advancing
  *  - (fresh push, no hb:) running — legacy pusher, age-only like before. */
 function deriveStatus(row: ExpRow, now: number): { status: ExpStatus; reason: string } {
   const ageMs = now - row.updatedAt;
-  if (ageMs > STALE_MS) return { status: 'dead', reason: `no push for ${minutes(ageMs)}m` };
-  if (ageMs > RUNNING_MS) return { status: 'stale', reason: `last push ${minutes(ageMs)}m ago` };
+  if (ageMs > UNREACHABLE_MS) return { status: 'dead', reason: `no push for ${minutes(ageMs)}m` };
+  if (ageMs > FRESH_MS) {
+    return { status: 'unreachable', reason: `no heartbeat for ${minutes(ageMs)}m` };
+  }
 
   const hb = row.payload?.hb ?? null;
   if (!hb) return { status: 'running', reason: 'fresh push (legacy pusher, no heartbeat)' };
+
+  // Intentionally-stopped runs (e.g. the local 3080 arm) self-report paused: a
+  // healthy idle state, surfaced neutrally rather than as a stalled failure.
+  if (hb.paused === true) return { status: 'paused', reason: 'run paused (self-reported)' };
 
   if (hb.trainer_alive === false) {
     return { status: 'dead-trainer', reason: 'fresh push but train.py not running on the box' };
@@ -232,6 +250,13 @@ function deriveStatus(row: ExpRow, now: number): { status: ExpStatus; reason: st
       status: 'stalled',
       reason: `step ${step} frozen ${minutes(frozenMs)}m (trainer alive)`,
     };
+  }
+
+  // "running" (green) demands an affirmative trainer_alive AND a real step — a
+  // freshly-booted run with step=null, or one whose pgrep was inconclusive, stays
+  // "starting" rather than reading as falsely healthy.
+  if (hb.trainer_alive !== true) {
+    return { status: 'starting', reason: 'trainer status unconfirmed (pgrep inconclusive)' };
   }
   return { status: 'running', reason: `step ${step} advancing` };
 }

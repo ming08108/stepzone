@@ -29,6 +29,9 @@ export interface ExpHeartbeat {
   step: number | null;
   /** sha1 (short hex) of the newest run's params/env.yaml, for drift detection. */
   config_hash: string | null;
+  /** true when the run is intentionally stopped (idle, not failed) ⇒ status
+   *  "paused". Absent/null on pushers that don't report it. */
+  paused?: boolean | null;
 }
 
 /** The metrics + identity a training box pushes (validated in experimentsApi). */
@@ -92,6 +95,26 @@ export interface ExperimentsStore {
 
 const SAMPLE_FETCH_CAP = 20_000;
 
+/** Whether a value is a usable non-empty string. COALESCE guard: a blank/omitted
+ *  desc/name/ws_public from a push must never wipe a previously-stored good value
+ *  (a booting or minimal pusher would otherwise erase the run's description or its
+ *  stream URL mid-run). */
+function nonEmptyStr(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+/** Merge a fresh push payload over the stored one, keeping the stored `desc` and
+ *  `ws_public` whenever the incoming push omits/blanks them. Used by the Memory
+ *  store; the Pg store does the equivalent COALESCE atomically in SQL. */
+function coalescePayload(prev: ExpPayload | null, next: ExpPayload): ExpPayload {
+  if (!prev) return next;
+  return {
+    ...next,
+    desc: nonEmptyStr(next.desc) ? next.desc : (prev.desc ?? next.desc ?? null),
+    ws_public: nonEmptyStr(next.ws_public) ? next.ws_public : (prev.ws_public ?? null),
+  };
+}
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS experiments (
      id         TEXT PRIMARY KEY,
@@ -144,12 +167,31 @@ export class PgExperimentsStore implements ExperimentsStore {
     // updating it and the list endpoint can measure the freeze. We RETURN
     // whether that happened this push (step_changed_at == updated_at) so the
     // caller knows to append a samples row.
+    // COALESCE guard (atomic, race-free): a push with a blank/omitted name, desc,
+    // or ws_public must not overwrite a previously-stored non-empty value. name is
+    // a column; desc/ws_public live inside the JSONB payload, so we take the new
+    // payload and override just those two keys back to the stored value when the
+    // incoming one is blank (btrim handles whitespace-only). Everything else on
+    // the payload is replaced wholesale as before.
     const rows = (await this.sql.query(
       `INSERT INTO experiments (id, name, payload, updated_at, last_step, step_changed_at)
        VALUES ($1, $2, $3, to_timestamp($4 / 1000.0), $5, to_timestamp($4 / 1000.0))
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         payload = EXCLUDED.payload,
+         name = CASE
+           WHEN btrim(COALESCE(EXCLUDED.name, '')) <> '' THEN EXCLUDED.name
+           ELSE experiments.name
+         END,
+         payload = EXCLUDED.payload
+           || jsonb_build_object('desc', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'desc', '')) <> ''
+                  THEN EXCLUDED.payload->'desc'
+                ELSE experiments.payload->'desc'
+              END)
+           || jsonb_build_object('ws_public', CASE
+                WHEN btrim(COALESCE(EXCLUDED.payload->>'ws_public', '')) <> ''
+                  THEN EXCLUDED.payload->'ws_public'
+                ELSE experiments.payload->'ws_public'
+              END),
          updated_at = EXCLUDED.updated_at,
          last_step = EXCLUDED.last_step,
          step_changed_at = CASE
@@ -243,10 +285,12 @@ export class MemoryExperimentsStore implements ExperimentsStore {
   ): Promise<{ stepChanged: boolean }> {
     const prev = this.rows.get(id);
     const stepChanged = !prev || prev.lastStep !== step;
+    // Mirror the Pg store's COALESCE guard: a blank name/desc/ws_public never
+    // clobbers a stored value.
     this.rows.set(id, {
       id,
-      name,
-      payload,
+      name: nonEmptyStr(name) ? name : (prev?.name ?? name),
+      payload: coalescePayload(prev?.payload ?? null, payload),
       updatedAt: now,
       lastStep: step,
       stepChangedAt: stepChanged ? now : (prev?.stepChangedAt ?? now),

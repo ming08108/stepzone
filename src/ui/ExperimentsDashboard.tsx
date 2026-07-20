@@ -57,6 +57,7 @@ type ExpStatus =
   | 'stale'
   | 'dead'
   | 'unreachable'
+  | 'paused'
   | 'provisioning';
 
 interface Experiment {
@@ -99,6 +100,8 @@ const C = {
   starting: '#8fb6ea', // blue — booting/handshaking, like provisioning
   stalled: '#e6915a', // orange — alive but no progress (distinct from amber stale)
   deadTrainer: '#c94f8f', // magenta — trainer process gone (distinct from plain dead red)
+  unreachable: '#c9a24a', // muted gold — heartbeat lost, not yet dead (distinct from red)
+  paused: '#7f869e', // neutral slate — intentionally idle, not an error
   spark: '#8fead0',
 } as const;
 
@@ -111,7 +114,8 @@ const STATUS_META: Record<ExpStatus, { color: string; label: string }> = {
   'dead-trainer': { color: C.deadTrainer, label: 'dead-trainer' },
   stale: { color: C.stale, label: 'stale' },
   dead: { color: C.dead, label: 'dead' },
-  unreachable: { color: C.dead, label: 'unreachable' },
+  unreachable: { color: C.unreachable, label: 'no heartbeat' },
+  paused: { color: C.paused, label: 'paused' },
   provisioning: { color: C.prov, label: 'provisioning' },
 };
 
