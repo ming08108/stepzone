@@ -9,6 +9,9 @@ import { InputTest } from './InputTest';
 import { VrmTest } from './VrmTest';
 // Code-split: IsaacViewer pulls in three/webgpu; keep it out of the main bundle.
 const IsaacViewer = lazy(() => import('./IsaacViewer').then((m) => ({ default: m.IsaacViewer })));
+const ReplayDancer = lazy(() =>
+  import('./ReplayDancer').then((m) => ({ default: m.ReplayDancer })),
+);
 const ExperimentsDashboard = lazy(() =>
   import('./ExperimentsDashboard').then((m) => ({ default: m.ExperimentsDashboard })),
 );
@@ -36,6 +39,7 @@ type View =
   | 'inputtest'
   | 'vrmtest'
   | 'isaacviewer'
+  | 'replaydancer'
   | 'experiments';
 
 /** The one-line "what's happening / what to do" for the room dock, given the
@@ -74,6 +78,7 @@ export function App() {
     if (params.has('bench')) return 'benchmark';
     if (params.has('vrm')) return 'vrmtest';
     if (params.has('isaacviewer')) return 'isaacviewer';
+    if (params.has('replaydancer')) return 'replaydancer';
     if (params.has('experiments')) return 'experiments';
     return 'menu';
   });
@@ -159,6 +164,12 @@ export function App() {
     body = (
       <Suspense fallback={null}>
         <IsaacViewer onExit={() => setView('menu')} />
+      </Suspense>
+    );
+  } else if (view === 'replaydancer') {
+    body = (
+      <Suspense fallback={null}>
+        <ReplayDancer onExit={() => setView('menu')} />
       </Suspense>
     );
   } else if (view === 'experiments') {

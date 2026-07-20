@@ -18,6 +18,9 @@ robot-test.html
 # Machine-generated fleet feed (experiments_status.py rewrites it every 60s).
 public/experiments.json
 
+# Machine-generated replay fixture (scripts/genReplayFixture.mjs writes minified JSON).
+tests/fixtures/replay-sample.json
+
 # DDR RL local artifacts (gitignored; huge / not source — keep the format check fast + CI-matching).
 data/
 outputs/
