@@ -1,9 +1,8 @@
 #!/bin/sh
-# The full CI mirror, run locally before anything leaves the machine — the same
-# four gates as .github/workflows/ci.yml, in the same order. Push is where CI
-# triggers, so this is the real safety net (it also re-runs the fast checks in
-# case a commit used --no-verify). The e2e suite drives a real browser + WebGPU
-# and takes ~2-3 min; it self-skips gameplay legs where WebGPU is unavailable.
+# Fast local gates before anything leaves the machine: the checks that protect
+# the Vercel prod deploy (which tracks master directly). The e2e browser suite
+# is CI-only (.github/workflows/ci.yml) — at ~2-3 min per run it made every
+# push take ~6 minutes locally, and CI re-runs it on the same commit anyway.
 #
 # Escape hatches (use sparingly): `git push --no-verify`, or SKIP_HOOKS=1.
 [ -n "$SKIP_HOOKS" ] && { echo "pre-push: skipped (SKIP_HOOKS set)"; exit 0; }
@@ -14,16 +13,13 @@ fail() {
   exit 1
 }
 
-echo "▶ pre-push 1/4: prettier --check"
+echo "▶ pre-push 1/3: prettier --check"
 npm run --silent format:check || fail "formatting (npm run format)"
 
-echo "▶ pre-push 2/4: tsc --noEmit"
+echo "▶ pre-push 2/3: tsc --noEmit"
 npm run --silent typecheck || fail "typecheck"
 
-echo "▶ pre-push 3/4: vitest run"
+echo "▶ pre-push 3/3: vitest run"
 npm run --silent test || fail "unit tests"
 
-echo "▶ pre-push 4/4: e2e (real browser, ~2-3 min)"
-npm run --silent e2e || fail "e2e"
-
-echo "✓ pre-push passed — safe to push"
+echo "✓ pre-push passed — safe to push (e2e runs in CI)"
