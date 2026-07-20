@@ -281,7 +281,9 @@ export function ReplayDancer({ onExit }: { onExit: () => void }) {
 
     // The reused VRM dancer (graceful capsule-less fallback: nothing if it fails).
     const vrmUrl = new URLSearchParams(location.search).get('vrmurl') || DEFAULT_VRM_URL;
-    const dancer = new IsaacVrmDancer(scene, vrmUrl);
+    // footIK ON for the showcase: plant the ankles on the source foot marks (?footik=off to disable).
+    const footIK = new URLSearchParams(location.search).get('footik') !== 'off';
+    const dancer = new IsaacVrmDancer(scene, vrmUrl, 0, footIK);
     void dancer.load().then(() => {
       if (disposed || !dancer.vrm) return;
       dancer.vrm.scene.traverse((o) => {
