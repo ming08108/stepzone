@@ -7,6 +7,9 @@ function json(status, body) {
     headers: { "content-type": "application/json", "cache-control": "no-store" }
   });
 }
+function error(status, code, message) {
+  return json(status, { ok: false, code, message });
+}
 
 // src/net/experimentsApi.ts
 var MAX_BODY_BYTES = 32 * 1024;
@@ -14,64 +17,94 @@ var WINDOW_MS = 24 * 60 * 60 * 1e3;
 var RUNNING_MS = 5 * 60 * 1e3;
 var STALE_MS = 30 * 60 * 1e3;
 var FROZEN_MS = 10 * 60 * 1e3;
+var HISTORY_MAX_POINTS = 500;
+var HISTORY_HARD_CAP = 2e3;
 function isFiniteNum(v2) {
   return typeof v2 === "number" && Number.isFinite(v2);
 }
-function minutes(ms2) {
-  return Math.round(ms2 / 6e4);
-}
-function deriveStatus(row, now) {
-  const ageMs = now - row.updatedAt;
-  if (ageMs > STALE_MS) return { status: "dead", reason: `no push for ${minutes(ageMs)}m` };
-  if (ageMs > RUNNING_MS) return { status: "stale", reason: `last push ${minutes(ageMs)}m ago` };
-  const hb = row.payload?.hb ?? null;
-  if (!hb) return { status: "running", reason: "fresh push (legacy pusher, no heartbeat)" };
-  if (hb.trainer_alive === false) {
-    return { status: "dead-trainer", reason: "fresh push but train.py not running on the box" };
+function bucketAverage(bucket) {
+  const sums = {};
+  const counts = {};
+  let stepSum = 0;
+  let stepCount = 0;
+  let tsSum = 0;
+  for (const s of bucket) {
+    if (s.step != null) {
+      stepSum += s.step;
+      stepCount++;
+    }
+    tsSum += s.ts;
+    for (const [k, v2] of Object.entries(s.metrics)) {
+      if (!isFiniteNum(v2)) continue;
+      sums[k] = (sums[k] ?? 0) + v2;
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
   }
-  const step = row.lastStep ?? hb.step ?? null;
-  if (step == null) {
-    return { status: "starting", reason: "trainer up, no TB scalars yet" };
-  }
-  const frozenMs = hb.tb_last_write != null ? now - hb.tb_last_write * 1e3 : row.stepChangedAt != null ? now - row.stepChangedAt : 0;
-  if (frozenMs > FROZEN_MS) {
-    return {
-      status: "stalled",
-      reason: `step ${step} frozen ${minutes(frozenMs)}m (trainer alive)`
-    };
-  }
-  return { status: "running", reason: `step ${step} advancing` };
-}
-function createListHandler(store, now = Date.now) {
+  const metrics = {};
+  for (const k of Object.keys(sums)) metrics[k] = sums[k] / counts[k];
   return {
-    async GET(_req) {
-      const t = now();
-      const rows = await store.listRecent(t - WINDOW_MS);
-      const experiments = rows.map((r) => {
-        const p2 = r.payload ?? { metrics: {}, history_natural: [], ws_public: null, box: null };
-        const metrics = p2.metrics ?? {};
-        const step = isFiniteNum(metrics.step) ? metrics.step : null;
-        const box = p2.box ?? { gpu: "GPU", dph: 0 };
-        const wsPublic = p2.ws_public ?? null;
-        const { status, reason } = deriveStatus(r, t);
-        return {
-          id: r.id,
-          name: r.name,
-          status,
-          status_reason: reason,
-          last_update: new Date(r.updatedAt).toISOString(),
-          step,
-          metrics,
-          history: Array.isArray(p2.history_natural) ? p2.history_natural : [],
-          box: box.gpu ?? "GPU",
-          cost_per_hr: isFiniteNum(box.dph) ? box.dph : 0,
-          ws_local: null,
-          ws_public: wsPublic,
-          has_stream: wsPublic != null,
-          note: null
-        };
-      });
-      return json(200, { generated_at: new Date(t).toISOString(), experiments });
+    step: stepCount > 0 ? Math.round(stepSum / stepCount) : null,
+    ts: new Date(Math.round(tsSum / bucket.length)).toISOString(),
+    metrics
+  };
+}
+function bucketSeries(samples, maxPoints, bucketStep) {
+  if (samples.length === 0) return [];
+  if (bucketStep && bucketStep > 0) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const s of samples) {
+      const key = s.step == null ? -1 : Math.floor(s.step / bucketStep);
+      const arr = groups.get(key) ?? [];
+      arr.push(s);
+      groups.set(key, arr);
+    }
+    return [...groups.entries()].sort((a2, b2) => a2[0] - b2[0]).map(([, bucket]) => bucketAverage(bucket));
+  }
+  if (samples.length <= maxPoints) return samples.map((s) => bucketAverage([s]));
+  const out = [];
+  const size = samples.length / maxPoints;
+  for (let i = 0; i < maxPoints; i++) {
+    const lo2 = Math.floor(i * size);
+    const hi = Math.min(samples.length, Math.floor((i + 1) * size));
+    if (hi > lo2) out.push(bucketAverage(samples.slice(lo2, hi)));
+  }
+  return out;
+}
+function parseIntParam(v2) {
+  if (v2 == null) return null;
+  const n = parseInt(v2, 10);
+  return Number.isFinite(n) ? n : null;
+}
+function createHistoryHandler(store) {
+  return {
+    async GET(req) {
+      const url = new URL(req.url);
+      const idsParam = [
+        ...url.searchParams.get("id") ? [url.searchParams.get("id")] : [],
+        ...(url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim())
+      ].filter((s) => s.length > 0);
+      const ids = [...new Set(idsParam)].slice(0, 8);
+      if (ids.length === 0) {
+        return error(400, "bad_request", "supply ?id=<experiment id> (or ?ids=a,b)");
+      }
+      const bucketStep = parseIntParam(url.searchParams.get("bucket"));
+      const fromStep = parseIntParam(url.searchParams.get("from"));
+      const toStep = parseIntParam(url.searchParams.get("to"));
+      const maxPoints = Math.min(
+        parseIntParam(url.searchParams.get("max_points")) ?? HISTORY_MAX_POINTS,
+        HISTORY_HARD_CAP
+      );
+      const raw = await store.listSamples({ ids, fromStep, toStep });
+      const byId = /* @__PURE__ */ new Map();
+      for (const id of ids) byId.set(id, []);
+      for (const s of raw) {
+        (byId.get(s.expId) ?? []).push({ step: s.step, ts: s.ts, metrics: s.metrics });
+      }
+      const series = {};
+      for (const id of ids) {
+        series[id] = bucketSeries(byId.get(id) ?? [], maxPoints, bucketStep);
+      }
+      return json(200, { series });
     }
   };
 }
@@ -5449,7 +5482,7 @@ var MemoryExperimentsStore = class {
   }
 };
 
-// src/net/experimentsEntry.ts
+// src/net/experimentsHistoryEntry.ts
 var token = process.env.EXPERIMENTS_PUSH_TOKEN;
 var databaseUrl = process.env.DATABASE_URL;
 var unavailable = () => Promise.resolve(
@@ -5462,7 +5495,7 @@ var unavailable = () => Promise.resolve(
     { status: 503, headers: { "content-type": "application/json", "cache-control": "no-store" } }
   )
 );
-var handler = token ? createListHandler(
+var handler = token ? createHistoryHandler(
   databaseUrl ? new PgExperimentsStore(databaseUrl) : new MemoryExperimentsStore()
 ) : null;
 var GET = handler ? handler.GET : unavailable;

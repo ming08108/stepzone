@@ -18,23 +18,34 @@
  */
 
 import { error, json } from './httpResponse';
-import type { ExperimentsStore, ExpPayload } from './experimentsStore';
+import type { ExperimentsStore, ExpPayload, ExpHeartbeat, ExpRow } from './experimentsStore';
 
 const MAX_BODY_BYTES = 32 * 1024;
 const RATE_LIMIT_PER_MIN = 60;
 const RATE_WINDOW_MS = 60_000;
 
 const WINDOW_MS = 24 * 60 * 60 * 1000; // rows older than this are not returned
-const RUNNING_MS = 5 * 60 * 1000;
-const STALE_MS = 30 * 60 * 1000;
+const RUNNING_MS = 5 * 60 * 1000; // push fresher than this ⇒ trust the heartbeat signals
+const STALE_MS = 30 * 60 * 1000; // push older than RUNNING but within this ⇒ stale
+const FROZEN_MS = 10 * 60 * 1000; // TB/step frozen this long (trainer alive) ⇒ stalled
+
+const HISTORY_MAX_POINTS = 500; // default per-series bucket cap for the history endpoint
+const HISTORY_HARD_CAP = 2000; // ceiling a caller can request
 
 const MAX_HISTORY = 200;
 const MAX_METRICS = 64;
+
+/** Derived, server-side status. `running/stale/dead` are age-compatible with the
+ *  old age-only values; the rest are new hb-derived signals. */
+export type ExpStatus = 'running' | 'starting' | 'stalled' | 'dead-trainer' | 'stale' | 'dead';
 
 export interface PushHandler {
   POST(req: Request): Promise<Response>;
 }
 export interface ListHandler {
+  GET(req: Request): Promise<Response>;
+}
+export interface HistoryHandler {
   GET(req: Request): Promise<Response>;
 }
 
@@ -112,7 +123,20 @@ function parsePush(raw: unknown): { id: string; name: string; payload: ExpPayloa
     };
   }
 
-  return { id, name, payload: { metrics, history_natural, ws_public, box } };
+  // hb is additive: a legacy pusher omits it and the list endpoint falls back to
+  // age-only status. Every field is optional and independently defaulted.
+  let hb: ExpHeartbeat | null = null;
+  if (o.hb && typeof o.hb === 'object') {
+    const h = o.hb as Record<string, unknown>;
+    hb = {
+      trainer_alive: typeof h.trainer_alive === 'boolean' ? h.trainer_alive : null,
+      tb_last_write: isFiniteNum(h.tb_last_write) ? h.tb_last_write : null,
+      step: isFiniteNum(h.step) ? h.step : null,
+      config_hash: typeof h.config_hash === 'string' ? h.config_hash.slice(0, 64) : null,
+    };
+  }
+
+  return { id, name, payload: { metrics, history_natural, ws_public, box, hb } };
 }
 
 export function createPushHandler(
@@ -140,16 +164,74 @@ export function createPushHandler(
       if (!limiter.allow(push.id, now())) {
         return error(429, 'rate_limited', 'too many pushes for this id (max 60/min)');
       }
-      await store.upsert(push.id, push.name, push.payload, now());
+      const t = now();
+      // Resolve the run's step from the heartbeat first (explicit), else from the
+      // metrics blob (where legacy pushers keep it).
+      const step = resolveStep(push.payload);
+      const { stepChanged } = await store.upsert(push.id, push.name, push.payload, step, t);
+      // Archive a time-series sample only when the step advanced — a stalled box
+      // re-pushing the same scalars must not spam duplicate rows.
+      if (stepChanged && step != null) {
+        await store.insertSample({ expId: push.id, ts: t, step, metrics: push.payload.metrics });
+      }
       return json(200, { ok: true });
     },
   };
 }
 
-function statusFromAge(ageMs: number): 'running' | 'stale' | 'dead' {
-  if (ageMs <= RUNNING_MS) return 'running';
-  if (ageMs <= STALE_MS) return 'stale';
-  return 'dead';
+/** The step for a push: hb.step wins (explicit), else metrics.step. */
+function resolveStep(payload: ExpPayload): number | null {
+  if (payload.hb && isFiniteNum(payload.hb.step)) return payload.hb.step;
+  const m = payload.metrics ?? {};
+  return isFiniteNum(m.step) ? m.step : null;
+}
+
+function minutes(ms: number): number {
+  return Math.round(ms / 60_000);
+}
+
+/** Server-side status from DISTINCT signals (v2 goal 1), not one age:
+ *  - dead   : no push for >30 min (preempted / box gone)
+ *  - stale  : no push for 5–30 min (network blip / box mid-cycle)
+ *  - (fresh push, hb present:)
+ *      dead-trainer : trainer process not found
+ *      starting     : trainer up but no scalars/step yet
+ *      stalled      : trainer up but TB/step frozen ≥10 min (the hung-trainer bug)
+ *      running      : trainer up and step advancing
+ *  - (fresh push, no hb:) running — legacy pusher, age-only like before. */
+function deriveStatus(row: ExpRow, now: number): { status: ExpStatus; reason: string } {
+  const ageMs = now - row.updatedAt;
+  if (ageMs > STALE_MS) return { status: 'dead', reason: `no push for ${minutes(ageMs)}m` };
+  if (ageMs > RUNNING_MS) return { status: 'stale', reason: `last push ${minutes(ageMs)}m ago` };
+
+  const hb = row.payload?.hb ?? null;
+  if (!hb) return { status: 'running', reason: 'fresh push (legacy pusher, no heartbeat)' };
+
+  if (hb.trainer_alive === false) {
+    return { status: 'dead-trainer', reason: 'fresh push but train.py not running on the box' };
+  }
+
+  const step = row.lastStep ?? hb.step ?? null;
+  if (step == null) {
+    return { status: 'starting', reason: 'trainer up, no TB scalars yet' };
+  }
+
+  // Freeze detection: prefer the box's own TB events-file mtime (truthful even
+  // right after a server restart, when step_changed_at hasn't warmed up yet);
+  // fall back to our cross-push step-progress tracking.
+  const frozenMs =
+    hb.tb_last_write != null
+      ? now - hb.tb_last_write * 1000
+      : row.stepChangedAt != null
+        ? now - row.stepChangedAt
+        : 0;
+  if (frozenMs > FROZEN_MS) {
+    return {
+      status: 'stalled',
+      reason: `step ${step} frozen ${minutes(frozenMs)}m (trainer alive)`,
+    };
+  }
+  return { status: 'running', reason: `step ${step} advancing` };
 }
 
 export function createListHandler(
@@ -168,10 +250,12 @@ export function createListHandler(
         const step = isFiniteNum(metrics.step) ? metrics.step : null;
         const box = p.box ?? { gpu: 'GPU', dph: 0 };
         const wsPublic = p.ws_public ?? null;
+        const { status, reason } = deriveStatus(r, t);
         return {
           id: r.id,
           name: r.name,
-          status: statusFromAge(t - r.updatedAt),
+          status,
+          status_reason: reason,
           last_update: new Date(r.updatedAt).toISOString(),
           step,
           metrics,
@@ -185,6 +269,123 @@ export function createListHandler(
         };
       });
       return json(200, { generated_at: new Date(t).toISOString(), experiments });
+    },
+  };
+}
+
+/** One downsampled point in a history series: bucket-averaged metrics at a step. */
+interface HistoryPoint {
+  step: number | null;
+  ts: string;
+  metrics: Record<string, number>;
+}
+
+/** Average the numeric metric keys of a bucket of raw samples into one point. */
+function bucketAverage(
+  bucket: { step: number | null; ts: number; metrics: Record<string, number> }[],
+): HistoryPoint {
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  let stepSum = 0;
+  let stepCount = 0;
+  let tsSum = 0;
+  for (const s of bucket) {
+    if (s.step != null) {
+      stepSum += s.step;
+      stepCount++;
+    }
+    tsSum += s.ts;
+    for (const [k, v] of Object.entries(s.metrics)) {
+      if (!isFiniteNum(v)) continue;
+      sums[k] = (sums[k] ?? 0) + v;
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+  }
+  const metrics: Record<string, number> = {};
+  for (const k of Object.keys(sums)) metrics[k] = sums[k] / counts[k];
+  return {
+    step: stepCount > 0 ? Math.round(stepSum / stepCount) : null,
+    ts: new Date(Math.round(tsSum / bucket.length)).toISOString(),
+    metrics,
+  };
+}
+
+/** Downsample a step-ordered series to at most `maxPoints`, averaging within
+ *  equal-count buckets. If `bucketStep` is given, bucket by step-value windows
+ *  of that size instead (server-side step bucketing per the design doc). */
+function bucketSeries(
+  samples: { step: number | null; ts: number; metrics: Record<string, number> }[],
+  maxPoints: number,
+  bucketStep: number | null,
+): HistoryPoint[] {
+  if (samples.length === 0) return [];
+  if (bucketStep && bucketStep > 0) {
+    const groups = new Map<number, typeof samples>();
+    for (const s of samples) {
+      const key = s.step == null ? -1 : Math.floor(s.step / bucketStep);
+      const arr = groups.get(key) ?? [];
+      arr.push(s);
+      groups.set(key, arr);
+    }
+    return [...groups.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, bucket]) => bucketAverage(bucket));
+  }
+  if (samples.length <= maxPoints) return samples.map((s) => bucketAverage([s]));
+  const out: HistoryPoint[] = [];
+  const size = samples.length / maxPoints;
+  for (let i = 0; i < maxPoints; i++) {
+    const lo = Math.floor(i * size);
+    const hi = Math.min(samples.length, Math.floor((i + 1) * size));
+    if (hi > lo) out.push(bucketAverage(samples.slice(lo, hi)));
+  }
+  return out;
+}
+
+function parseIntParam(v: string | null): number | null {
+  if (v == null) return null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** GET /api/experiments-history?id=<expId>[&ids=a,b][&bucket=<stepWindow>]
+ *    [&from=<step>][&to=<step>][&max_points=<n>]
+ *  Returns server-side-bucketed time-series per id: { series: { <id>: [ ... ] } }.
+ *  x-axis is step (the scientifically useful cross-run comparison). */
+export function createHistoryHandler(store: ExperimentsStore): HistoryHandler {
+  return {
+    async GET(req: Request): Promise<Response> {
+      const url = new URL(req.url);
+      const idsParam = [
+        ...(url.searchParams.get('id') ? [url.searchParams.get('id')!] : []),
+        ...(url.searchParams.get('ids') ?? '').split(',').map((s) => s.trim()),
+      ].filter((s) => s.length > 0);
+      const ids = [...new Set(idsParam)].slice(0, 8);
+      if (ids.length === 0) {
+        return error(400, 'bad_request', 'supply ?id=<experiment id> (or ?ids=a,b)');
+      }
+      const bucketStep = parseIntParam(url.searchParams.get('bucket'));
+      const fromStep = parseIntParam(url.searchParams.get('from'));
+      const toStep = parseIntParam(url.searchParams.get('to'));
+      const maxPoints = Math.min(
+        parseIntParam(url.searchParams.get('max_points')) ?? HISTORY_MAX_POINTS,
+        HISTORY_HARD_CAP,
+      );
+
+      const raw = await store.listSamples({ ids, fromStep, toStep });
+      const byId = new Map<
+        string,
+        { step: number | null; ts: number; metrics: Record<string, number> }[]
+      >();
+      for (const id of ids) byId.set(id, []);
+      for (const s of raw) {
+        (byId.get(s.expId) ?? []).push({ step: s.step, ts: s.ts, metrics: s.metrics });
+      }
+      const series: Record<string, HistoryPoint[]> = {};
+      for (const id of ids) {
+        series[id] = bucketSeries(byId.get(id) ?? [], maxPoints, bucketStep);
+      }
+      return json(200, { series });
     },
   };
 }

@@ -38,6 +38,26 @@ function resolveWsUrl(): string {
   return `ws://${host}:8765`;
 }
 
+// ?isaacviewer&exp=<id> — resolve a training stream by experiment id via the fleet
+// feed instead of a hardwired ?ws=. Mirrors the ?experiments dashboard so a link
+// survives the box cycling (the ws url changes; the exp id doesn't). Local dev and
+// the trycloudflare tunnel read /experiments.json; everything else reads the pushed
+// /api/experiments feed — identical to ExperimentsDashboard.feedUrl().
+function viewerFeedUrl(): string {
+  const h = location.hostname;
+  const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h.endsWith('.local');
+  const isTunnel = h.endsWith('trycloudflare.com');
+  return isLocal || isTunnel ? '/experiments.json' : '/api/experiments';
+}
+// ws_public on a *.trycloudflare.com host (phone/off-LAN), else ws_local with a
+// ws_public fallback (prefer LAN, fall back to the public tunnel). Mirrors the
+// dashboard's wsUrlFor. null => this row has no reachable stream yet.
+function wsUrlForRow(row: { ws_local?: string | null; ws_public?: string | null }): string | null {
+  const onTunnel = location.hostname.endsWith('trycloudflare.com');
+  const url = onTunnel ? row.ws_public : (row.ws_local ?? row.ws_public);
+  return url && url.length ? url : null;
+}
+
 // ?miku — which dancer slot renders as the VRM anime avatar instead of a capsule
 // skeleton. Default slot 0. `?miku=off` disables (all capsules). `?miku=N` picks
 // slot N. `?vrmurl=` overrides the .vrm asset (drop any .vrm in public/models/).
@@ -307,7 +327,15 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     let playbackInit = false;
     let rateEst = 1; // rolling estimate of sim-seconds per wall-second
     const rateSamples: { tRecv: number; tSim: number }[] = [];
-    const wsAddr = resolveWsUrl();
+    // ?ws= wins over ?exp= (power-user override, unchanged 1500ms static retry).
+    // exp mode: no ?ws=, but ?exp=<id> is present — resolve the ws url from the feed
+    // and re-resolve on every reconnect (the box may have cycled to a new url).
+    const expId = new URLSearchParams(location.search).get('exp');
+    const expMode = !previewMode && !!expId;
+    // Mutable so exp-mode reconnects can retarget a freshly-resolved url; the ?ws=
+    // path leaves this at the static resolveWsUrl() value forever.
+    let currentWsAddr = resolveWsUrl();
+    let expBackoff = 10_000; // exp-mode reconnect backoff (10→20→40→60→60…, ms)
     const mikuSlot = resolveMikuSlot();
     const vrmUrl = resolveVrmUrl();
     // Optional VRM avatar for one dancer slot (graceful capsule fallback on failure).
@@ -774,16 +802,18 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     };
 
     // ---- WebSocket ----------------------------------------------------------
-    const connect = () => {
+    // Opens a socket to currentWsAddr and wires the handlers. In exp mode the url is
+    // resolved from the feed first (connect → resolveThenOpen → openSocket).
+    const openSocket = () => {
       if (disposed) return;
       try {
-        ws = new WebSocket(wsAddr);
+        ws = new WebSocket(currentWsAddr);
       } catch {
         scheduleReconnect();
         return;
       }
       ws.onopen = () => {
-        setHud('CONNECTED — waiting for frames', '#8fead0', wsAddr);
+        setHud('CONNECTED — waiting for frames', '#8fead0', currentWsAddr);
         // Review mode kicks the source into single-clip mode. On (re)connect, seat
         // it at the clip we're currently on (0 on first load) so a dropped socket
         // doesn't reset the user's position.
@@ -862,6 +892,9 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         if (msg.seq === lastSeq) return;
         lastSeq = msg.seq;
         lastRecvAt = performance.now() / 1000;
+        // Frames are flowing — the stream is healthy, so reset exp-mode backoff so
+        // the next box-cycle reconnect starts fast again (10s) rather than at 60s.
+        expBackoff = 10_000;
         if (msg.k !== builtK) {
           buildDancers(msg.k);
           snap = new Float32Array(msg.k * NUM_BODIES * 3);
@@ -911,14 +944,75 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         }
       };
     };
+    // exp mode: (re)fetch the fleet feed, find our row, re-resolve its ws url (it may
+    // have changed because the box cycled), then open. Feed/row/url failures fall
+    // through to a backed-off retry with an explanatory HUD.
+    const resolveThenOpen = async () => {
+      if (disposed) return;
+      try {
+        const res = await fetch(`${viewerFeedUrl()}?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) {
+          scheduleReconnect();
+          return;
+        }
+        const data = (await res.json()) as {
+          experiments?: { id?: string; ws_local?: string | null; ws_public?: string | null }[];
+        };
+        if (disposed) return;
+        const row = (data.experiments ?? []).find((e) => e && e.id === expId);
+        if (!row) {
+          setHud('WAITING', '#e6a15a', `waiting for ${expId} to appear in the fleet feed`);
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = window.setTimeout(connect, nextExpDelay());
+          return;
+        }
+        const url = wsUrlForRow(row);
+        if (!url) {
+          setHud('WAITING', '#e6a15a', `no stream url for ${expId} yet — box may be provisioning`);
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = window.setTimeout(connect, nextExpDelay());
+          return;
+        }
+        currentWsAddr = url;
+      } catch {
+        if (disposed) return;
+        scheduleReconnect();
+        return;
+      }
+      if (disposed) return;
+      openSocket();
+    };
+
+    // Consume one step of the exp-mode backoff schedule (10→20→40→60→60…).
+    const nextExpDelay = (): number => {
+      const delay = expBackoff;
+      expBackoff = Math.min(expBackoff * 2, 60_000);
+      return delay;
+    };
+
+    const connect = () => {
+      if (disposed) return;
+      if (expMode) {
+        void resolveThenOpen();
+        return;
+      }
+      openSocket();
+    };
+
     const scheduleReconnect = () => {
       if (disposed) return;
+      window.clearTimeout(reconnectTimer);
+      if (expMode) {
+        // Box may be cycling — surface it and retry with exponential backoff.
+        setHud('RECONNECTING', '#e6a15a', 'stream reconnecting — box may be cycling');
+        reconnectTimer = window.setTimeout(connect, nextExpDelay());
+        return;
+      }
       setHud(
         'NO STREAM',
         '#e6a15a',
-        `idle — start pose_relay.py, then a source (run_dance_stream.ps1 or pose_fake_source.py). retrying ${wsAddr}…`,
+        `idle — start pose_relay.py, then a source (run_dance_stream.ps1 or pose_fake_source.py). retrying ${currentWsAddr}…`,
       );
-      window.clearTimeout(reconnectTimer);
       reconnectTimer = window.setTimeout(connect, 1500);
     };
 
@@ -1169,7 +1263,7 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
       }
     };
     window.addEventListener('keydown', onKey);
-    setHud('CONNECTING…', '#8fb6ea', wsAddr);
+    setHud('CONNECTING…', '#8fb6ea', expMode ? `exp=${expId}` : currentWsAddr);
 
     return () => {
       disposed = true;

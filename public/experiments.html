@@ -32,6 +32,10 @@
         --stale: #e6c15a;
         --dead: #e0556a;
         --prov: #8fb6ea;
+        --starting: #8fb6ea; /* blue — booting/handshaking */
+        --stalled: #e6915a; /* orange — alive but no progress */
+        --dead-trainer: #c94f8f; /* magenta — trainer process gone */
+        --spark-b: #8fb6ea;
       }
       * {
         box-sizing: border-box;
@@ -194,6 +198,9 @@
 
       const STATUS_META = {
         running: { color: 'var(--running)', label: 'running' },
+        starting: { color: 'var(--starting)', label: 'starting' },
+        stalled: { color: 'var(--stalled)', label: 'stalled' },
+        'dead-trainer': { color: 'var(--dead-trainer)', label: 'dead-trainer' },
         stale: { color: 'var(--stale)', label: 'stale' },
         dead: { color: 'var(--dead)', label: 'dead' },
         unreachable: { color: 'var(--dead)', label: 'unreachable' },
@@ -203,6 +210,10 @@
       let lastPayload = null;
       let lastError = null;
       let fetchedAt = 0;
+      // natural-vs-step history per experiment id (from /api/experiments-history,
+      // refreshed each poll). Empty for an id => that card falls back to its pushed
+      // history array.
+      let histById = {};
 
       const el = (id) => document.getElementById(id);
 
@@ -235,15 +246,31 @@
       // ws_public → in-app Isaac viewer URL (linked out, since this static page
       // is not the SPA). null when there's no stream.
       function streamHref(exp) {
+        // Clickable only when there's a public stream (unchanged gating). When it is,
+        // prefer the stable ?exp=<id> link (the viewer re-resolves the ws from the
+        // feed, surviving box cycles); fall back to a hardwired ?ws=<ws_public>.
         const ws = exp.ws_public;
-        return ws && ws.length ? '/?isaacviewer&ws=' + encodeURIComponent(ws) : null;
+        if (!ws || !ws.length) return null;
+        if (exp.id) return '/?isaacviewer&exp=' + encodeURIComponent(exp.id);
+        return '/?isaacviewer&ws=' + encodeURIComponent(ws);
       }
 
-      function sparkline(data) {
+      // Plots natural over training progress. `points` is [{x:step,y:natural}] from
+      // the history endpoint; when it has <2 finite pairs we fall back to the
+      // index-spaced `arrayData` (the pushed history array).
+      function sparkline(arrayData, points) {
         const W = 168,
           H = 34,
           dpr = window.devicePixelRatio || 1;
-        const pts = (data || []).filter((v) => isFinite(v));
+        let xy;
+        const finitePts = (points || []).filter(
+          (p) => p.x != null && p.y != null && isFinite(p.x) && isFinite(p.y),
+        );
+        if (finitePts.length >= 2) {
+          xy = finitePts;
+        } else {
+          xy = (arrayData || []).filter((v) => isFinite(v)).map((v, i) => ({ x: i, y: v }));
+        }
         const c = document.createElement('canvas');
         c.width = W * dpr;
         c.height = H * dpr;
@@ -251,38 +278,43 @@
         c.style.height = H + 'px';
         const ctx = c.getContext('2d');
         ctx.scale(dpr, dpr);
-        if (pts.length < 2) {
+        if (xy.length < 2) {
           ctx.fillStyle = '#6b7394';
           ctx.font = '11px ui-monospace, monospace';
           ctx.fillText('no history yet', 0, 20);
           return c;
         }
-        const lo = Math.min(...pts),
-          hi = Math.max(...pts);
+        const xsv = xy.map((p) => p.x),
+          ysv = xy.map((p) => p.y);
+        const xlo = Math.min(...xsv),
+          xspan = Math.max(...xsv) - xlo || 1;
+        const lo = Math.min(...ysv),
+          hi = Math.max(...ysv);
         const span = hi - lo || 1,
           pad = span * 0.12;
         const y0 = lo - pad,
           y1 = hi + pad,
           yr = y1 - y0 || 1;
-        const x = (i) => (i / (pts.length - 1)) * (W - 2) + 1;
+        const x = (xv) => ((xv - xlo) / xspan) * (W - 2) + 1;
         const y = (v) => H - 2 - ((v - y0) / yr) * (H - 4);
         // area
         ctx.beginPath();
         ctx.moveTo(1, H - 1);
-        pts.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+        xy.forEach((p) => ctx.lineTo(x(p.x), y(p.y)));
         ctx.lineTo(W - 1, H - 1);
         ctx.closePath();
         ctx.fillStyle = 'rgba(143,234,208,0.10)';
         ctx.fill();
         // line
         ctx.beginPath();
-        pts.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+        xy.forEach((p, i) => (i ? ctx.lineTo(x(p.x), y(p.y)) : ctx.moveTo(x(p.x), y(p.y))));
         ctx.strokeStyle = 'rgba(143,234,208,0.9)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
         // last dot
+        const lastP = xy[xy.length - 1];
         ctx.beginPath();
-        ctx.arc(x(pts.length - 1), y(pts[pts.length - 1]), 2.2, 0, Math.PI * 2);
+        ctx.arc(x(lastP.x), y(lastP.y), 2.2, 0, Math.PI * 2);
         ctx.fillStyle = '#8fead0';
         ctx.fill();
         return c;
@@ -320,6 +352,7 @@
         dot.className = 'dot';
         dot.style.background = meta.color;
         dot.style.boxShadow = '0 0 8px ' + meta.color;
+        dot.title = exp.status_reason || meta.label;
         const name = document.createElement('span');
         name.className = 'name';
         name.textContent = exp.name;
@@ -329,6 +362,7 @@
           t.className = 'tag';
           t.style.color = meta.color;
           t.textContent = meta.label;
+          t.title = exp.status_reason || meta.label;
           head.append(t);
         } else {
           const t = document.createElement('span');
@@ -379,8 +413,9 @@
         const sp = document.createElement('div');
         const spk = document.createElement('span');
         spk.className = 'spark-k';
-        spk.textContent = 'natural (last N)';
-        sp.append(spk, document.createElement('br'), sparkline(exp.history));
+        const pts = (exp.id && histById[exp.id]) || null;
+        spk.textContent = pts && pts.length >= 2 ? 'natural vs step' : 'natural (last N)';
+        sp.append(spk, document.createElement('br'), sparkline(exp.history, pts));
         root.append(sp);
 
         return root;
@@ -435,10 +470,42 @@
           lastPayload = await res.json();
           lastError = null;
           fetchedAt = Date.now();
+          await loadHistory();
         } catch (e) {
           lastError = e && e.message ? e.message : String(e);
         }
         render();
+      }
+
+      // Batch-fetch natural-vs-step history for every id in one request (endpoint
+      // also accepts ids=a,b). Non-fatal: on failure/empty, cards fall back to their
+      // pushed history array. Runs in the same 15s poll as the feed.
+      async function loadHistory() {
+        const exps = (lastPayload && lastPayload.experiments) || [];
+        const ids = exps.map((e) => e.id).filter(Boolean);
+        if (!ids.length) return;
+        try {
+          const res = await fetch(
+            '/api/experiments-history?ids=' +
+              ids.map(encodeURIComponent).join(',') +
+              '&max_points=120&t=' +
+              Date.now(),
+            { cache: 'no-store' },
+          );
+          if (!res.ok) return;
+          const body = await res.json();
+          const s = (body && body.series) || {};
+          const out = {};
+          for (const id of Object.keys(s)) {
+            out[id] = (s[id] || []).map((p) => ({
+              x: p.step,
+              y: p.metrics && p.metrics.natural != null ? p.metrics.natural : null,
+            }));
+          }
+          histById = out;
+        } catch (e) {
+          /* history unavailable this cycle; keep array fallback */
+        }
       }
 
       load();

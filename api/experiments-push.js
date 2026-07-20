@@ -18,6 +18,7 @@ var RATE_WINDOW_MS = 6e4;
 var WINDOW_MS = 24 * 60 * 60 * 1e3;
 var RUNNING_MS = 5 * 60 * 1e3;
 var STALE_MS = 30 * 60 * 1e3;
+var FROZEN_MS = 10 * 60 * 1e3;
 var MAX_HISTORY = 200;
 var MAX_METRICS = 64;
 var RateLimiter = class {
@@ -76,7 +77,17 @@ function parsePush(raw) {
       dph: isFiniteNum(b2.dph) ? b2.dph : 0
     };
   }
-  return { id, name, payload: { metrics, history_natural, ws_public, box } };
+  let hb = null;
+  if (o.hb && typeof o.hb === "object") {
+    const h = o.hb;
+    hb = {
+      trainer_alive: typeof h.trainer_alive === "boolean" ? h.trainer_alive : null,
+      tb_last_write: isFiniteNum(h.tb_last_write) ? h.tb_last_write : null,
+      step: isFiniteNum(h.step) ? h.step : null,
+      config_hash: typeof h.config_hash === "string" ? h.config_hash.slice(0, 64) : null
+    };
+  }
+  return { id, name, payload: { metrics, history_natural, ws_public, box, hb } };
 }
 function createPushHandler(store, token2, now = Date.now) {
   const limiter = new RateLimiter();
@@ -99,10 +110,20 @@ function createPushHandler(store, token2, now = Date.now) {
       if (!limiter.allow(push.id, now())) {
         return error(429, "rate_limited", "too many pushes for this id (max 60/min)");
       }
-      await store.upsert(push.id, push.name, push.payload, now());
+      const t = now();
+      const step = resolveStep(push.payload);
+      const { stepChanged } = await store.upsert(push.id, push.name, push.payload, step, t);
+      if (stepChanged && step != null) {
+        await store.insertSample({ expId: push.id, ts: t, step, metrics: push.payload.metrics });
+      }
       return json(200, { ok: true });
     }
   };
+}
+function resolveStep(payload) {
+  if (payload.hb && isFiniteNum(payload.hb.step)) return payload.hb.step;
+  const m2 = payload.metrics ?? {};
+  return isFiniteNum(m2.step) ? m2.step : null;
 }
 
 // node_modules/@neondatabase/serverless/index.mjs
@@ -5340,6 +5361,7 @@ var export_escapeLiteral = ct.escapeLiteral;
 var export_types = ct.types;
 
 // src/net/experimentsStore.ts
+var SAMPLE_FETCH_CAP = 2e4;
 var SCHEMA = [
   `CREATE TABLE IF NOT EXISTS experiments (
      id         TEXT PRIMARY KEY,
@@ -5348,7 +5370,20 @@ var SCHEMA = [
      updated_at TIMESTAMPTZ NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS experiments_updated
-     ON experiments (updated_at DESC)`
+     ON experiments (updated_at DESC)`,
+  // v2 phase 1: server-side step-progress tracking (additive columns).
+  `ALTER TABLE experiments ADD COLUMN IF NOT EXISTS last_step BIGINT`,
+  `ALTER TABLE experiments ADD COLUMN IF NOT EXISTS step_changed_at TIMESTAMPTZ`,
+  // v2 phase 2: append-only time-series (schema-free metrics, like the row payload).
+  `CREATE TABLE IF NOT EXISTS experiment_samples (
+     exp_id  TEXT        NOT NULL,
+     ts      TIMESTAMPTZ NOT NULL,
+     step    BIGINT,
+     metrics JSONB       NOT NULL,
+     PRIMARY KEY (exp_id, ts)
+   )`,
+  `CREATE INDEX IF NOT EXISTS experiment_samples_exp_step
+     ON experiment_samples (exp_id, step)`
 ];
 var PgExperimentsStore = class {
   sql;
@@ -5362,22 +5397,33 @@ var PgExperimentsStore = class {
     })();
     return this.schemaReady;
   }
-  async upsert(id, name, payload, now) {
+  async upsert(id, name, payload, step, now) {
     await this.ensureSchema();
-    await this.sql.query(
-      `INSERT INTO experiments (id, name, payload, updated_at)
-       VALUES ($1, $2, $3, to_timestamp($4 / 1000.0))
+    const rows = await this.sql.query(
+      `INSERT INTO experiments (id, name, payload, updated_at, last_step, step_changed_at)
+       VALUES ($1, $2, $3, to_timestamp($4 / 1000.0), $5, to_timestamp($4 / 1000.0))
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          payload = EXCLUDED.payload,
-         updated_at = EXCLUDED.updated_at`,
-      [id, name, JSON.stringify(payload), now]
+         updated_at = EXCLUDED.updated_at,
+         last_step = EXCLUDED.last_step,
+         step_changed_at = CASE
+           WHEN experiments.last_step IS DISTINCT FROM EXCLUDED.last_step
+             THEN EXCLUDED.updated_at
+           ELSE experiments.step_changed_at
+         END
+       RETURNING (step_changed_at = updated_at) AS step_changed`,
+      [id, name, JSON.stringify(payload), now, step]
     );
+    return { stepChanged: Boolean(rows[0]?.step_changed) };
   }
   async listRecent(sinceMs) {
     await this.ensureSchema();
     const rows = await this.sql.query(
-      `SELECT id, name, payload, EXTRACT(EPOCH FROM updated_at) * 1000 AS updated_ms
+      `SELECT id, name, payload,
+              EXTRACT(EPOCH FROM updated_at) * 1000 AS updated_ms,
+              last_step,
+              EXTRACT(EPOCH FROM step_changed_at) * 1000 AS step_changed_ms
        FROM experiments
        WHERE updated_at >= to_timestamp($1 / 1000.0)
        ORDER BY updated_at DESC`,
@@ -5387,17 +5433,69 @@ var PgExperimentsStore = class {
       id: r.id,
       name: r.name,
       payload: r.payload,
-      updatedAt: Number(r.updated_ms)
+      updatedAt: Number(r.updated_ms),
+      lastStep: r.last_step == null ? null : Number(r.last_step),
+      stepChangedAt: r.step_changed_ms == null ? null : Number(r.step_changed_ms)
+    }));
+  }
+  async insertSample(sample) {
+    await this.ensureSchema();
+    await this.sql.query(
+      `INSERT INTO experiment_samples (exp_id, ts, step, metrics)
+       VALUES ($1, to_timestamp($2 / 1000.0), $3, $4)
+       ON CONFLICT (exp_id, ts) DO NOTHING`,
+      [sample.expId, sample.ts, sample.step, JSON.stringify(sample.metrics)]
+    );
+  }
+  async listSamples(q) {
+    await this.ensureSchema();
+    const limit = Math.min(q.limit ?? SAMPLE_FETCH_CAP, SAMPLE_FETCH_CAP);
+    const rows = await this.sql.query(
+      `SELECT exp_id, EXTRACT(EPOCH FROM ts) * 1000 AS ts_ms, step, metrics
+       FROM experiment_samples
+       WHERE exp_id = ANY($1)
+         AND ($2::bigint IS NULL OR step >= $2)
+         AND ($3::bigint IS NULL OR step <= $3)
+       ORDER BY exp_id, step ASC NULLS LAST, ts ASC
+       LIMIT $4`,
+      [q.ids, q.fromStep ?? null, q.toStep ?? null, limit]
+    );
+    return rows.map((r) => ({
+      expId: r.exp_id,
+      ts: Number(r.ts_ms),
+      step: r.step == null ? null : Number(r.step),
+      metrics: r.metrics ?? {}
     }));
   }
 };
 var MemoryExperimentsStore = class {
   rows = /* @__PURE__ */ new Map();
-  async upsert(id, name, payload, now) {
-    this.rows.set(id, { id, name, payload, updatedAt: now });
+  samples = [];
+  async upsert(id, name, payload, step, now) {
+    const prev = this.rows.get(id);
+    const stepChanged = !prev || prev.lastStep !== step;
+    this.rows.set(id, {
+      id,
+      name,
+      payload,
+      updatedAt: now,
+      lastStep: step,
+      stepChangedAt: stepChanged ? now : prev?.stepChangedAt ?? now
+    });
+    return { stepChanged };
   }
   async listRecent(sinceMs) {
     return [...this.rows.values()].filter((r) => r.updatedAt >= sinceMs).sort((a2, b2) => b2.updatedAt - a2.updatedAt);
+  }
+  async insertSample(sample) {
+    if (this.samples.some((s) => s.expId === sample.expId && s.ts === sample.ts)) return;
+    this.samples.push(sample);
+  }
+  async listSamples(q) {
+    const ids = new Set(q.ids);
+    return this.samples.filter((s) => ids.has(s.expId)).filter((s) => q.fromStep == null || s.step != null && s.step >= q.fromStep).filter((s) => q.toStep == null || s.step != null && s.step <= q.toStep).sort(
+      (a2, b2) => a2.expId.localeCompare(b2.expId) || (a2.step ?? 0) - (b2.step ?? 0) || a2.ts - b2.ts
+    ).slice(0, Math.min(q.limit ?? SAMPLE_FETCH_CAP, SAMPLE_FETCH_CAP));
   }
 };
 

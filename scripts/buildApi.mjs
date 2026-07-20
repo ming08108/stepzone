@@ -20,6 +20,7 @@ const entries = [
   { in: 'src/net/versusEntry.ts', out: 'versus' },
   { in: 'src/net/experimentsEntry.ts', out: 'experiments' },
   { in: 'src/net/experimentsPushEntry.ts', out: 'experiments-push' },
+  { in: 'src/net/experimentsHistoryEntry.ts', out: 'experiments-history' },
 ];
 
 await Promise.all(
