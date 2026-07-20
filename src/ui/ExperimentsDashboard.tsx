@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
  * ?experiments — live dashboard for the DDR RL training fleet.
@@ -13,8 +13,9 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
  *
  * Polls once every 15 s and renders one card per experiment: status dot, the key
  * DDR metrics, the box it runs on + $/hr, and a mini sparkline of `natural` over
- * the last N samples. Clicking a card that has a stream navigates (same tab) to
- * the existing ?isaacviewer with ?ws pointed at that experiment's relay.
+ * the last N samples. Clicking a card that has a stream opens the live viewer
+ * inline (an <iframe> to ?isaacviewer&exp=<id>) in a preview panel on this same
+ * page; a "full view ↗" link still opens the standalone viewer in a new tab.
  *
  * WS selection: each experiment carries ws_local + ws_public. We use ws_public
  * when the page is served over a *.trycloudflare.com host (phone/off-LAN), else
@@ -99,7 +100,6 @@ const C = {
   stalled: '#e6915a', // orange — alive but no progress (distinct from amber stale)
   deadTrainer: '#c94f8f', // magenta — trainer process gone (distinct from plain dead red)
   spark: '#8fead0',
-  sparkB: '#8fb6ea', // second overlay line
 } as const;
 
 const MONO = '12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -133,6 +133,17 @@ function wsUrlFor(exp: Experiment): string | null {
   const isLocalDev = location.hostname === 'localhost' || location.hostname.startsWith('127.');
   const url = (isLocalDev ? exp.ws_local || exp.ws_public : exp.ws_public || exp.ws_local) ?? null;
   return url && url.length ? url : null;
+}
+
+/** The standalone-viewer URL for an experiment. Prefer the stable ?exp=<id> link
+ *  (IsaacViewer re-resolves the ws from the feed, surviving box cycles); fall back
+ *  to ?ws= if there's no id. null => not viewable. Used both for the inline iframe
+ *  and the "full view" new-tab link. */
+function viewerHref(exp: Experiment): string | null {
+  const ws = wsUrlFor(exp);
+  if (exp.id) return `${location.pathname}?isaacviewer&exp=${encodeURIComponent(exp.id)}`;
+  if (ws) return `${location.pathname}?isaacviewer&ws=${encodeURIComponent(ws)}`;
+  return null;
 }
 
 function fmt(v: number | null | undefined, digits = 2): string {
@@ -215,58 +226,6 @@ function Sparkline({ data, points }: { data?: number[]; points?: { x: number; y:
   );
 }
 
-// ---- overlay comparison chart (inline SVG, prod only) ---------------------
-// Two natural-vs-step series overlaid with distinct colors; used by the run A/B
-// selector. Larger than the per-card sparkline but the same visual language.
-function OverlayChart({ a, b }: { a: { x: number; y: number }[]; b: { x: number; y: number }[] }) {
-  const W = 560;
-  const H = 180;
-  const padX = 6;
-  const padT = 10;
-  const padB = 10;
-  const all = [...a, ...b].filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-  if (all.length < 2) {
-    return (
-      <div style={{ height: H, display: 'flex', alignItems: 'center' }}>
-        <span style={{ color: C.muted, fontSize: 11 }}>pick two runs to overlay</span>
-      </div>
-    );
-  }
-  const xs = all.map((p) => p.x);
-  const ys = all.map((p) => p.y);
-  const xlo = Math.min(...xs);
-  const xspan = Math.max(...xs) - xlo || 1;
-  const lo = Math.min(...ys);
-  const hi = Math.max(...ys);
-  const span = hi - lo || 1;
-  const pd = span * 0.12;
-  const y0 = lo - pd;
-  const yr = hi + pd - y0 || 1;
-  const X = (xv: number) => padX + ((xv - xlo) / xspan) * (W - padX * 2);
-  const Y = (v: number) => H - padB - ((v - y0) / yr) * (H - padT - padB);
-  const path = (s: { x: number; y: number }[]) =>
-    s
-      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
-      .map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`)
-      .join(' ');
-  return (
-    <svg
-      width="100%"
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      style={{ display: 'block', maxWidth: W }}
-      aria-hidden
-    >
-      {a.length >= 2 ? (
-        <path d={path(a)} fill="none" stroke={C.spark} strokeWidth={1.6} opacity={0.9} />
-      ) : null}
-      {b.length >= 2 ? (
-        <path d={path(b)} fill="none" stroke={C.sparkB} strokeWidth={1.6} opacity={0.9} />
-      ) : null}
-    </svg>
-  );
-}
-
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 60 }}>
@@ -278,7 +237,17 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ExperimentCard({ exp, hist }: { exp: Experiment; hist?: HistPoint[] }) {
+function ExperimentCard({
+  exp,
+  hist,
+  selected,
+  onSelect,
+}: {
+  exp: Experiment;
+  hist?: HistPoint[];
+  selected: boolean;
+  onSelect: (exp: Experiment) => void;
+}) {
   const meta = STATUS_META[exp.status] ?? STATUS_META.dead;
   const ws = wsUrlFor(exp);
   const clickable = ws != null && exp.status !== 'provisioning';
@@ -293,17 +262,10 @@ function ExperimentCard({ exp, hist }: { exp: Experiment; hist?: HistPoint[] }) 
 
   const open = () => {
     if (!clickable) return;
-    // Same tab, same query-param convention the app uses (App.tsx routes on
-    // ?isaacviewer). Prefer the stable ?exp=<id> link (IsaacViewer re-resolves the
-    // ws from the feed, surviving box cycles); fall back to ?ws= if there's no id.
-    const target = exp.id
-      ? `${location.pathname}?isaacviewer&exp=${encodeURIComponent(exp.id)}`
-      : ws
-        ? `${location.pathname}?isaacviewer&ws=${encodeURIComponent(ws)}`
-        : null;
-    if (!target) return;
-    location.href = target;
+    onSelect(exp);
   };
+
+  const selBorder = '#4a5aa0';
 
   return (
     <div
@@ -317,8 +279,8 @@ function ExperimentCard({ exp, hist }: { exp: Experiment; hist?: HistPoint[] }) 
         }
       }}
       style={{
-        background: C.panel,
-        border: `1px solid ${C.border}`,
+        background: selected ? C.panelHi : C.panel,
+        border: `1px solid ${selected ? selBorder : C.border}`,
         borderRadius: 10,
         padding: '14px 16px',
         display: 'flex',
@@ -329,12 +291,13 @@ function ExperimentCard({ exp, hist }: { exp: Experiment; hist?: HistPoint[] }) 
         transition: 'background 120ms, border-color 120ms',
       }}
       onMouseEnter={(e) => {
-        if (clickable) {
+        if (clickable && !selected) {
           e.currentTarget.style.background = C.panelHi;
           e.currentTarget.style.borderColor = '#33406e';
         }
       }}
       onMouseLeave={(e) => {
+        if (selected) return;
         e.currentTarget.style.background = C.panel;
         e.currentTarget.style.borderColor = C.border;
       }}
@@ -419,110 +382,85 @@ function ExperimentCard({ exp, hist }: { exp: Experiment; hist?: HistPoint[] }) 
   );
 }
 
-// ---- two-run overlay comparison (React page only, prod hosts only) --------
-// Two dropdowns pick run A / run B by id; below them one chart overlays both runs'
-// natural-vs-step using the history endpoint (?ids=a,b). Distinct colors + legend.
-function OverlayCompare({ experiments }: { experiments: Experiment[] }) {
-  const [a, setA] = useState<string>('');
-  const [b, setB] = useState<string>('');
-  const [ptsA, setPtsA] = useState<{ x: number; y: number }[]>([]);
-  const [ptsB, setPtsB] = useState<{ x: number; y: number }[]>([]);
-
-  const options = experiments.filter((e) => !!e.id);
-
-  useEffect(() => {
-    if (!a && !b) {
-      setPtsA([]);
-      setPtsB([]);
-      return;
-    }
-    let cancelled = false;
-    const ids = [a, b].filter(Boolean);
-    const run = async () => {
-      try {
-        const res = await fetch(
-          `/api/experiments-history?ids=${ids.map(encodeURIComponent).join(',')}&max_points=120&t=${Date.now()}`,
-          { cache: 'no-store' },
-        );
-        if (!res.ok || cancelled) return;
-        const body = (await res.json()) as {
-          series?: Record<string, { step: number | null; metrics?: { natural?: number | null } }[]>;
-        };
-        if (cancelled) return;
-        const pick = (id: string) =>
-          (body.series?.[id] ?? [])
-            .map((p) => ({ x: p.step, y: p.metrics?.natural }))
-            .filter(
-              (p): p is { x: number; y: number } =>
-                p.x != null && p.y != null && Number.isFinite(p.x) && Number.isFinite(p.y),
-            );
-        setPtsA(a ? pick(a) : []);
-        setPtsB(b ? pick(b) : []);
-      } catch {
-        /* keep whatever we have */
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [a, b]);
-
-  const selStyle: CSSProperties = {
-    font: 'inherit',
-    color: C.text,
-    background: C.panel,
-    border: `1px solid ${C.border}`,
-    borderRadius: 6,
-    padding: '4px 8px',
-  };
-  const nameOf = (id: string) => options.find((e) => e.id === id)?.name ?? id;
-
+// ---- inline live-stream preview -------------------------------------------
+// Embeds the standalone IsaacViewer (its own ?isaacviewer entry) in an <iframe>
+// so a click previews the live pose stream on this page instead of navigating.
+// A "full view ↗" link still opens the standalone viewer in a new tab.
+function StreamPreview({ exp, onClose }: { exp: Experiment; onClose: () => void }) {
+  const href = viewerHref(exp);
+  const meta = STATUS_META[exp.status] ?? STATUS_META.dead;
   return (
     <div
       style={{
         background: C.panel,
         border: `1px solid ${C.border}`,
         borderRadius: 10,
-        padding: '14px 16px',
+        padding: '12px 14px',
         marginBottom: 20,
         display: 'flex',
         flexDirection: 'column',
-        gap: 12,
+        gap: 10,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ color: C.dim, fontSize: 12, fontWeight: 600 }}>overlay compare</span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 3, background: C.spark, borderRadius: 2 }} />
-          <select value={a} onChange={(e) => setA(e.target.value)} style={selStyle}>
-            <option value="">run A…</option>
-            {options.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 3, background: C.sparkB, borderRadius: 2 }} />
-          <select value={b} onChange={(e) => setB(e.target.value)} style={selStyle}>
-            <option value="">run B…</option>
-            {options.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span
+          style={{
+            width: 9,
+            height: 9,
+            borderRadius: '50%',
+            background: meta.color,
+            boxShadow: `0 0 8px ${meta.color}`,
+            flex: '0 0 auto',
+          }}
+        />
+        <span style={{ color: C.text, fontSize: 14, fontWeight: 600 }}>{exp.name}</span>
+        <span style={{ color: C.muted, fontSize: 11 }}>live preview</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {href ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: C.dim, fontSize: 11, textDecoration: 'none' }}
+            >
+              full view ↗
+            </a>
+          ) : null}
+          <button
+            onClick={onClose}
+            style={{
+              font: 'inherit',
+              color: C.dim,
+              background: 'transparent',
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              padding: '3px 9px',
+              cursor: 'pointer',
+            }}
+          >
+            close ✕
+          </button>
+        </div>
       </div>
-      {/* legend */}
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        {a ? <span style={{ color: C.spark, fontSize: 11 }}>■ {nameOf(a)}</span> : null}
-        {b ? <span style={{ color: C.sparkB, fontSize: 11 }}>■ {nameOf(b)}</span> : null}
-        <span style={{ color: C.muted, fontSize: 11 }}>natural vs step</span>
-      </div>
-      <OverlayChart a={ptsA} b={ptsB} />
+      {href ? (
+        <iframe
+          key={href}
+          src={href}
+          title={`live stream — ${exp.name}`}
+          style={{
+            width: '100%',
+            height: 420,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            background: C.bg,
+            display: 'block',
+          }}
+        />
+      ) : (
+        <div style={{ color: C.muted, fontSize: 12, padding: '20px 0' }}>
+          no stream URL for this run
+        </div>
+      )}
     </div>
   );
 }
@@ -535,6 +473,11 @@ export function ExperimentsDashboard({ onExit }: { onExit: () => void }) {
   // only). Refreshed in the same 15s poll as the feed; empty for any id => the card
   // falls back to that row's pushed history array.
   const [series, setSeries] = useState<Record<string, HistPoint[]>>({});
+  // Which run's live stream is previewed inline (keyed by id ?? name, matching the
+  // card key). null => no preview panel. Clicking another card switches it.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Dead runs are hidden by default behind a toggle to keep the fleet legible.
+  const [showDead, setShowDead] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -618,6 +561,15 @@ export function ExperimentsDashboard({ onExit }: { onExit: () => void }) {
     () => experiments.filter((e) => e.status === 'running').length,
     [experiments],
   );
+  const keyOf = (e: Experiment) => e.id ?? e.name;
+  // Split off dead runs; only `dead` is hidden by default (stalled/stale/starting
+  // stay visible so a struggling-but-alive box isn't swept under the rug).
+  const deadRuns = useMemo(() => experiments.filter((e) => e.status === 'dead'), [experiments]);
+  const liveRuns = useMemo(() => experiments.filter((e) => e.status !== 'dead'), [experiments]);
+  const visibleRuns = showDead ? experiments : liveRuns;
+  const selectedExp = selectedKey
+    ? (experiments.find((e) => keyOf(e) === selectedKey) ?? null)
+    : null;
 
   return (
     <div
@@ -672,17 +624,10 @@ export function ExperimentsDashboard({ onExit }: { onExit: () => void }) {
           ) : null}
         </div>
 
-        {/* two-run overlay compare — prod hosts only (needs the history endpoint) */}
-        {historyAvailable() ? (
-          experiments.length > 0 ? (
-            <OverlayCompare experiments={experiments} />
-          ) : null
-        ) : (
-          <div style={{ color: C.muted, fontSize: 11, marginBottom: 20 }}>
-            overlay comparison needs the production feed — history charts aren't available on
-            local/tunnel hosts
-          </div>
-        )}
+        {/* inline live-stream preview for the selected run */}
+        {selectedExp ? (
+          <StreamPreview exp={selectedExp} onClose={() => setSelectedKey(null)} />
+        ) : null}
 
         {/* cards */}
         {experiments.length === 0 && !error ? (
@@ -697,15 +642,39 @@ export function ExperimentsDashboard({ onExit }: { onExit: () => void }) {
               gap: 16,
             }}
           >
-            {experiments.map((exp) => (
+            {visibleRuns.map((exp) => (
               <ExperimentCard
-                key={exp.id ?? exp.name}
+                key={keyOf(exp)}
                 exp={exp}
                 hist={exp.id ? series[exp.id] : undefined}
+                selected={selectedKey === keyOf(exp)}
+                onSelect={(e) => setSelectedKey(keyOf(e))}
               />
             ))}
           </div>
         )}
+
+        {/* dead-run reveal — unobtrusive toggle at the bottom of the list */}
+        {deadRuns.length > 0 ? (
+          <div style={{ marginTop: 18 }}>
+            <button
+              onClick={() => setShowDead((v) => !v)}
+              style={{
+                font: 'inherit',
+                color: C.muted,
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1px dotted ${C.border}`,
+                padding: '2px 0',
+                cursor: 'pointer',
+              }}
+            >
+              {showDead
+                ? `hide ${deadRuns.length} dead run${deadRuns.length === 1 ? '' : 's'}`
+                : `show ${deadRuns.length} dead run${deadRuns.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
