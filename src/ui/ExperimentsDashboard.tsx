@@ -560,7 +560,29 @@ export function ExperimentsDashboard({ onExit }: { onExit: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onExit]);
 
-  const experiments = payload?.experiments ?? [];
+  // Stable ordering: the API returns rows in last-push order, which shuffles
+  // card positions on every refresh. Sort by status band, then alphabetically
+  // by id so each card keeps its place between polls.
+  const experiments = useMemo(() => {
+    const rank: Record<string, number> = {
+      running: 0,
+      starting: 1,
+      paused: 2,
+      stalled: 3,
+      'dead-trainer': 4,
+      unreachable: 5,
+      stale: 6,
+      dead: 7,
+    };
+    const rows = [...(payload?.experiments ?? [])];
+    rows.sort((a, b) => {
+      const ra = rank[a.status ?? ''] ?? 8;
+      const rb = rank[b.status ?? ''] ?? 8;
+      if (ra !== rb) return ra - rb;
+      return (a.id ?? a.name ?? '').localeCompare(b.id ?? b.name ?? '');
+    });
+    return rows;
+  }, [payload]);
   const runningCount = useMemo(
     () => experiments.filter((e) => e.status === 'running').length,
     [experiments],
