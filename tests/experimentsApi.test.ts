@@ -123,18 +123,45 @@ describe('list', () => {
     expect(e.history).toEqual([0.1, 0.2, 0.42]);
   });
 
-  it('ages rows: stale <30m, dead older, dropped past 24h', async () => {
-    // Seed rows at explicit ages (upsert takes the timestamp directly).
+  it('ages rows: fresh trusts hb, 150s–15m unreachable, dead older, dropped past 24h', async () => {
+    // Seed rows at explicit ages (upsert takes the timestamp directly). Boxes
+    // push every ~60s, so a 10-min gap means the heartbeat is lost (unreachable),
+    // NOT merely "stale"; a 60-min gap is dead.
     const t0 = now;
     await store.upsert('running', 'r', emptyPayload(), null, t0);
-    await store.upsert('stale', 's', emptyPayload(), null, t0 - 10 * 60 * 1000);
+    await store.upsert('unreachable', 'u', emptyPayload(), null, t0 - 10 * 60 * 1000);
     await store.upsert('dead', 'd', emptyPayload(), null, t0 - 60 * 60 * 1000);
     await store.upsert('gone', 'g', emptyPayload(), null, t0 - 25 * 60 * 60 * 1000);
     const res = await doList();
     const body = (await res.json()) as { experiments: Array<Record<string, unknown>> };
     const byId = Object.fromEntries(body.experiments.map((e) => [e.id, e.status]));
-    expect(byId).toEqual({ running: 'running', stale: 'stale', dead: 'dead' });
+    expect(byId).toEqual({ running: 'running', unreachable: 'unreachable', dead: 'dead' });
     expect(byId.gone).toBeUndefined(); // older than 24h -> not returned
+  });
+
+  it('freshness boundaries: <=150s fresh, just past -> unreachable, past 15m -> dead', async () => {
+    const t0 = now;
+    await store.upsert('fresh', 'f', emptyPayload(), null, t0 - 149 * 1000);
+    await store.upsert('lost', 'l', emptyPayload(), null, t0 - 3 * 60 * 1000);
+    await store.upsert('gone', 'g', emptyPayload(), null, t0 - 16 * 60 * 1000);
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    const byId = Object.fromEntries(body.experiments.map((e) => [e.id, e.status]));
+    // fresh + no hb -> legacy running; lost -> unreachable; gone -> dead.
+    expect(byId).toEqual({ fresh: 'running', lost: 'unreachable', gone: 'dead' });
+  });
+
+  it('a blank desc push does not clobber a stored non-empty desc', async () => {
+    await doPush(sample({ desc: 'TREATMENT arm: original mission' }));
+    await doPush(sample({ desc: null })); // a minimal/booting pusher omitting desc
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].desc).toBe('TREATMENT arm: original mission');
+  });
+
+  it('a blank ws_public push does not clobber a stored non-empty ws_public', async () => {
+    await doPush(sample({ ws_public: 'wss://relay.example/ws' }));
+    await doPush(sample({ ws_public: '' }));
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].ws_public).toBe('wss://relay.example/ws');
   });
 
   it('carries a status_reason string', async () => {
@@ -182,6 +209,20 @@ describe('heartbeat-derived status', () => {
     await doPush(hbSample({ trainer_alive: true, tb_last_write: now / 1000, step: 500 }));
     const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
     expect(body.experiments[0].status).toBe('running');
+  });
+
+  it('starting (not running): fresh + step present but trainer_alive unconfirmed', async () => {
+    await doPush(hbSample({ trainer_alive: null, tb_last_write: now / 1000, step: 500 }));
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].status).toBe('starting');
+  });
+
+  it('paused: hb.paused true is a neutral state, not a failure', async () => {
+    await doPush(
+      hbSample({ trainer_alive: true, tb_last_write: now / 1000, step: 500, paused: true }),
+    );
+    const body = (await (await doList()).json()) as { experiments: Array<Record<string, unknown>> };
+    expect(body.experiments[0].status).toBe('paused');
   });
 
   it('legacy pusher (no hb) still reports running by age', async () => {
