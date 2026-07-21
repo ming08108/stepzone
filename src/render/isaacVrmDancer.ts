@@ -3,9 +3,17 @@
  * one dancer slot in ?isaacviewer renders as a Miku-style anime character instead
  * of a ball-and-tube capsule skeleton.
  *
+ * ── Skeletons ────────────────────────────────────────────────────────────────
+ * Drives either streamed skeleton, selected per-run by the stream's body count via
+ * setBodyCount(): the legacy 15-body humanoid_28, or the 21-body Miku-exact
+ * skeleton (real spine+chest, own neck, clavicles, toes, L-before-R — see
+ * src/render/isaacSkeleton.ts). The richer 21-body joints map onto VRM
+ * spine/chest/neck and the toes bone directly, so the trunk no longer needs a
+ * single lumped bone and the ankle->toe segment articulates the feet.
+ *
  * ── Retarget: position swing + quat twist ───────────────────────────────────
  * Base layer (always on): each VRM bone is *aimed* from its joint toward its child
- * joint using the 15 streamed POSITIONS (a look-at / swing retarget). This is
+ * joint using the streamed POSITIONS (a look-at / swing retarget). This is
  * self-calibrating — the VRM rest reference and the streamed target are built from
  * real geometry with identical formulas — so the classic failure modes can't occur:
  *   - mirrored L/R      : impossible; we use the actual left/right joint 3D coords.
@@ -49,23 +57,60 @@ import { buildClothPhysics } from './vrmCloth';
 
 export const DEFAULT_VRM_URL = '/models/Miku4.vrm';
 
-// Canonical humanoid_28 reduced 15-body order (verified against IsaacViewer's BONES
-// table + pose_stream_format.py). Indices into the streamed per-body position array.
-const B_PELVIS = 0;
-const B_TORSO = 1;
-const B_HEAD = 2;
-const B_R_UPPER_ARM = 3;
-const B_R_LOWER_ARM = 4;
-const B_R_HAND = 5;
-const B_L_UPPER_ARM = 6;
-const B_L_LOWER_ARM = 7;
-const B_L_HAND = 8;
-const B_R_THIGH = 9;
-const B_R_SHIN = 10;
-const B_R_FOOT = 11;
-const B_L_THIGH = 12;
-const B_L_SHIN = 13;
-const B_L_FOOT = 14;
+// The largest body count any layout uses; scratch arrays are sized to this so a
+// mid-session 15 <-> 21 switch never reallocates.
+const MAX_BODIES = 21;
+
+// ── Streamed body indices, per skeleton ──────────────────────────────────────
+// The Isaac pose stream tags each frame with `b` = body count. Two skeletons ship
+// (index orders MUST match CANONICAL_BODY_ORDER_* in the writer,
+// F:\isaac-spike\stream\pose_stream_hook.py — see also src/render/isaacSkeleton.ts):
+//   15 — legacy humanoid_28 reduced skeleton (pelvis, torso, head, R/L arm+leg).
+//   21 — Miku-exact anatomical skeleton: real spine+chest, own neck, clavicles,
+//        toes, L-before-R (rich_skeleton/amp_humanoid_miku.xml). The richer joints
+//        let the trunk drive VRM spine/chest/neck directly (no single lumped bone)
+//        and add an ankle->toe foot bone.
+const B15 = {
+  PELVIS: 0,
+  TORSO: 1,
+  HEAD: 2,
+  R_UPPER_ARM: 3,
+  R_LOWER_ARM: 4,
+  R_HAND: 5,
+  L_UPPER_ARM: 6,
+  L_LOWER_ARM: 7,
+  L_HAND: 8,
+  R_THIGH: 9,
+  R_SHIN: 10,
+  R_FOOT: 11,
+  L_THIGH: 12,
+  L_SHIN: 13,
+  L_FOOT: 14,
+} as const;
+
+const B21 = {
+  PELVIS: 0,
+  SPINE: 1,
+  CHEST: 2,
+  NECK: 3,
+  HEAD: 4,
+  L_CLAVICLE: 5,
+  L_UPPER_ARM: 6,
+  L_LOWER_ARM: 7,
+  L_HAND: 8,
+  R_CLAVICLE: 9,
+  R_UPPER_ARM: 10,
+  R_LOWER_ARM: 11,
+  R_HAND: 12,
+  L_THIGH: 13,
+  L_SHIN: 14,
+  L_FOOT: 15,
+  L_TOE: 16,
+  R_THIGH: 17,
+  R_SHIN: 18,
+  R_FOOT: 19,
+  R_TOE: 20,
+} as const;
 
 /** One aim-driven VRM bone: point it from `parentBody` toward `childBody`. The rig
  *  child node (first existing of `rigChild`, else the bone's first child) supplies
@@ -87,102 +132,269 @@ interface AimSpec {
 }
 
 // Parent-before-child order so each bone's parent world orientation is current when
-// we aim it. Torso: aim the lower spine at the torso body and the neck at the head.
-const AIM_SPECS: readonly AimSpec[] = [
+// we aim it. Legacy 15-body: aim the lower spine at the torso body, the neck at head.
+const AIM_SPECS_15: readonly AimSpec[] = [
   // trunk / head: twist = trunk & head FACING (the primary win of adding quats)
   {
     bone: 'spine',
-    parentBody: B_PELVIS,
-    childBody: B_TORSO,
+    parentBody: B15.PELVIS,
+    childBody: B15.TORSO,
     rigChild: ['chest', 'upperChest', 'neck', 'head'],
-    twistOwn: B_TORSO,
-    twistParent: B_PELVIS,
+    twistOwn: B15.TORSO,
+    twistParent: B15.PELVIS,
     twist: true,
   },
   {
     bone: 'neck',
-    parentBody: B_TORSO,
-    childBody: B_HEAD,
+    parentBody: B15.TORSO,
+    childBody: B15.HEAD,
     rigChild: ['head'],
-    twistOwn: B_HEAD,
-    twistParent: B_TORSO,
+    twistOwn: B15.HEAD,
+    twistParent: B15.TORSO,
     twist: true,
   },
   // arms: forearm twist = pronation (relative to upper arm); upper arm relative to torso
   {
     bone: 'rightUpperArm',
-    parentBody: B_R_UPPER_ARM,
-    childBody: B_R_LOWER_ARM,
+    parentBody: B15.R_UPPER_ARM,
+    childBody: B15.R_LOWER_ARM,
     rigChild: ['rightLowerArm'],
-    twistOwn: B_R_UPPER_ARM,
-    twistParent: B_TORSO,
+    twistOwn: B15.R_UPPER_ARM,
+    twistParent: B15.TORSO,
     twist: true,
   },
   {
     bone: 'rightLowerArm',
-    parentBody: B_R_LOWER_ARM,
-    childBody: B_R_HAND,
+    parentBody: B15.R_LOWER_ARM,
+    childBody: B15.R_HAND,
     rigChild: ['rightHand'],
-    twistOwn: B_R_LOWER_ARM,
-    twistParent: B_R_UPPER_ARM,
+    twistOwn: B15.R_LOWER_ARM,
+    twistParent: B15.R_UPPER_ARM,
     twist: true,
   },
   {
     bone: 'leftUpperArm',
-    parentBody: B_L_UPPER_ARM,
-    childBody: B_L_LOWER_ARM,
+    parentBody: B15.L_UPPER_ARM,
+    childBody: B15.L_LOWER_ARM,
     rigChild: ['leftLowerArm'],
-    twistOwn: B_L_UPPER_ARM,
-    twistParent: B_TORSO,
+    twistOwn: B15.L_UPPER_ARM,
+    twistParent: B15.TORSO,
     twist: true,
   },
   {
     bone: 'leftLowerArm',
-    parentBody: B_L_LOWER_ARM,
-    childBody: B_L_HAND,
+    parentBody: B15.L_LOWER_ARM,
+    childBody: B15.L_HAND,
     rigChild: ['leftHand'],
-    twistOwn: B_L_LOWER_ARM,
-    twistParent: B_L_UPPER_ARM,
+    twistOwn: B15.L_LOWER_ARM,
+    twistParent: B15.L_UPPER_ARM,
     twist: true,
   },
   // legs: shin twist relative to thigh; thigh relative to pelvis
   {
     bone: 'rightUpperLeg',
-    parentBody: B_R_THIGH,
-    childBody: B_R_SHIN,
+    parentBody: B15.R_THIGH,
+    childBody: B15.R_SHIN,
     rigChild: ['rightLowerLeg'],
-    twistOwn: B_R_THIGH,
-    twistParent: B_PELVIS,
+    twistOwn: B15.R_THIGH,
+    twistParent: B15.PELVIS,
     twist: true,
   },
   {
     bone: 'rightLowerLeg',
-    parentBody: B_R_SHIN,
-    childBody: B_R_FOOT,
+    parentBody: B15.R_SHIN,
+    childBody: B15.R_FOOT,
     rigChild: ['rightFoot'],
-    twistOwn: B_R_SHIN,
-    twistParent: B_R_THIGH,
+    twistOwn: B15.R_SHIN,
+    twistParent: B15.R_THIGH,
     twist: true,
   },
   {
     bone: 'leftUpperLeg',
-    parentBody: B_L_THIGH,
-    childBody: B_L_SHIN,
+    parentBody: B15.L_THIGH,
+    childBody: B15.L_SHIN,
     rigChild: ['leftLowerLeg'],
-    twistOwn: B_L_THIGH,
-    twistParent: B_PELVIS,
+    twistOwn: B15.L_THIGH,
+    twistParent: B15.PELVIS,
     twist: true,
   },
   {
     bone: 'leftLowerLeg',
-    parentBody: B_L_SHIN,
-    childBody: B_L_FOOT,
+    parentBody: B15.L_SHIN,
+    childBody: B15.L_FOOT,
     rigChild: ['leftFoot'],
-    twistOwn: B_L_SHIN,
-    twistParent: B_L_THIGH,
+    twistOwn: B15.L_SHIN,
+    twistParent: B15.L_THIGH,
     twist: true,
   },
 ];
+
+// Miku 21-body: with real spine/chest/neck bodies the trunk maps onto VRM
+// spine->chest->neck one-to-one, and a foot->toe segment drives the toes bone.
+// Clavicles are welded rigid to the chest in the source model, so the VRM
+// shoulders are intentionally left at rest (driving them would only reproduce the
+// rest pose and risk a bad-axis read) — same conservative choice as the 15-body rig.
+const AIM_SPECS_21: readonly AimSpec[] = [
+  // trunk: spine carries the waist bend (pelvis->chest), chest the upper-trunk
+  // lean (chest->neck), neck the head. Twist = per-segment FACING.
+  {
+    bone: 'spine',
+    parentBody: B21.PELVIS,
+    childBody: B21.CHEST,
+    rigChild: ['chest', 'upperChest', 'neck', 'head'],
+    twistOwn: B21.SPINE,
+    twistParent: B21.PELVIS,
+    twist: true,
+  },
+  {
+    bone: 'chest',
+    parentBody: B21.CHEST,
+    childBody: B21.NECK,
+    rigChild: ['upperChest', 'neck', 'head'],
+    twistOwn: B21.CHEST,
+    twistParent: B21.SPINE,
+    twist: true,
+  },
+  {
+    bone: 'neck',
+    parentBody: B21.NECK,
+    childBody: B21.HEAD,
+    rigChild: ['head'],
+    twistOwn: B21.NECK,
+    twistParent: B21.CHEST,
+    twist: true,
+  },
+  // arms: forearm twist = pronation (relative to upper arm); upper arm relative to chest
+  {
+    bone: 'rightUpperArm',
+    parentBody: B21.R_UPPER_ARM,
+    childBody: B21.R_LOWER_ARM,
+    rigChild: ['rightLowerArm'],
+    twistOwn: B21.R_UPPER_ARM,
+    twistParent: B21.CHEST,
+    twist: true,
+  },
+  {
+    bone: 'rightLowerArm',
+    parentBody: B21.R_LOWER_ARM,
+    childBody: B21.R_HAND,
+    rigChild: ['rightHand'],
+    twistOwn: B21.R_LOWER_ARM,
+    twistParent: B21.R_UPPER_ARM,
+    twist: true,
+  },
+  {
+    bone: 'leftUpperArm',
+    parentBody: B21.L_UPPER_ARM,
+    childBody: B21.L_LOWER_ARM,
+    rigChild: ['leftLowerArm'],
+    twistOwn: B21.L_UPPER_ARM,
+    twistParent: B21.CHEST,
+    twist: true,
+  },
+  {
+    bone: 'leftLowerArm',
+    parentBody: B21.L_LOWER_ARM,
+    childBody: B21.L_HAND,
+    rigChild: ['leftHand'],
+    twistOwn: B21.L_LOWER_ARM,
+    twistParent: B21.L_UPPER_ARM,
+    twist: true,
+  },
+  // legs: shin twist relative to thigh; thigh relative to pelvis
+  {
+    bone: 'rightUpperLeg',
+    parentBody: B21.R_THIGH,
+    childBody: B21.R_SHIN,
+    rigChild: ['rightLowerLeg'],
+    twistOwn: B21.R_THIGH,
+    twistParent: B21.PELVIS,
+    twist: true,
+  },
+  {
+    bone: 'rightLowerLeg',
+    parentBody: B21.R_SHIN,
+    childBody: B21.R_FOOT,
+    rigChild: ['rightFoot'],
+    twistOwn: B21.R_SHIN,
+    twistParent: B21.R_THIGH,
+    twist: true,
+  },
+  // foot -> toe: articulate the ankle so the foot points along the real foot->toe
+  // direction (toe-off / heel lift now read). Twist off (a toe segment gives no
+  // reliable foot-roll signal).
+  {
+    bone: 'rightFoot',
+    parentBody: B21.R_FOOT,
+    childBody: B21.R_TOE,
+    rigChild: ['rightToes'],
+    twistOwn: B21.R_FOOT,
+    twistParent: B21.R_SHIN,
+    twist: false,
+  },
+  {
+    bone: 'leftUpperLeg',
+    parentBody: B21.L_THIGH,
+    childBody: B21.L_SHIN,
+    rigChild: ['leftLowerLeg'],
+    twistOwn: B21.L_THIGH,
+    twistParent: B21.PELVIS,
+    twist: true,
+  },
+  {
+    bone: 'leftLowerLeg',
+    parentBody: B21.L_SHIN,
+    childBody: B21.L_FOOT,
+    rigChild: ['leftFoot'],
+    twistOwn: B21.L_SHIN,
+    twistParent: B21.L_THIGH,
+    twist: true,
+  },
+  {
+    bone: 'leftFoot',
+    parentBody: B21.L_FOOT,
+    childBody: B21.L_TOE,
+    rigChild: ['leftToes'],
+    twistOwn: B21.L_FOOT,
+    twistParent: B21.L_SHIN,
+    twist: false,
+  },
+];
+
+/** All the streamed body indices the retarget needs, plus its aim table, for one
+ *  skeleton. Selected by the streamed `b` (see `setBodyCount`). */
+interface DancerLayout {
+  nb: number;
+  pelvis: number;
+  up: number; // trunk-up tip: hips-basis up axis is (pelvis -> up)
+  lThigh: number;
+  rThigh: number;
+  lFoot: number;
+  rFoot: number;
+  aims: readonly AimSpec[];
+}
+
+const LAYOUT_15: DancerLayout = {
+  nb: 15,
+  pelvis: B15.PELVIS,
+  up: B15.TORSO,
+  lThigh: B15.L_THIGH,
+  rThigh: B15.R_THIGH,
+  lFoot: B15.L_FOOT,
+  rFoot: B15.R_FOOT,
+  aims: AIM_SPECS_15,
+};
+
+const LAYOUT_21: DancerLayout = {
+  nb: 21,
+  pelvis: B21.PELVIS,
+  up: B21.CHEST,
+  lThigh: B21.L_THIGH,
+  rThigh: B21.R_THIGH,
+  lFoot: B21.L_FOOT,
+  rFoot: B21.R_FOOT,
+  aims: AIM_SPECS_21,
+};
 
 // Safety clamp on the per-bone twist so one bad frame can't fling a candy-wrapper.
 // Generous enough for real head/trunk turns and forearm pronation.
@@ -229,6 +441,9 @@ export class IsaacVrmDancer {
   private readonly url: string;
   private groundOffset = 0;
   private readonly footIK: boolean;
+  // Active skeleton layout (streamed body count). Defaults to the 15-body legacy
+  // skeleton; the live viewer calls setBodyCount() when the stream reports `b`.
+  private layout: DancerLayout = LAYOUT_15;
 
   // rest references (captured once at bind)
   private readonly restHips = new THREE.Vector3();
@@ -253,12 +468,15 @@ export class IsaacVrmDancer {
   private calibrated = false; // set on the first stable frame that carries quats
   private readonly oHips = new THREE.Quaternion(); // const body->bone offset for the pelvis
   private readonly qThree: THREE.Quaternion[] = Array.from(
-    { length: 15 },
+    { length: MAX_BODIES },
     () => new THREE.Quaternion(),
   ); // per-body world orientation in three-space, this frame
 
   // scratch (no per-frame allocation)
-  private readonly p3: THREE.Vector3[] = Array.from({ length: 15 }, () => new THREE.Vector3());
+  private readonly p3: THREE.Vector3[] = Array.from(
+    { length: MAX_BODIES },
+    () => new THREE.Vector3(),
+  );
   private readonly vWorld = new THREE.Vector3();
   private readonly vLocal = new THREE.Vector3();
   private readonly tmpU = new THREE.Vector3();
@@ -390,9 +608,20 @@ export class IsaacVrmDancer {
         .normalize();
     }
 
-    // Resolve aim bones + cache each bone's rest child-direction in its local frame.
+    // Resolve the aim bones for the active layout.
+    this.resolveAims();
+  }
+
+  /** Resolve the active layout's AIM_SPECS into `this.resolved`, caching each
+   *  bone's rest child-direction in its local frame. Rebuilt whenever the skeleton
+   *  layout changes (setBodyCount). Bones the VRM lacks are silently skipped. */
+  private resolveAims(): void {
+    const vrm = this.vrm;
+    if (!vrm?.humanoid) return;
+    const humanoid = vrm.humanoid;
+    const node = (b: VRMHumanBoneName) => humanoid.getNormalizedBoneNode(b);
     this.resolved = [];
-    for (const spec of AIM_SPECS) {
+    for (const spec of this.layout.aims) {
       const boneNode = node(spec.bone);
       if (!boneNode) continue;
       let childNode: THREE.Object3D | undefined;
@@ -420,6 +649,18 @@ export class IsaacVrmDancer {
         rrel0: new THREE.Quaternion(),
       });
     }
+  }
+
+  /** Switch the skeleton layout to match the stream's body count (`b`: 15 legacy
+   *  or 21 Miku). Safe to call before the VRM finishes loading — the layout is
+   *  stored and `bindRest`/`resolveAims` pick it up on load. Re-resolves the aim
+   *  bones and forces a fresh twist calibration when it changes live. */
+  setBodyCount(nb: number): void {
+    const next = nb === 21 ? LAYOUT_21 : LAYOUT_15;
+    if (next === this.layout) return;
+    this.layout = next;
+    this.calibrated = false; // re-calibrate twist/facing against the new bodies
+    if (this.ready) this.resolveAims();
   }
 
   /** Body world orientation (Isaac wxyz stored as XYZW at `off`) in three-space:
@@ -455,13 +696,14 @@ export class IsaacVrmDancer {
   }
 
   /**
-   * Retarget one dancer's 15 streamed body positions onto the VRM and settle it.
-   * @param pos    the interpolated snapshot (Float32Array, k*15*3, Isaac world Z-up).
+   * Retarget one dancer's streamed body positions onto the VRM and settle it. The
+   * body count is set by the active layout (setBodyCount): 15 legacy or 21 Miku.
+   * @param pos    the interpolated snapshot (Float32Array, k*nb*3, Isaac world Z-up).
    * @param dancer which dancer slot in `pos`.
    * @param slotX  three-space X offset of this dancer's grid slot.
    * @param slotZ  three-space Z offset of this dancer's grid slot.
    * @param dt     seconds since last frame (for spring bone stepping).
-   * @param quat   optional slerped per-body world quats (k*15*4, XYZW, Isaac Z-up)
+   * @param quat   optional slerped per-body world quats (k*nb*4, XYZW, Isaac Z-up)
    *               enabling the twist/facing layer; null -> swing-only.
    */
   update(
@@ -475,13 +717,14 @@ export class IsaacVrmDancer {
     if (!this.ready || !this.vrm) return;
     const vrm = this.vrm;
     const humanoid = vrm.humanoid!;
-    const base = dancer * 15 * 3;
-    if (base + 15 * 3 > pos.length) return;
-    const base4 = dancer * 15 * 4;
-    const hasQuat = !!quat && base4 + 15 * 4 <= quat.length;
+    const nb = this.layout.nb;
+    const base = dancer * nb * 3;
+    if (base + nb * 3 > pos.length) return;
+    const base4 = dancer * nb * 4;
+    const hasQuat = !!quat && base4 + nb * 4 <= quat.length;
 
-    // 1) Unpack the 15 joints into three-space, offset onto the grid slot (x,z only).
-    for (let j = 0; j < 15; j++) {
+    // 1) Unpack the joints into three-space, offset onto the grid slot (x,z only).
+    for (let j = 0; j < nb; j++) {
       const o = base + j * 3;
       isaacToThree(pos[o], pos[o + 1], pos[o + 2], this.p3[j]);
       this.p3[j].x += slotX;
@@ -489,16 +732,16 @@ export class IsaacVrmDancer {
     }
     // 1b) Per-body world orientations (three-space) for the quat-driven twist/facing.
     if (hasQuat) {
-      for (let j = 0; j < 15; j++) this.bodyQuatThree(quat!, base4, j, this.qThree[j]);
+      for (let j = 0; j < nb; j++) this.bodyQuatThree(quat!, base4, j, this.qThree[j]);
     }
 
-    // 2) Reset every mapped bone to rest so undriven bones (fingers, feet, shoulders,
-    //    chest, toes) hold a clean rest pose instead of last frame's aim.
+    // 2) Reset every mapped bone to rest so undriven bones (fingers, hands,
+    //    shoulders, toes) hold a clean rest pose instead of last frame's aim.
     for (const b of this.allBoneKeys) humanoid.getNormalizedBoneNode(b)?.quaternion.identity();
 
     // 3) Root: stand the avatar so its hips match the streamed pelvis (matches the
     //    capsule pelvis exactly in x/z/height); feet land near the ground.
-    const pelvis = this.p3[B_PELVIS];
+    const pelvis = this.p3[this.layout.pelvis];
     // p3 already includes the slot offset; restHips carries no slot. Place the scene so
     // hipsWorld = pelvis: hipsWorld = scene.pos + restHips (rig-local rest offset). The
     // grounding pass (step 7) may drop baseHipY by a smoothed correction so her feet
@@ -511,8 +754,8 @@ export class IsaacVrmDancer {
     //    short/noisy when the legs close during a spin. So when quats are available we
     //    take the pelvis's FULL world orientation (clean facing through turns) via a
     //    constant body->bone offset O_hips calibrated ONCE off the position basis.
-    this.upT.copy(this.p3[B_TORSO]).sub(pelvis);
-    this.leftT.copy(this.p3[B_L_THIGH]).sub(this.p3[B_R_THIGH]);
+    this.upT.copy(this.p3[this.layout.up]).sub(pelvis);
+    this.leftT.copy(this.p3[this.layout.lThigh]).sub(this.p3[this.layout.rThigh]);
     const basisValid = this.upT.lengthSq() > 1e-8 && this.leftT.lengthSq() > 1e-8;
     if (basisValid) {
       this.basis(this.mRest, this.upRest, this.leftRest);
@@ -523,7 +766,7 @@ export class IsaacVrmDancer {
     }
     // Calibrate the constant offsets on the first stable quat frame.
     if (hasQuat && !this.calibrated && basisValid) {
-      this.oHips.copy(this.rHips).multiply(this.qb.copy(this.qThree[B_PELVIS]).invert());
+      this.oHips.copy(this.rHips).multiply(this.qb.copy(this.qThree[this.layout.pelvis]).invert());
       for (const r of this.resolved) {
         // reference relative orientation: parent^-1 * own
         r.rrel0
@@ -534,7 +777,8 @@ export class IsaacVrmDancer {
     }
     if (basisValid || (hasQuat && this.calibrated)) {
       // hips world orientation: quat path when calibrated, else the position basis.
-      if (hasQuat && this.calibrated) this.rHips.copy(this.oHips).multiply(this.qThree[B_PELVIS]);
+      if (hasQuat && this.calibrated)
+        this.rHips.copy(this.oHips).multiply(this.qThree[this.layout.pelvis]);
       const hips = this.hipsNode;
       if (hips) {
         hips.parent?.getWorldQuaternion(this.pQuat);
@@ -584,8 +828,8 @@ export class IsaacVrmDancer {
     //      - in between -> hold the last target (no pop across the transition).
     //    Smoothed with a ~100 ms lerp and clamped to +-GROUND_MAX.
     if (this.rFootNode && this.lFootNode) {
-      const srcFootR = this.p3[B_R_FOOT].y;
-      const srcFootL = this.p3[B_L_FOOT].y;
+      const srcFootR = this.p3[this.layout.rFoot].y;
+      const srcFootL = this.p3[this.layout.lFoot].y;
       const srcMinFoot = Math.min(srcFootR, srcFootL);
       const vrmFootY = Math.min(
         this.rFootNode.getWorldPosition(this.vFoot).y,
@@ -621,10 +865,12 @@ export class IsaacVrmDancer {
       this.lLowerLeg &&
       this.lFootNode
     ) {
-      const plantR = this.p3[B_R_FOOT].y < PLANT_H;
-      const plantL = this.p3[B_L_FOOT].y < PLANT_H;
-      this.solveLegIK(this.rUpperLeg, this.rLowerLeg, this.rFootNode, this.p3[B_R_FOOT], plantR);
-      this.solveLegIK(this.lUpperLeg, this.lLowerLeg, this.lFootNode, this.p3[B_L_FOOT], plantL);
+      const rFoot = this.layout.rFoot;
+      const lFoot = this.layout.lFoot;
+      const plantR = this.p3[rFoot].y < PLANT_H;
+      const plantL = this.p3[lFoot].y < PLANT_H;
+      this.solveLegIK(this.rUpperLeg, this.rLowerLeg, this.rFootNode, this.p3[rFoot], plantR);
+      this.solveLegIK(this.lUpperLeg, this.lLowerLeg, this.lFootNode, this.p3[lFoot], plantL);
       // propagate the normalized-bone edits to the raw skeleton + world matrices
       humanoid.update();
       vrm.scene.updateMatrixWorld(true);

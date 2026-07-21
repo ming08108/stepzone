@@ -2,6 +2,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { IsaacVrmDancer, DEFAULT_VRM_URL } from '../render/isaacVrmDancer';
+import { MAX_BODIES, layoutForBodies, type SkeletonLayout } from '../render/isaacSkeleton';
 
 /**
  * ?isaacviewer — live viewer for humanoid poses streamed out of an Isaac Lab
@@ -9,21 +10,27 @@ import { IsaacVrmDancer, DEFAULT_VRM_URL } from '../render/isaacVrmDancer';
  *
  * Wire: Isaac trainer (pose_stream_hook) -> pose_stream.bin (mmap) ->
  * pose_relay.py (WebSocket on ws://127.0.0.1:8765) -> this page. Each frame is
- * the first K envs' 15 body positions in per-env LOCAL frame (the hook subtracts
- * each env's grid origin; Isaac Z-up). We draw each env as a clean ball-and-tube
- * skeleton (15 joint spheres + 14 bones) on a dark stage with a ground grid,
+ * the first K envs' `b` body positions in per-env LOCAL frame (the hook subtracts
+ * each env's grid origin; Isaac Z-up). `b` is 15 (legacy humanoid_28) or 21 (the
+ * Miku-exact skeleton) — the viewer reads it per frame and picks the matching bone
+ * table (src/render/isaacSkeleton.ts). We draw each env as a clean ball-and-tube
+ * skeleton (one sphere per body + its bones) on a dark stage with a ground grid,
  * matching the house dancer look. Because bodies are env-local, the future DDR
  * pads (also env-local) will line up with the feet with no extra bookkeeping.
  *
- * The stream is ~15-30 Hz. Three display modes cycle on the P key:
- *   - SMOOTH (default): play by `sim_t` at the rolling-average sim rate, holding
- *     ~1 s of buffer. This absorbs the collect/learn (rollout/update) sawtooth so
- *     motion is fluid instead of freezing ~once a second, and it never starves
- *     because it consumes sim-time at exactly the rate it's produced.
+ * The stream is ~15-30 Hz and the sim is usually SLOWER than real-time (<1x) while
+ * training, so frames arrive slower than the 30 Hz control rate they represent.
+ * Three display modes cycle on the P key:
+ *   - 1X (default): a timestamp-paced jitter buffer. Bank ~PREBUFFER_S of sim-time,
+ *     then play the dance by `sim_t` at TRUE real-time (1.0x) so it looks like a
+ *     real-speed dance, not slow-motion. When the sim runs below 1x the buffer
+ *     drains and it holds/rebuilds the lead (HUD shows "BUFFERING NN%") — real-speed
+ *     motion in chunks instead of the per-frame micro-freezes a naive 1x shows.
+ *   - SMOOTH: play by `sim_t` at the rolling-average sim rate, holding ~1 s of
+ *     buffer. Fluid and continuous, but renders sub-1x motion as slow-motion.
  *   - LIVE: arrival-paced, lowest latency — passes the raw sawtooth through.
- *   - 1X: true realtime by `sim_t` (only meaningful when sim rate >= 1).
- * A live "sim N.Nx" readout is the measured sim-time/wall-time rate; SMOOTH/1X
- * also show buffer depth in seconds.
+ * A live "sim N.Nx" readout is the measured sim-time/wall-time rate; 1X/SMOOTH
+ * also show buffered depth in seconds.
  *
  * Degrades gracefully: with no relay it shows an idle message and keeps
  * retrying the socket; the 3D stage renders regardless.
@@ -87,27 +94,11 @@ function resolveTargetFps(): number {
 // stream frames -- an env reset teleports the dancer, which must read as a clean
 // cut, not a smeared slide.
 const SNAP_JUMP = 0.6;
-const NUM_BODIES = 15;
 
-// Parent -> child pairs over the humanoid_28 reduced 15-body skeleton. Indices
-// match the env's body_names order (pelvis, torso, head, then R/L arm chains,
-// then R/L leg chains). See humanoid_amp_env / humanoid_dance.npz body_names.
-const BONES: ReadonlyArray<readonly [number, number]> = [
-  [0, 1], // pelvis -> torso
-  [1, 2], // torso -> head
-  [1, 3], // torso -> right_upper_arm
-  [3, 4], // right_upper_arm -> right_lower_arm
-  [4, 5], // right_lower_arm -> right_hand
-  [1, 6], // torso -> left_upper_arm
-  [6, 7], // left_upper_arm -> left_lower_arm
-  [7, 8], // left_lower_arm -> left_hand
-  [0, 9], // pelvis -> right_thigh
-  [9, 10], // right_thigh -> right_shin
-  [10, 11], // right_shin -> right_foot
-  [0, 12], // pelvis -> left_thigh
-  [12, 13], // left_thigh -> left_shin
-  [13, 14], // left_shin -> left_foot
-];
+// The skeleton (body count + capsule bone table) is chosen per-frame from the
+// stream's `b` field — 15-body legacy or 21-body Miku — by layoutForBodies().
+// Scratch arrays are sized to MAX_BODIES so a 15 <-> 21 switch never reallocates.
+// See src/render/isaacSkeleton.ts for the two index orders.
 
 // Distinct hue per env so the K dancers read apart.
 const DANCER_HUES = [0.52, 0.08, 0.32, 0.85, 0.15, 0.68, 0.0, 0.45];
@@ -119,6 +110,15 @@ const INTERP_DELAY = 0.07;
 // wall-clock buffer to absorb the collect/learn (rollout/update) sawtooth.
 const BUFFER_S = 1.0;
 const RATE_WINDOW_S = 5.0; // rolling window for the sim-rate estimate
+// 1X mode: a timestamp-paced jitter buffer that plays back at TRUE real-time (1x)
+// regardless of how slowly frames arrive. Bank PREBUFFER_S of sim-time before
+// (re)starting, then advance the playhead at 1.0 sim-s per wall-s. When the sim
+// runs slower than 1x the buffer eventually drains -> re-enter buffering and hold
+// the last frame until the lead is rebuilt (real-speed dance in chunks, not
+// per-frame micro-freezes). If the sim outruns 1x, snap forward past MAX_LEAD_S so
+// latency stays bounded.
+const PREBUFFER_S = 1.5; // sim-seconds of lead to bank before (re)starting 1x playback
+const MAX_LEAD_S = 3.0; // sim-seconds; deeper than this => sim faster than 1x, drop toward latest
 
 interface Frame {
   tRecv: number; // seconds, performance.now()-based (arrival / interp clock)
@@ -127,8 +127,8 @@ interface Frame {
   seq: number;
   step: number; // control-step index
   k: number;
-  pos: Float32Array; // length k*15*3, Isaac world space (Z-up)
-  quat?: Float32Array; // optional length k*15*4, per-body world quat, XYZW, Isaac Z-up
+  pos: Float32Array; // length k*b*3, Isaac world space (Z-up)
+  quat?: Float32Array; // optional length k*b*4, per-body world quat, XYZW, Isaac Z-up
   targets?: EnvTarget[]; // optional DDR pad state, one entry per env
 }
 
@@ -320,11 +320,15 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     let displaySeq = -1; // seq of the last displayed frame (for event catch-up)
     let lastSeq = -1;
     let lastRecvAt = 0;
-    // Review forces LIVE (arrival-paced, no ~1 s SMOOTH jitter buffer) so a clip
-    // switch shows the new dancer within a couple frames instead of a buffer refill.
-    let mode: PlayMode = reviewMode ? 'live' : 'smooth';
+    // Default 1X: the timestamp-paced jitter buffer that plays the dance at true
+    // real-time speed even while the training sim produces frames slower than 1x
+    // (SMOOTH would render that fluid-but-slow; LIVE would pass the sawtooth
+    // through). Review forces LIVE (arrival-paced, no buffer refill) so a clip
+    // switch shows the new dancer within a couple frames.
+    let mode: PlayMode = reviewMode ? 'live' : '1x';
     let playbackSim = 0; // sim-seconds playback clock (SMOOTH / 1X)
     let playbackInit = false;
+    let buffering1x = false; // 1X: currently holding a frame while (re)building the lead
     let rateEst = 1; // rolling estimate of sim-seconds per wall-second
     const rateSamples: { tRecv: number; tSim: number }[] = [];
     // ?ws= wins over ?exp= (power-user override, unchanged 1500ms static retry).
@@ -469,6 +473,10 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     }
     let dancers: Dancer[] = [];
     let builtK = 0;
+    // Active skeleton layout (body count + capsule bones), chosen from the stream's
+    // `b`. Defaults to 15-body legacy until the first frame reports otherwise.
+    let layout: SkeletonLayout = layoutForBodies(undefined);
+    let builtB = layout.nb; // body count the current dancer meshes were built for
     let gridCols = 3; // dancers per row (adapts to K)
     let gridRows = 1;
 
@@ -492,12 +500,12 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         const bones = new THREE.InstancedMesh(
           boneGeo,
           new THREE.MeshStandardNodeMaterial({ color: boneCol, roughness: 0.45, metalness: 0.1 }),
-          BONES.length,
+          layout.bones.length,
         );
         const joints = new THREE.InstancedMesh(
           jointGeo,
           new THREE.MeshStandardNodeMaterial({ color: jointCol, roughness: 0.4, metalness: 0.1 }),
-          NUM_BODIES,
+          layout.nb,
         );
         bones.frustumCulled = false;
         joints.frustumCulled = false;
@@ -590,7 +598,7 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     const jScl = new THREE.Vector3(1, 1, 1);
     const labelPos = new THREE.Vector3(); // scratch: project slot centers to screen
     // per-dancer re-centered joint positions in three-space
-    const jointPos: THREE.Vector3[] = Array.from({ length: NUM_BODIES }, () => new THREE.Vector3());
+    const jointPos: THREE.Vector3[] = Array.from({ length: MAX_BODIES }, () => new THREE.Vector3());
 
     // Copy a frame's per-body quats into dstQ (used at the clamp/snap returns).
     const copyQ = (f: Frame, dstQ: Float32Array | null): void => {
@@ -604,7 +612,7 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         copyQ(a.quat ? a : b, dstQ);
         return;
       }
-      const m = Math.min(dstQ.length, a.quat.length, b.quat.length, kq * NUM_BODIES * 4);
+      const m = Math.min(dstQ.length, a.quat.length, b.quat.length, kq * layout.nb * 4);
       // slerpFlat is typed for number[]; Float32Array is fine at runtime.
       const dstA = dstQ as unknown as number[];
       const aA = a.quat as unknown as number[];
@@ -648,7 +656,7 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
       const span = keyOf(b) - keyOf(a) || 1;
       const t = Math.min(1, Math.max(0, (target - keyOf(a)) / span));
       const k = Math.min(a.k, b.k);
-      const n = Math.min(dst.length, a.pos.length, b.pos.length, k * NUM_BODIES * 3);
+      const n = Math.min(dst.length, a.pos.length, b.pos.length, k * layout.nb * 3);
       // If any coordinate jumped hard between these frames, an env reset teleported
       // a dancer -- don't smear across it, just show the newer frame.
       let jump = 0;
@@ -672,17 +680,19 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
     const keySim = (f: Frame) => f.tSim;
 
     let snap = new Float32Array(0);
-    let snapQ = new Float32Array(0); // slerped per-body quats (k*15*4, XYZW) for the VRM
+    let snapQ = new Float32Array(0); // slerped per-body quats (k*nb*4, XYZW) for the VRM
 
     const updateSkeletons = (k: number, snapPos: Float32Array) => {
+      const nb = layout.nb;
+      const bonePairs = layout.bones;
       for (let d = 0; d < k; d++) {
-        const base = d * NUM_BODIES * 3;
+        const base = d * nb * 3;
         // Bodies arrive in per-env LOCAL frame (the hook subtracts env_origins),
         // so we do NOT re-center on pelvis — we place the env-local coords
         // straight onto the grid slot. This keeps intra-motion root translation
         // and, crucially, keeps feet aligned with the DDR pads (same frame).
         const [sx, sz] = slotOf(d);
-        for (let j = 0; j < NUM_BODIES; j++) {
+        for (let j = 0; j < nb; j++) {
           const o = base + j * 3;
           isaacToThree(snapPos[o + 0], snapPos[o + 1], snapPos[o + 2], jointPos[j]);
           jointPos[j].x += sx;
@@ -690,15 +700,15 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         }
         const dd = dancers[d];
         // joints
-        for (let j = 0; j < NUM_BODIES; j++) {
+        for (let j = 0; j < nb; j++) {
           mat4.compose(jointPos[j], idQ, jScl);
           dd.joints.setMatrixAt(j, mat4);
         }
         dd.joints.instanceMatrix.needsUpdate = true;
         // bones
-        for (let bi = 0; bi < BONES.length; bi++) {
-          pA.copy(jointPos[BONES[bi][0]]);
-          pB.copy(jointPos[BONES[bi][1]]);
+        for (let bi = 0; bi < bonePairs.length; bi++) {
+          pA.copy(jointPos[bonePairs[bi][0]]);
+          pB.copy(jointPos[bonePairs[bi][1]]);
           mid.addVectors(pA, pB).multiplyScalar(0.5);
           dir.subVectors(pB, pA);
           const len = dir.length();
@@ -895,18 +905,24 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
         // Frames are flowing — the stream is healthy, so reset exp-mode backoff so
         // the next box-cycle reconnect starts fast again (10s) rather than at 60s.
         expBackoff = 10_000;
-        if (msg.k !== builtK) {
+        // The stream tags each frame with `b` (15 legacy / 21 Miku). Re-pick the
+        // skeleton layout and rebuild the meshes when either the env count OR the
+        // body count changes (a run swap can change either).
+        if (msg.k !== builtK || msg.b !== builtB) {
+          layout = layoutForBodies(msg.b);
+          builtB = msg.b;
           buildDancers(msg.k);
-          snap = new Float32Array(msg.k * NUM_BODIES * 3);
-          snapQ = new Float32Array(msg.k * NUM_BODIES * 4);
+          snap = new Float32Array(msg.k * layout.nb * 3);
+          snapQ = new Float32Array(msg.k * layout.nb * 4);
+          vrmDancer?.setBodyCount(layout.nb); // keep the VRM retarget's layout in sync
         }
         // Optional per-body world quats (additive field on the relay). Reorder the
         // stream's WXYZ -> three's XYZW so the slerp/retarget can treat them natively.
         let quatArr: Float32Array | undefined;
-        const nq = msg.k * NUM_BODIES * 4;
+        const nq = msg.k * layout.nb * 4;
         if (Array.isArray(msg.quat) && msg.quat.length >= nq) {
           quatArr = new Float32Array(nq);
-          for (let i = 0; i < msg.k * NUM_BODIES; i++) {
+          for (let i = 0; i < msg.k * layout.nb; i++) {
             const s = i * 4;
             quatArr[s + 0] = msg.quat[s + 1]; // x
             quatArr[s + 1] = msg.quat[s + 2]; // y
@@ -1039,6 +1055,10 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
       // slot keeps its capsule skeleton and the HUD carries a note.
       if (mikuSlot >= 0) {
         vrmDancer = new IsaacVrmDancer(scene, vrmUrl);
+        // The socket may already have observed a frame (and switched `layout`)
+        // before the VRM finished constructing — adopt the current body count so a
+        // 21-body run retargets correctly even if the first frame beat us here.
+        vrmDancer.setBodyCount(layout.nb);
         void vrmDancer.load();
       }
 
@@ -1085,25 +1105,50 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
           if (mode === 'live') {
             // arrival-paced: lowest latency, passes the raw sawtooth through
             playbackInit = false;
+            buffering1x = false;
             k = sampleInto(now / 1000 - INTERP_DELAY, keyRecv, snap, wantQ);
-          } else {
-            // SMOOTH paces at the average sim rate; 1X at true realtime (1.0)
-            const pace = mode === '1x' ? 1 : rateEst;
-            const bufSim = BUFFER_S * pace; // sim-seconds of buffer to hold
+          } else if (mode === 'smooth') {
+            // SMOOTH paces at the measured sim rate: fluid, but slow-motion when
+            // the sim is below 1x. Steers the clock to hold ~BUFFER_S of buffer.
+            const bufSim = BUFFER_S * rateEst; // sim-seconds of buffer to hold
+            buffering1x = false;
             if (!playbackInit) {
               playbackSim = Math.max(oldest, newest - bufSim);
               playbackInit = true;
             } else {
-              playbackSim += dt * pace;
-              // SMOOTH: gently steer the clock to keep the buffer near target so
-              // it neither starves nor drifts as the sawtooth breathes.
-              if (mode === 'smooth') {
-                const lag = newest - playbackSim; // sim-seconds behind newest
-                playbackSim += (lag - bufSim) * dt * 0.5;
-              }
+              playbackSim += dt * rateEst;
+              const lag = newest - playbackSim; // sim-seconds behind newest
+              playbackSim += (lag - bufSim) * dt * 0.5;
               if (playbackSim > newest) playbackSim = newest; // starved -> hold
               if (playbackSim < newest - 3 * bufSim - 0.5) playbackSim = newest - bufSim;
               if (playbackSim < oldest) playbackSim = oldest;
+            }
+            k = sampleInto(playbackSim, keySim, snap, wantQ);
+          } else {
+            // 1X: true real-time, timestamp-paced jitter buffer. Bank PREBUFFER_S
+            // of sim-time, then advance the playhead at exactly 1.0 sim-s/wall-s so
+            // the dance plays at real speed. On drain (sim slower than 1x) hold and
+            // rebuffer; on overflow (sim faster than 1x) snap toward latest.
+            if (!playbackInit) {
+              playbackSim = oldest;
+              playbackInit = true;
+              buffering1x = true;
+            }
+            if (buffering1x) {
+              // Hold the current frame until the lead reaches the prebuffer target.
+              if (playbackSim < oldest) playbackSim = oldest; // old frames aged out
+              if (newest - playbackSim >= PREBUFFER_S) buffering1x = false;
+            }
+            if (!buffering1x) {
+              playbackSim += dt; // true 1x pacing by sim-timestamp
+              const lead = newest - playbackSim; // sim-seconds still buffered ahead
+              if (lead <= 0) {
+                playbackSim = newest; // drained -> hold newest and rebuffer
+                buffering1x = true;
+              } else if (lead > MAX_LEAD_S) {
+                playbackSim = newest - PREBUFFER_S; // sim outran 1x -> bound latency
+              }
+              if (playbackSim < oldest) playbackSim = oldest; // frames aged out beneath us
             }
             k = sampleInto(playbackSim, keySim, snap, wantQ);
           }
@@ -1132,7 +1177,7 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
           // target every frame — the user can still orbit/zoom around her.
           if (mikuCam && controls && mikuSlot < k) {
             const [sx, sz] = slotOf(mikuSlot);
-            const base = mikuSlot * NUM_BODIES * 3;
+            const base = mikuSlot * layout.nb * 3;
             isaacToThree(snap[base], snap[base + 1], snap[base + 2], pA); // pelvis
             pA.x += sx;
             pA.z += sz;
@@ -1209,13 +1254,24 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
           if (ws && ws.readyState === WebSocket.OPEN) {
             if (latest && nowS - lastRecvAt < 1.0) {
               const latencyMs = Math.max(0, Date.now() / 1000 - latest.tWall) * 1000;
+              // 1X plays by sim-time at 1x, so its banked lead in sim-seconds ~= the
+              // wall-seconds of playback it can sustain before it must rebuffer.
+              const lead1x = Math.max(0, latest.tSim - playbackSim);
               const tail =
                 mode === 'live'
                   ? `latency ${latencyMs.toFixed(0)} ms`
-                  : `buf ${Math.max(0, (latest.tSim - playbackSim) / Math.max(rateEst, 0.01)).toFixed(1)}s`;
+                  : mode === '1x'
+                    ? `buf ${lead1x.toFixed(1)}s`
+                    : `buf ${Math.max(0, (latest.tSim - playbackSim) / Math.max(rateEst, 0.01)).toFixed(1)}s`;
+              // While the 1X buffer is (re)filling, flag it amber with a % readout so
+              // it's clear the viewer is buffering, not stalled.
+              const buffering = mode === '1x' && buffering1x;
+              const state = buffering
+                ? `BUFFERING ${Math.min(99, Math.round((lead1x / PREBUFFER_S) * 100))}%`
+                : 'LIVE';
               setHud(
-                'LIVE',
-                '#8fead0',
+                state,
+                buffering ? '#e6a15a' : '#8fead0',
                 `seq ${latest.seq} · ${latest.k} dancers · sim ${rateEst.toFixed(2)}x · ` +
                   `${tail} · ${modeLabel} · ${targetFps}fps (P cycles)${mikuNote}`,
               );
