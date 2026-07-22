@@ -205,9 +205,19 @@ function normTargets(raw: unknown): EnvTarget[] | undefined {
   });
 }
 
-/** Isaac world (x, y, z=up) -> three.js (x, z=up, -y), preserving handedness. */
+/** Isaac world (x=fwd, y=left, z=up) -> three.js (Y-up), VRM-aligned: Ry(+90)·Rx(-90) = (-iy, iz, -ix).
+ *  Matches isaacVrmDancer.isaacToThree so the capsule skeleton and the VRM share one frame (the plain
+ *  Rx(-90) mapping sits 90° off the VRM because the MJCF's forward is -Z_gltf, not Isaac +X). */
 function isaacToThree(ix: number, iy: number, iz: number, out: THREE.Vector3): void {
-  out.set(ix, iz, -iy);
+  out.set(-iy, iz, -ix);
+}
+
+/** Debug overlay: make a capsule mesh draw ON TOP of the VRM (disable depth-test) so the skeleton is
+ *  always visible over the mesh. Idempotent; cheap to call each frame. */
+function overlayOnTop(obj: THREE.Object3D): void {
+  const mat = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+  if (!mat) return;
+  for (const m of Array.isArray(mat) ? mat : [mat]) m.depthTest = false;
 }
 
 export function IsaacViewer({ onExit }: { onExit: () => void }) {
@@ -1162,10 +1172,22 @@ export function IsaacViewer({ onExit }: { onExit: () => void }) {
               const [sx, sz] = slotOf(mikuSlot);
               // Pass quats only if the sampled frame actually carried them (new relay)
               // AND twist is enabled; else null -> swing-only (verified fallback).
-              const q = twistEnabled && sampledFrame?.quat ? snapQ : null;
-              vrmDancer.update(snap, mikuSlot, sx, sz, dt, q);
-              cap.bones.visible = false;
-              cap.joints.visible = false;
+              // Exact 1:1 drive from the per-body quaternions when available (0.1mm to the physics
+              // pose); fall back to swing-only aim if quats are absent or twist is toggled off.
+              if (twistEnabled && sampledFrame?.quat) {
+                vrmDancer.poseExact(snap, snapQ, mikuSlot, sx, sz);
+              } else {
+                vrmDancer.update(snap, mikuSlot, sx, sz, dt, null);
+              }
+              // DEBUG OVERLAY: draw this slot's capsule skeleton ON TOP of the VRM (depth-test off,
+              // high render order) so any retargeting mismatch between the physics pose and the VRM is
+              // immediately visible. The capsule uses the same (corrected) isaacToThree as the VRM.
+              cap.bones.visible = true;
+              cap.joints.visible = true;
+              cap.bones.renderOrder = 999;
+              cap.joints.renderOrder = 999;
+              overlayOnTop(cap.bones);
+              overlayOnTop(cap.joints);
             } else {
               cap.bones.visible = true;
               cap.joints.visible = true;

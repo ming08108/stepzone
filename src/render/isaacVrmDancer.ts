@@ -112,6 +112,37 @@ const B21 = {
   R_TOE: 20,
 } as const;
 
+// Exact-quat drive map: each VRM humanoid bone <- the streamed body it rigidly IS, in
+// PARENT-FIRST order. Because the MJCF bind body orientations are all identity, a bone's
+// world orientation is exactly boneRest * q_body(t) (see poseExact). The VRM has an extra
+// upperChest bone (the MJCF has one 'chest' body) so it's driven from the same chest body.
+// Hands/toes ARE driven here (they carry real per-body quats) — unlike the aim path which
+// leaves them at rest. Clavicles are driven too (welded-rigid in source => ~rest anyway).
+const BONE_BODY_21: readonly (readonly [VRMHumanBoneName, number])[] = [
+  ['hips', B21.PELVIS],
+  ['spine', B21.SPINE],
+  ['chest', B21.CHEST],
+  ['upperChest', B21.CHEST],
+  ['neck', B21.NECK],
+  ['head', B21.HEAD],
+  ['leftShoulder', B21.L_CLAVICLE],
+  ['leftUpperArm', B21.L_UPPER_ARM],
+  ['leftLowerArm', B21.L_LOWER_ARM],
+  ['leftHand', B21.L_HAND],
+  ['rightShoulder', B21.R_CLAVICLE],
+  ['rightUpperArm', B21.R_UPPER_ARM],
+  ['rightLowerArm', B21.R_LOWER_ARM],
+  ['rightHand', B21.R_HAND],
+  ['leftUpperLeg', B21.L_THIGH],
+  ['leftLowerLeg', B21.L_SHIN],
+  ['leftFoot', B21.L_FOOT],
+  ['leftToes', B21.L_TOE],
+  ['rightUpperLeg', B21.R_THIGH],
+  ['rightLowerLeg', B21.R_SHIN],
+  ['rightFoot', B21.R_FOOT],
+  ['rightToes', B21.R_TOE],
+];
+
 /** One aim-driven VRM bone: point it from `parentBody` toward `childBody`. The rig
  *  child node (first existing of `rigChild`, else the bone's first child) supplies
  *  the rest direction the aim rotates away from. */
@@ -414,10 +445,13 @@ const HOP_H = 0.15; // BOTH feet above this => clear hop; skip grounding, keep p
 const GROUND_MAX = 0.3; // clamp the vertical hip correction (m)
 const GROUND_TAU = 0.1; // grounding lerp time-constant (~100 ms) — no popping
 
-/** Isaac world (x, y, z=up) -> three (x, z=up, -y). Handedness-preserving (verified),
- *  identical to the mapping IsaacViewer uses for the capsule joints. */
+/** Isaac world (x=fwd, y=left, z=up) -> three (Y-up), ALIGNED TO THE VRM's native facing.
+ *  = Ry(+90°)·Rx(-90°): (ix,iy,iz) -> (-iy, iz, -ix). The plain Rx(-90) mapping (ix,iz,-iy) is
+ *  handedness-correct but lands 90° off from the VRM, because measure_miku_vrm.py built the MJCF
+ *  with forward=-Z_gltf while Isaac's forward is +X. This extra Ry(90) makes the streamed pose sit
+ *  ON the VRM rest geometry 1:1 (arm rest -Z -> -X etc.). Preserves up (Y), so grounding is unaffected. */
 function isaacToThree(ix: number, iy: number, iz: number, out: THREE.Vector3): void {
-  out.set(ix, iz, -iy);
+  out.set(-iy, iz, -ix);
 }
 
 interface ResolvedAim {
@@ -463,6 +497,10 @@ export class IsaacVrmDancer {
   // through the transitional band between planted and hop so it never pops).
   private groundCorr = 0;
   private groundTargetCorr = 0;
+  /** Dynamic foot-grounding pass. With the re-rooted Miku rig (pelvis == VRM hips) the deploy is
+   *  1:1, so grounding can be turned OFF to see the raw pose mapping (used by the retarget debug
+   *  page to verify the rig grounds on its own). Default on for the live training viewer. */
+  public grounding = true;
 
   // quat / twist state
   private calibrated = false; // set on the first stable frame that carries quats
@@ -495,12 +533,16 @@ export class IsaacVrmDancer {
   private readonly rrel = new THREE.Quaternion(); // scratch relative orientation
   private readonly drel = new THREE.Quaternion(); // scratch relative delta since calibration
   private readonly qTwist = new THREE.Quaternion(); // scratch twist rotation
+  // Exact-drive self-check chain (lazy): each driven bone + the body it IS + its rest world quat.
+  private exactChain: { node: THREE.Object3D; body: number; rest: THREE.Quaternion }[] | null =
+    null;
+  private _exactCheck = true; // log the worst bone-vs-clip position error once (self-verify)
   private readonly axisP = new THREE.Vector3(); // bone axis expressed in the parent-body frame
-  // Isaac Z-up -> three Y-up basis change for ROTATIONS: C = Rx(-90). q_three = C q_isaac C^-1.
-  private readonly cIsaacToThree = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(1, 0, 0),
-    -Math.PI / 2,
-  );
+  // Isaac Z-up -> three Y-up basis change for ROTATIONS, matching isaacToThree's Ry(+90)·Rx(-90)
+  // (VRM-aligned). q_three = C q_isaac C^-1.
+  private readonly cIsaacToThree = new THREE.Quaternion()
+    .setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
   private readonly cInv = this.cIsaacToThree.clone().invert();
 
   // ── Foot IK scratch (no per-frame allocation) ──
@@ -661,6 +703,11 @@ export class IsaacVrmDancer {
     this.layout = next;
     this.calibrated = false; // re-calibrate twist/facing against the new bodies
     if (this.ready) this.resolveAims();
+  }
+
+  /** Show/hide the VRM mesh (used by the retarget debug page's VRM toggle). */
+  setVisible(v: boolean): void {
+    if (this.vrm) this.vrm.scene.visible = v;
   }
 
   /** Body world orientation (Isaac wxyz stored as XYZW at `off`) in three-space:
@@ -827,7 +874,7 @@ export class IsaacVrmDancer {
     //        so jumps still read.
     //      - in between -> hold the last target (no pop across the transition).
     //    Smoothed with a ~100 ms lerp and clamped to +-GROUND_MAX.
-    if (this.rFootNode && this.lFootNode) {
+    if (this.grounding && this.rFootNode && this.lFootNode) {
       const srcFootR = this.p3[this.layout.rFoot].y;
       const srcFootL = this.p3[this.layout.lFoot].y;
       const srcMinFoot = Math.min(srcFootR, srcFootL);
@@ -881,6 +928,92 @@ export class IsaacVrmDancer {
     vrm.lookAt?.update(step);
     vrm.expressionManager?.update();
     vrm.springBoneManager?.update(step);
+  }
+
+  /**
+   * EXACT pose drive — reproduces every driven bone's full 3-DOF orientation from the streamed
+   * per-body world quaternion, instead of update()'s lossy aim(2-DOF)+approximate-twist. Valid
+   * because (a) the MJCF bind body orientations are identity, so a bone's world orientation is
+   * exactly boneRest ⊗ q_body(t), and (b) the Miku bone lengths equal the clip segment lengths, so
+   * exact orientations ⇒ exact joint positions (the VRM lands on the raw skeleton). No calibration,
+   * no per-clip twist drift, no "elbow bends backwards". `quat` is XYZW (as update() expects).
+   * Root is placed raw (hips == streamed pelvis); the clips are pre-grounded so feet sit on z=0.
+   */
+  poseExact(pos: Float32Array, quat: Float32Array, dancer = 0, slotX = 0, slotZ = 0): void {
+    if (!this.ready || !this.vrm) return;
+    const vrm = this.vrm;
+    const humanoid = vrm.humanoid!;
+    const nb = this.layout.nb;
+    const base = dancer * nb * 3;
+    const base4 = dancer * nb * 4;
+    if (base + nb * 3 > pos.length || base4 + nb * 4 > quat.length) return;
+
+    // Lazy one-time capture of each driven bone's REST world orientation (identity pose).
+    if (!this.exactChain) {
+      for (const b of this.allBoneKeys) humanoid.getNormalizedBoneNode(b)?.quaternion.identity();
+      vrm.scene.position.set(0, 0, 0);
+      vrm.scene.quaternion.identity();
+      vrm.scene.updateMatrixWorld(true);
+      this.exactChain = [];
+      for (const [name, body] of BONE_BODY_21) {
+        const node = humanoid.getNormalizedBoneNode(name);
+        if (!node) continue;
+        const rest = new THREE.Quaternion();
+        node.getWorldQuaternion(rest);
+        this.exactChain.push({ node, body, rest });
+      }
+    }
+
+    // Unpack positions (with grid-slot offset) + per-body world quats (three-space).
+    for (let j = 0; j < nb; j++) {
+      const o = base + j * 3;
+      isaacToThree(pos[o], pos[o + 1], pos[o + 2], this.p3[j]);
+      this.p3[j].x += slotX;
+      this.p3[j].z += slotZ;
+    }
+    for (let j = 0; j < nb; j++) this.bodyQuatThree(quat, base4, j, this.qThree[j]);
+
+    // Reset all bones, then place the root so VRM hips == streamed pelvis (raw 1:1).
+    for (const b of this.allBoneKeys) humanoid.getNormalizedBoneNode(b)?.quaternion.identity();
+    const pelvis = this.p3[this.layout.pelvis];
+    vrm.scene.position.set(
+      pelvis.x - this.restHips.x,
+      pelvis.y - this.restHips.y,
+      pelvis.z - this.restHips.z,
+    );
+    vrm.scene.updateMatrixWorld(true);
+
+    // EXACT drive: each bone's world orientation = its body's world quat (VRM rest is identity, and
+    // the conversion is now VRM-aligned, so world = q_body reproduces full 3-DOF orientation incl.
+    // axial roll). Parent-first so parentWorld is current. This reproduces both position AND roll 1:1.
+    for (const e of this.exactChain) {
+      this.setWorldQuat(e.node, this.qThree[e.body]);
+      e.node.updateWorldMatrix(false, false);
+    }
+    humanoid.update();
+    vrm.scene.updateMatrixWorld(true);
+    vrm.expressionManager?.update();
+    vrm.springBoneManager?.update(1 / 60);
+
+    // One-time self-check: a correctly driven bone sits at its clip body's world position (bone
+    // lengths match the clip). Reports the worst mismatch so 1:1 is verified, not eyeballed (~0.1mm).
+    if (this._exactCheck) {
+      this._exactCheck = false;
+      let worst = 0;
+      let worstName = '';
+      for (const e of this.exactChain) {
+        e.node.getWorldPosition(this.vFoot);
+        const d = this.vFoot.distanceTo(this.p3[e.body]);
+        if (d > worst) {
+          worst = d;
+          worstName = e.node.name || String(e.body);
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        `[poseExact] worst bone-vs-clip position error = ${(worst * 1000).toFixed(1)} mm (${worstName})`,
+      );
+    }
   }
 
   /** Set a bone node's LOCAL quaternion so its WORLD orientation equals `worldQ`
