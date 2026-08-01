@@ -439,7 +439,10 @@ export function SongSelect({
        ◀▶      difficulty — always, in every pane, in every state
        SELECT  swap the focused pane (LIBRARY ⇄ SONGS)
        START   play (or, from the rail, jump into the songs)
-     Plus, for keyboard players: `/` focuses search, Esc leaves it, F favorites.
+     Plus, for keyboard players: F favorites; click the search box to type
+     (no `/` shortcut — Slash is a default CONFIRM bind, and one key meaning
+     "search" here and "start the song" on the next screen is exactly the
+     inconsistency this redesign exists to remove).
   ------------------------------------------------------------------------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -452,19 +455,14 @@ export function SongSelect({
       const isSwap = e.key === 'Escape' || e.key === 'Shift' || e.key === 'Tab' || role === 'back';
 
       if (typing) {
-        // Search owns typing; Esc/Enter hand the keys back to the list.
-        if (e.key === 'Escape' || isConfirm) {
+        // Search owns typing — every printable key, including ones bound to
+        // roles elsewhere (Slash is a default confirm bind and must still be
+        // typeable). Only literal Esc/Enter hand the keys back to the list.
+        if (e.key === 'Escape' || e.key === 'Enter') {
           e.preventDefault();
           searchRef.current?.blur();
           setPane('list');
         }
-        return;
-      }
-
-      if (e.key === '/') {
-        e.preventDefault();
-        searchRef.current?.focus();
-        searchRef.current?.select();
         return;
       }
 
@@ -575,9 +573,6 @@ export function SongSelect({
             placeholder={`Search ${songs.length.toLocaleString()} songs, artists, packs…`}
             className="min-w-0 flex-1 bg-transparent text-[14px] tracking-[0.04em] outline-none placeholder:text-[#ececec]/40"
           />
-          <span className="border border-white/[0.14] px-[6px] py-px text-[11px] tracking-[0.1em] text-[#ececec]/35">
-            /
-          </span>
         </div>
         <span className="flex-1" />
         <div className="flex items-center gap-5 font-display text-[12px] tracking-[0.12em] text-[#ececec]/50">

@@ -1,5 +1,5 @@
 /**
- * The screen's one key legend — a fixed six-slot footer.
+ * The screen's one key legend — a fixed five-slot footer.
  *
  * The old hint bar re-worded, re-ordered and dropped entries between the pack
  * grid, the song list, the SELECT overlay and room-guest mode, so the same
@@ -9,7 +9,7 @@
  * disappearing — the map never moves under you.
  */
 
-const SLOT_ORDER = ['updown', 'leftright', 'select', 'start', 'fav', 'search'] as const;
+const SLOT_ORDER = ['updown', 'leftright', 'select', 'start', 'fav'] as const;
 export type LegendSlot = (typeof SLOT_ORDER)[number];
 
 const KEYCAP: Record<LegendSlot, string> = {
@@ -18,7 +18,6 @@ const KEYCAP: Record<LegendSlot, string> = {
   select: 'SELECT',
   start: 'START',
   fav: 'F',
-  search: '/',
 };
 
 const DEFAULTS: Record<LegendSlot, string> = {
@@ -27,7 +26,6 @@ const DEFAULTS: Record<LegendSlot, string> = {
   select: 'LIBRARY',
   start: 'PLAY',
   fav: 'FAVORITE',
-  search: 'SEARCH',
 };
 
 /** `null` dims a slot (still shown, still in place); omitted uses the default. */
