@@ -23,9 +23,32 @@ import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficul
 import { useLeaderboard } from './useLeaderboard';
 import { useSettings } from './SettingsContext';
 import { initials, type SongVM } from './songSelectModel';
-import { AC, artGradient, CLEAR_COLOR, CLEAR_LABEL, clearState, FAV_CLR } from './songSelectUi';
+import {
+  AC,
+  artGradient,
+  CLEAR_GLYPH,
+  CLEAR_LABEL,
+  clearState,
+  FAV_CLR,
+  type ClearState,
+} from './songSelectUi';
 
 const SHORT = ['BEG', 'EASY', 'MED', 'HARD', 'EXPERT'] as const;
+
+/** Clear-state chip inks. Brighter than the row-glyph CLEAR_COLORs on purpose:
+ *  the chip sits over banner art, and 'never' at 28% ink was unreadable there.
+ *  (Rings are pre-mixed rgba because CLEAR_COLOR['never'] is itself rgba — a
+ *  hex-suffix alpha like `${c}66` silently breaks on it.) */
+const PILL_INK: Record<ClearState, string> = {
+  cleared: '#59f07f',
+  tried: '#ffcf3d',
+  never: 'rgba(236,236,236,.75)',
+};
+const PILL_RING: Record<ClearState, string> = {
+  cleared: 'rgba(89,240,127,.4)',
+  tried: 'rgba(255,207,61,.4)',
+  never: 'rgba(236,236,236,.25)',
+};
 const GRAPH_LO = '#00adc0';
 const GRAPH_HI = '#8200a1';
 
@@ -190,10 +213,18 @@ export function SongInspector({
               .join(' · ')}
           </div>
         </div>
+        {/* Clear-state chip: solid dark bed + glyph so it stays legible over
+            ANY banner art (the border-only version vanished on bright art). */}
         <span
-          className="absolute top-[12px] right-[16px] border px-[7px] py-[2px] text-[10px] tracking-[0.12em]"
-          style={{ color: CLEAR_COLOR[state], borderColor: `${CLEAR_COLOR[state]}66` }}
+          className="absolute top-[12px] right-[16px] flex items-center gap-[6px] px-[8px] py-[3px] font-display text-[10px] font-semibold tracking-[0.14em] backdrop-blur-[3px]"
+          style={{
+            color: PILL_INK[state],
+            background: 'rgba(8,9,12,.78)',
+            boxShadow: `inset 0 0 0 1px ${PILL_RING[state]}`,
+            borderLeft: `2px solid ${PILL_INK[state]}`,
+          }}
         >
+          <span className="text-[11px] leading-none">{CLEAR_GLYPH[state]}</span>
           {CLEAR_LABEL[state]}
         </span>
       </div>
