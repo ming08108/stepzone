@@ -8,7 +8,6 @@ import {
   applyCollection,
   clearState,
   collectionCounts,
-  CONTINUE_LIMIT,
   packSummaries,
   sameCollection,
 } from '../src/ui/songSelectUi';
@@ -60,10 +59,6 @@ describe('collections', () => {
   const ctx = {
     favs: new Set(['a']),
     diff: 2,
-    lastPlayed: new Map([
-      ['b', 200],
-      ['a', 100],
-    ]),
   };
 
   it('applyCollection filters each kind consistently with collectionCounts', () => {
@@ -72,13 +67,6 @@ describe('collections', () => {
     expect(applyCollection(songs, { kind: 'favorites' }, ctx)).toHaveLength(counts.favorites);
     expect(applyCollection(songs, { kind: 'uncleared' }, ctx)).toHaveLength(counts.uncleared);
     expect(applyCollection(songs, { kind: 'unplayed' }, ctx)).toHaveLength(counts.unplayed);
-    expect(applyCollection(songs, { kind: 'continue' }, ctx)).toHaveLength(counts.continue);
-  });
-
-  it('continue is most-recent-first and capped', () => {
-    const recent = applyCollection(songs, { kind: 'continue' }, ctx);
-    expect(recent.map((s) => s.key)).toEqual(['b', 'a']);
-    expect(CONTINUE_LIMIT).toBeGreaterThan(0);
   });
 
   it('packless songs group under the — pack everywhere', () => {

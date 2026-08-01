@@ -82,7 +82,6 @@ import {
 } from './libraryStore';
 import {
   applyCollection,
-  buildLastPlayed,
   collectionLabel,
   focusStyle,
   sameCollection,
@@ -127,7 +126,7 @@ const saved = {
   diff: 2,
   favOnly: false,
   collection: { kind: 'all' } as Collection,
-  railCursor: 4, // SMART_COLLECTIONS index of 'all'
+  railCursor: 3, // SMART_COLLECTIONS index of 'all'
   pane: 'list' as Pane,
 };
 
@@ -211,7 +210,6 @@ export function SongSelect({
   const stats = useMemo(() => loadStats(), []);
   const scores = useMemo(() => loadScores(), []);
   const bestsBySong = useMemo(() => buildBestsBySong(scores), [scores]);
-  const lastPlayed = useMemo(() => buildLastPlayed(scores), [scores]);
 
   const pendingNames = sources
     .filter((s) => s.enabled && s.permission === 'prompt')
@@ -290,7 +288,7 @@ export function SongSelect({
     [songs, search, minLv, effMaxLv, favOnly, favs, sort, diff],
   );
 
-  const railCtx = useMemo(() => ({ favs, diff, lastPlayed }), [favs, diff, lastPlayed]);
+  const railCtx = useMemo(() => ({ favs, diff }), [favs, diff]);
   const { items: railItems, firstPackIndex } = useMemo(
     () => buildRail(filtered, railCtx),
     [filtered, railCtx],

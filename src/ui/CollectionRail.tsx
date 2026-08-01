@@ -4,8 +4,8 @@
  * This replaces the pack WHEEL (a screen you entered with START and left with a
  * BACK row buried in the SELECT menu). A pack is now a filter that is always
  * visible and always one ▲▼ away, alongside the smart collections that answer
- * the questions players actually ask: what was I just playing, what do I love,
- * what haven't I cleared, what have I never touched.
+ * the questions players actually ask: what do I love, what haven't I cleared,
+ * what have I never touched.
  *
  * Selection uses `focusStyle` — the same treatment as a song row — at full
  * strength when the rail owns the cursor and at half strength when it doesn't,
@@ -35,7 +35,7 @@ export interface RailItem {
 /** Flat, index-addressable rail contents — the cursor is just an index. */
 export function buildRail(
   songs: readonly SongVM[],
-  ctx: { favs: ReadonlySet<string>; diff: number; lastPlayed: Map<string, number> },
+  ctx: { favs: ReadonlySet<string>; diff: number },
 ): { items: RailItem[]; firstPackIndex: number; counts: CollectionCounts } {
   const counts = collectionCounts(songs, ctx);
   const smart: RailItem[] = SMART_COLLECTIONS.map((s) => ({

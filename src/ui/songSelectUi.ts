@@ -13,8 +13,6 @@
  */
 
 import type { CSSProperties } from 'react';
-import type { ChartScore } from '../app/scores';
-import { songKey } from '../app/favorites';
 import type { SongVM } from './songSelectModel';
 
 export const AC = '#ff5d47';
@@ -83,7 +81,6 @@ export function clearState(vm: SongVM, diff: number): ClearState {
 /* ── collections ─────────────────────────────────────────────────────────── */
 
 export type Collection =
-  | { kind: 'continue' }
   | { kind: 'favorites' }
   | { kind: 'uncleared' }
   | { kind: 'unplayed' }
@@ -96,7 +93,6 @@ export const SMART_COLLECTIONS: ReadonlyArray<{
   glyph: string;
   glyphColor: string;
 }> = [
-  { kind: 'continue', label: 'Continue', glyph: '▸', glyphColor: FAV_CLR },
   { kind: 'favorites', label: 'Favorites', glyph: '★', glyphColor: FAV_CLR },
   { kind: 'uncleared', label: 'Not cleared', glyph: '◔', glyphColor: '#ff5c5c' },
   { kind: 'unplayed', label: 'Never played', glyph: '○', glyphColor: 'rgba(236,236,236,.4)' },
@@ -113,27 +109,13 @@ export function sameCollection(a: Collection, b: Collection): boolean {
   return a.kind !== 'pack' || a.pack === (b as { pack: string }).pack;
 }
 
-/** songKey -> most recent `ChartScore.updated`, for the CONTINUE collection. */
-export function buildLastPlayed(scores: Record<string, ChartScore>): Map<string, number> {
-  const m = new Map<string, number>();
-  for (const s of Object.values(scores)) {
-    const k = songKey(s.title, s.artist);
-    const prev = m.get(k) ?? 0;
-    if (s.updated > prev) m.set(k, s.updated);
-  }
-  return m;
-}
-
 /** How many songs each smart collection would show — the rail's count badges. */
 export interface CollectionCounts {
-  continue: number;
   favorites: number;
   uncleared: number;
   unplayed: number;
   all: number;
 }
-
-export const CONTINUE_LIMIT = 12;
 
 /**
  * Apply a collection to an already-filtered song list. Kept separate from
@@ -144,7 +126,7 @@ export const CONTINUE_LIMIT = 12;
 export function applyCollection(
   songs: readonly SongVM[],
   c: Collection,
-  ctx: { favs: ReadonlySet<string>; diff: number; lastPlayed: Map<string, number> },
+  ctx: { favs: ReadonlySet<string>; diff: number },
 ): SongVM[] {
   switch (c.kind) {
     case 'all':
@@ -157,31 +139,23 @@ export function applyCollection(
       return songs.filter((s) => clearState(s, ctx.diff) === 'never');
     case 'uncleared':
       return songs.filter((s) => clearState(s, ctx.diff) === 'tried');
-    case 'continue':
-      return songs
-        .filter((s) => ctx.lastPlayed.has(s.key))
-        .sort((a, b) => (ctx.lastPlayed.get(b.key) ?? 0) - (ctx.lastPlayed.get(a.key) ?? 0))
-        .slice(0, CONTINUE_LIMIT);
   }
 }
 
 export function collectionCounts(
   songs: readonly SongVM[],
-  ctx: { favs: ReadonlySet<string>; diff: number; lastPlayed: Map<string, number> },
+  ctx: { favs: ReadonlySet<string>; diff: number },
 ): CollectionCounts {
   let favorites = 0;
   let uncleared = 0;
   let unplayed = 0;
-  let recent = 0;
   for (const s of songs) {
     if (ctx.favs.has(s.key)) favorites++;
     const st = clearState(s, ctx.diff);
     if (st === 'tried') uncleared++;
     else if (st === 'never') unplayed++;
-    if (ctx.lastPlayed.has(s.key)) recent++;
   }
   return {
-    continue: Math.min(recent, CONTINUE_LIMIT),
     favorites,
     uncleared,
     unplayed,
