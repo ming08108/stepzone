@@ -601,7 +601,10 @@ export class DdrA3GpuSkin implements GpuSkin {
     const { ds } = ctx;
     const cx = ctx.fieldLeft + (ctx.numTracks * ctx.colW) / 2;
     const dir = ctx.reverse ? -1 : 1;
-    const y = ctx.receptorY + dir * 1.38 * ctx.colW;
+    // Just above the combo (3.1·colW), not up at 1.38 where it sat on top of
+    // the arrows approaching the receptors — the judgment + combo read as one
+    // block, and the hit zone stays clear.
+    const y = ctx.receptorY + dir * 2.35 * ctx.colW;
     const squash = age < 0.036 ? 1.5 - 0.5 * (age / 0.036) : 1;
     const px = 37 * ds;
     const pad = 18 * ds;
