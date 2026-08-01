@@ -601,7 +601,7 @@ export function PlayerOptions({
       : versusActive
         ? 'WAITING…'
         : practice.on
-          ? `START PRACTICE M${mStart}–M${mEnd} ▸`
+          ? 'START PRACTICE ▸' // the M range already lives on the loop rows
           : 'START ▸';
 
   return (

@@ -28,8 +28,12 @@ const DEFAULTS: Record<LegendSlot, string> = {
   fav: 'FAVORITE',
 };
 
-/** `null` dims a slot (still shown, still in place); omitted uses the default. */
-export type LegendActions = Partial<Record<LegendSlot, string | null>>;
+/** `null` dims a slot (still shown, still in place); omitted uses the default.
+ *  `{ label, off: true }` dims it with a screen-appropriate label — for screens
+ *  where the song-select defaults would be nonsense (e.g. CALIBRATE). */
+export type LegendActions = Partial<
+  Record<LegendSlot, string | null | { label: string; off: true }>
+>;
 
 /** Screen-specific keyboard-only hints appended AFTER the five fixed slots. */
 export type LegendExtra = { key: string; act: string };
@@ -47,8 +51,13 @@ export function KeyLegend({
     <div className="flex h-[46px] flex-none items-center border-t border-white/[0.09] bg-[#0e0f12] px-[22px] font-display text-[12px] tracking-[0.12em]">
       {SLOT_ORDER.map((slot) => {
         const raw = actions?.[slot];
-        const off = raw === null;
-        const label = off || raw === undefined ? DEFAULTS[slot] : raw;
+        const off = raw === null || (typeof raw === 'object' && raw !== null && raw.off);
+        const label =
+          raw === null || raw === undefined
+            ? DEFAULTS[slot]
+            : typeof raw === 'string'
+              ? raw
+              : raw.label;
         return (
           <span
             key={slot}

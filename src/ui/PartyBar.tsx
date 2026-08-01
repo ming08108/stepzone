@@ -380,24 +380,32 @@ export function PartyBar({
 
           <div className="flex w-[190px] flex-none flex-col items-end gap-2">
             <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 font-display text-[11px] tracking-[0.12em] text-[#ececec]/40">
+              {/* Keycap + verb pairs stay atomic so the 190px column wraps
+                  BETWEEN hints, never inside one. */}
               {entry.k === 'enter' ? (
                 <>
-                  PRESS THE 6 ARROWS ·
-                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
-                    SELECT
+                  <span className="whitespace-nowrap">PRESS THE 6 ARROWS</span>
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                      SELECT
+                    </span>
+                    UNDO
                   </span>
-                  UNDO
                 </>
               ) : (
                 <>
-                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
-                    ◀▶
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                      ◀▶
+                    </span>
+                    CHOOSE
                   </span>
-                  CHOOSE
-                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
-                    START
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                      START
+                    </span>
+                    CONFIRM
                   </span>
-                  CONFIRM
                 </>
               )}
             </span>

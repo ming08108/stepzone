@@ -212,6 +212,10 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
       ? Math.sqrt(rawMs.reduce((a, b) => a + (b - allMean) * (b - allMean), 0) / rawMs.length)
       : null;
   const applyMs = meanMs != null ? Math.round(-meanMs) : null;
+  // The one average the screen talks about. Once the trimmed mean exists it IS
+  // the number APPLY negates — showing the raw mean next to an APPLY built from
+  // the trimmed one reads as two different verdicts on the same taps.
+  const shownMean = meanMs ?? allMean;
 
   const apply = () => {
     if (applyMs == null) return;
@@ -422,7 +426,7 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
               <span className="text-[12px] text-[#ececec]/45">newest brightest</span>
             </div>
             <div className="mt-3">
-              <TapScatter ms={rawMs} meanMs={allMean} height={190} />
+              <TapScatter ms={rawMs} meanMs={shownMean} height={190} />
             </div>
           </div>
 
@@ -431,18 +435,19 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
               <div className="text-[10px] tracking-[0.18em] text-[#ececec]/35">YOUR AVERAGE</div>
               <div
                 className="mt-1 font-display text-[27px] font-bold tabular-nums"
-                style={{ color: allMean != null && Math.abs(allMean) > 5 ? '#ffcf3d' : '#ececec' }}
+                style={{
+                  color: shownMean != null && Math.abs(shownMean) > 5 ? '#ffcf3d' : '#ececec',
+                }}
               >
-                {allMean == null ? '—' : `${allMean >= 0 ? '+' : ''}${Math.round(allMean)} ms`}
+                {shownMean == null
+                  ? '—'
+                  : `${shownMean >= 0 ? '+' : ''}${Math.round(shownMean)} ms`}
               </div>
               <div className="text-[12px] text-[#ececec]/40">
-                {allMean == null
+                {shownMean == null
                   ? 'tap along to measure'
-                  : allMean > 5
-                    ? 'late'
-                    : allMean < -5
-                      ? 'early'
-                      : 'on time'}
+                  : (shownMean > 5 ? 'late' : shownMean < -5 ? 'early' : 'on time') +
+                    (meanMs != null ? ' · outliers trimmed' : '')}
               </div>
             </div>
             <div className="bg-[#0b0c0e] px-4 py-[13px]">
@@ -503,7 +508,7 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
               <div className="mt-3">
                 <TapScatter
                   ms={rawMs.map((v) => v + applyMs)}
-                  meanMs={allMean != null ? allMean + applyMs : null}
+                  meanMs={shownMean != null ? shownMean + applyMs : null}
                   height={84}
                 />
               </div>
@@ -517,8 +522,8 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
 
       <KeyLegend
         actions={{
-          updown: running ? 'TAP THE BEAT' : null,
-          leftright: running ? 'TAP THE BEAT' : null,
+          updown: running ? 'TAP THE BEAT' : { label: 'TAP THE BEAT', off: true },
+          leftright: running ? 'TAP THE BEAT' : { label: 'TAP THE BEAT', off: true },
           select: running ? 'STOP' : 'BACK TO SETTINGS',
           start: running
             ? count >= MIN_TAPS
@@ -526,8 +531,8 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
               : 'TAPPING…'
             : applied === null && count >= MIN_TAPS
               ? 'APPLY'
-              : 'START',
-          fav: null,
+              : 'START TAPPING',
+          fav: { label: 'FAVORITE', off: true },
         }}
       />
     </div>
