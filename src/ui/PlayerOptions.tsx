@@ -1,16 +1,33 @@
 /**
- * STEPLINE Player Options — the per-play screen between song select and
- * gameplay. DDR-style: every how-you-play-this-song mod lives here, each a ◀▶
- * row with a help line for the highlighted option and a live preview that
- * renders the real chart (the real WebGPU note field + Judge on a silent
- * autoplay clock). The everyday rows (difficulty, scroll type, spacing, music rate) sit
- * on top; turn, scroll direction, note skin, and background fold under an
- * ADVANCED row; the practice loop is its own accent-tinted block at the
- * bottom, with a clickable per-measure song map. Rows
- * read/write the one settings store (useSettings) directly — changes apply
- * live, persist, and feed the preview; START hands the chosen chart (plus the
- * per-play practice section, if any) back to play. System-level settings
- * (sync/offset, display, controls) live on the Options screen instead.
+ * PLAY MODS (design 4a "COMMIT") — the screen between song select and gameplay.
+ *
+ * What changed from the old Player Options, and why:
+ *
+ *  · NOTHING HIDDEN. Turn, scroll direction, note skin, background and HUD are
+ *    exactly the mods that ruin a run if left on from last session — they used
+ *    to sit behind an ADVANCED disclosure. All of them are always visible in a
+ *    tile grid, with a coral dot on any that is off default.
+ *  · THE NUMBER MEANS SOMETHING. Scroll speed carries a derived readout in
+ *    units you can feel — "arrows cross the field in 1.9 s, about 5.7 beats on
+ *    screen" — and the three scroll modes are a segmented control, not a
+ *    stepper + three help paragraphs.
+ *  · THE LADDER CARRIES THROUGH. Difficulty is the same five-slot ladder as
+ *    the song-select inspector (same colours), with your grade on each slot —
+ *    not a "◀ Challenge 12 ▶" stepper that forgets what song select showed.
+ *  · YOU COMMIT INFORMED. The right rail carries your PB, the world best, the
+ *    density graph (with the previewed window marked) and the tech counts —
+ *    the context song select had and this screen used to drop.
+ *  · THE PREVIEW SHOWS THE HARD PART. The biggest element on the screen used
+ *    to loop wherever the sample happened to be; "is this speed readable?" is
+ *    only answerable at the hardest passage, so the preview targets the NPS
+ *    peak by default (TAB switches to the opening).
+ *  · THE SONG MAP IS ALWAYS ON. The per-measure density strip used to appear
+ *    only after PRACTICE LOOP was already on. It's always visible; clicking a
+ *    measure sets the loop.
+ *
+ * Same selection language as the rest of the app (songSelectUi.focusStyle, the
+ * fixed KeyLegend). All the room/versus behaviour (announce, ready, force
+ * start, guest rate lock, load handoff) is unchanged.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { previewEncoded, previewPositionSeconds, stopPreview } from '../audio/songPreview';
@@ -25,18 +42,25 @@ import {
   TURNS,
   type PracticeSection,
 } from '../game/playOptions';
+import { computeChartStats } from '../analysis/chartStats';
+import { chartKey, loadScores } from '../app/scores';
 import { songBpmRange } from '../io/songFiles';
 import { noteRowToBeat, TapNoteType } from '../notes/noteTypes';
+import { SPACING } from '../render/scroll';
 import { difficultyToString } from '../song/difficulty';
+import type { Steps } from '../song/steps';
 import { buildAttractConfig } from '../render/attractConfig';
 import type { TimingData } from '../timing/timingData';
 import { keyboardRole } from '../input/inputBus';
-import { bestChartsPerSlot, difficultyColor } from './difficultyUi';
+import { bestChartsPerSlot, DIFF_SLOT_COLORS, difficultySlot } from './difficultyUi';
+import { KeyLegend } from './KeyLegend';
 import { NoteFieldPreview } from './NoteFieldPreview';
+import { PartyBar } from './PartyBar';
 import type { PlayRequest } from './playRequest';
+import { useLeaderboard } from './useLeaderboard';
 import { useSettings } from './SettingsContext';
-import { Stage, STEP_AC as AC } from './Stage';
 import { useGamepadKeys } from './useGamepadKeys';
+import { focusStyle } from './songSelectUi';
 import { pickOf } from './versusResolve';
 import {
   announceSong,
@@ -49,17 +73,30 @@ import {
   subscribeRoom,
 } from './roomStore';
 
+const AC = '#ff5d47';
+const SHORT = ['BEG', 'EASY', 'MED', 'HARD', 'EXPERT'] as const;
+const GRADE_COLOR: Record<string, string> = {
+  AAA: '#ffcf3d',
+  AA: '#59f07f',
+  A: '#59f07f',
+  B: 'rgba(236,236,236,.72)',
+  C: 'rgba(236,236,236,.72)',
+  D: '#ff5c5c',
+};
+
 /** Step to the next/previous entry of a const union array, wrapping. */
 function cycle<T>(list: readonly T[], cur: T, dir: number): T {
   return list[(list.indexOf(cur) + dir + list.length) % list.length];
 }
 
+const TYPE_LABEL = { C: 'CONSTANT', X: 'MULTIPLIER', M: 'MAX-BPM' } as const;
+const SKIN_LABEL = { arcade: 'DDR A3', itg: 'SIMPLY LOVE' } as const;
+const HUD_LABEL = { full: 'FULL', lean: 'LEAN' } as const;
+
 /**
- * Playhead over the practice song map: a vertical line at the position the
- * looping audio preview is audibly at, converted through the chart's timing
- * (seconds → beat → measure). Polls previewPositionSeconds() on a rAF loop
- * and moves itself directly — no React re-render at 60 fps. Hidden while
- * nothing is playing (debounce gap, decode failure, no audio).
+ * Playhead over the song map: a vertical line at the position the looping
+ * audio preview is audibly at (seconds → beat → measure), moved directly on a
+ * rAF loop — no React re-render at 60 fps.
  */
 function StripPlayhead({ timing, measureCount }: { timing: TimingData; measureCount: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -72,7 +109,7 @@ function StripPlayhead({ timing, measureCount }: { timing: TimingData; measureCo
         if (sec === null) {
           el.style.opacity = '0';
         } else {
-          const measure = timing.getBeatFromElapsedTime(sec) / 4; // 0-based
+          const measure = timing.getBeatFromElapsedTime(sec) / 4;
           const frac = Math.max(0, Math.min(1, measure / Math.max(1, measureCount)));
           el.style.opacity = '1';
           el.style.left = `${frac * 100}%`;
@@ -97,27 +134,53 @@ function StripPlayhead({ timing, measureCount }: { timing: TimingData; measureCo
   );
 }
 
-const TYPE_LABEL = { C: 'CONSTANT', X: 'MULTIPLIER', M: 'MAX-BPM' } as const;
-const TYPE_HELP = {
-  C: 'CONSTANT (CMod) locks one scroll speed no matter how the song’s tempo changes — steady and predictable (recommended).',
-  X: 'MULTIPLIER (XMod) scales with the song’s BPM, so arrows speed up and slow down with the music.',
-  M: 'MAX-BPM (MMod) reads the speed off the song’s fastest section — XMod feel, CMod-style cap on how fast it ever gets.',
-} as const;
-const SKIN_LABEL = { arcade: 'DDR A3', itg: 'SIMPLY LOVE' } as const;
-const HUD_LABEL = { full: 'FULL', lean: 'LEAN' } as const;
+function Label({ children }: { children: string }) {
+  return (
+    <div className="font-display text-[10px] tracking-[0.24em] text-[#ececec]/35">{children}</div>
+  );
+}
+
+/** Rows the ▲▼ cursor walks. Mods tiles are rows too — one focus model. */
+const ROWS = [
+  'diff',
+  'speed',
+  'scrolltype',
+  'rate',
+  'turn',
+  'scrolldir',
+  'noteskin',
+  'background',
+  'hud',
+  'practice',
+  'loopstart',
+  'loopend',
+  'multiplayer',
+] as const;
+type RowId = (typeof ROWS)[number];
+
+function fmtAgo(ms: number): string {
+  const d = Math.floor((Date.now() - ms) / 86_400_000);
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 30) return `${d} days ago`;
+  return `${Math.floor(d / 30)} month${d >= 60 ? 's' : ''} ago`;
+}
 
 export function PlayerOptions({
   req,
   onStart,
   onBack,
+  onSettings,
 }: {
   req: PlayRequest;
   onStart: (chart?: PlayRequest['chart'], practice?: PracticeSection | null) => void;
   onBack: () => void;
+  /** Jump to SYSTEM SETTINGS (the segmented header's other side). */
+  onSettings?: () => void;
 }) {
   const { settings, update } = useSettings();
-  const [row, setRow] = useState(0);
-  const [advanced, setAdvanced] = useState(false);
+  const [row, setRow] = useState<RowId>('diff');
+  const [previewSpot, setPreviewSpot] = useState<'start' | 'peak'>('peak');
   // Practice loop selection: 1-based inclusive measures, clamped to the chart.
   const [practice, setPractice] = useState({ on: false, start: 1, end: 8 });
   useGamepadKeys();
@@ -127,34 +190,32 @@ export function PlayerOptions({
   const versusActive = vs.k !== 'idle';
   const room = vs.k === 'in-room' ? vs.room : null;
   const selfReady = room?.self?.ready ?? false;
-  // Host "start now" override: once the host has readied, if someone present
-  // still isn't ready (a stuck transfer, an AFK player) the host can begin with
-  // whoever's ready rather than wait forever — needs at least 2 ready total.
   const present = room?.players.filter((p) => !p.left) ?? [];
   const readyCount = present.filter((p) => p.ready).length;
   const hostWaiting =
     !!room?.isHost && selfReady && room.phase === 'lobby' && present.length > readyCount;
   const canForceStart = hostWaiting && readyCount >= 2;
-  // Guests play at the room's rate (the host's setting when announcing); the
-  // host's own rate row IS the room rate — changing it re-announces.
+  // Guests play at the room's rate; the host's own rate row IS the room rate.
   const effRate = room && !room.isHost ? room.musicRate : settings.musicRate;
 
-  // The host announces this song (and rate) to the room; guests were routed
-  // here BY that announcement. Deduped in the store, so re-renders are safe.
+  // The host announces this song (and rate) to the room. Deduped in the store.
   useEffect(() => {
     if (room?.isHost) announceSong(req.song, settings.musicRate, req.entry);
   }, [room, req.song, req.entry, settings.musicRate]);
 
-  // Charts available for this song, one per difficulty slot, ordered by slot (#8).
-  const charts = useMemo(
-    () => bestChartsPerSlot(req.song).filter((c): c is PlayRequest['chart'] => c !== null),
-    [req.song],
-  );
-  const [chartIdx, setChartIdx] = useState(() => {
-    const i = charts.indexOf(req.chart);
-    return i >= 0 ? i : Math.max(0, charts.length >> 1);
+  /* ── difficulty: the same five-slot ladder as the inspector ───────────── */
+  const slots = useMemo(() => bestChartsPerSlot(req.song), [req.song]);
+  const [diff, setDiff] = useState(() => {
+    const i = slots.indexOf(req.chart);
+    return i >= 0 ? i : difficultySlot(difficultyToString(req.chart.difficulty));
   });
-  const chart = charts[Math.min(chartIdx, charts.length - 1)] ?? req.chart;
+  const chart = slots[diff] ?? req.chart;
+
+  const scores = useMemo(() => loadScores(), []);
+  const bestFor = (c: Steps | null) => (c ? (scores[chartKey(req.song, c)] ?? null) : null);
+  const best = bestFor(chart);
+  const board = useLeaderboard(req.entry ?? null, diff);
+  const topRow = board !== 'loading' && board !== 'offline' ? (board.rows[0] ?? null) : null;
 
   // The preview's chart data, memoized so the preview effect only rebuilds
   // when the selection actually changes.
@@ -163,8 +224,32 @@ export function PlayerOptions({
     [req.song, chart],
   );
 
-  // The dance background's config (mood + chart-stepping timeline) — built only
-  // when BG is set to DANCE, so the preview shows it just like gameplay will.
+  const stats = useMemo(() => {
+    try {
+      return computeChartStats(preview.noteData, preview.timing, chart.stepsType);
+    } catch {
+      return null;
+    }
+  }, [preview, chart.stepsType]);
+
+  // The hardest passage — the run of adjacent near-peak measures around the max.
+  const peakWin = useMemo(() => {
+    if (!stats || stats.nps.length === 0) return null;
+    let maxI = 0;
+    for (let i = 1; i < stats.nps.length; i++) if (stats.nps[i].h > stats.nps[maxI].h) maxI = i;
+    let a = maxI;
+    let b = maxI;
+    while (a > 0 && stats.nps[a - 1].h >= 0.8) a--;
+    while (b < stats.nps.length - 1 && stats.nps[b + 1].h >= 0.8) b++;
+    // At least 8 measures of context so the loop is danceable.
+    while (b - a < 7 && (a > 0 || b < stats.nps.length - 1)) {
+      if (a > 0) a--;
+      if (b - a < 7 && b < stats.nps.length - 1) b++;
+    }
+    return { a, b, startSeconds: stats.nps[a].t0, endSeconds: stats.nps[b].t1 };
+  }, [stats]);
+
+  // The dance background's config — built only when BG is DANCE.
   const danceAttract = useMemo(
     () =>
       settings.bgMode === 'dance'
@@ -173,8 +258,7 @@ export function PlayerOptions({
     [settings.bgMode, req.song, chart],
   );
 
-  // Per-measure note density for the practice-section song map (mines/fakes
-  // skipped — you can't step those).
+  // Per-measure note density for the always-visible song map.
   const measures = useMemo(() => {
     const nd = preview.noteData;
     const count = Math.max(1, Math.ceil(noteRowToBeat(nd.lastRow()) / 4));
@@ -188,7 +272,6 @@ export function PlayerOptions({
     return { count, density, peak: Math.max(1, ...density) };
   }, [preview.noteData]);
 
-  // Selection clamped to this chart (state survives difficulty switches).
   const mStart = Math.max(1, Math.min(practice.start, measures.count));
   const mEnd = Math.min(Math.max(practice.end, mStart), measures.count);
   const practiceSection: PracticeSection | null = practice.on
@@ -196,31 +279,26 @@ export function PlayerOptions({
     : null;
 
   const beatTime = (b: number) => preview.timing.getElapsedTimeFromBeat(b);
-  const fmtTime = (s: number) => {
-    const t = Math.max(0, Math.round(s));
-    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-  };
-  /** Practice section in chart-seconds (null when practice is off). */
-  const sectionSeconds = practiceSection
+  /** The chart slice the preview (field + audio) loops. */
+  const previewWindow = practiceSection
     ? {
         startSeconds: beatTime(practiceSection.startBeat),
         endSeconds: beatTime(practiceSection.endBeat),
       }
-    : null;
+    : previewSpot === 'peak' && peakWin
+      ? { startSeconds: peakWin.startSeconds, endSeconds: peakWin.endSeconds }
+      : null;
 
-  // Loop the song sample while choosing options (#5); stop on leave/START.
-  // With a practice section selected, loop that section's audio instead so
-  // you hear exactly what you'll be drilling — padded with the same lead/tail
-  // as the synced note-field preview (and gameplay's practice pre/post-roll),
-  // so audio and field wrap at the same instant.
+  // Loop the song sample while choosing options; the window follows the
+  // preview spot / practice section so you hear what you see.
   useEffect(() => {
     if (req.encodedAudio) {
       let win;
-      if (sectionSeconds) {
-        const start = Math.max(0, sectionSeconds.startSeconds - PRACTICE_LEAD_SECONDS);
+      if (previewWindow) {
+        const start = Math.max(0, previewWindow.startSeconds - PRACTICE_LEAD_SECONDS);
         win = {
           startSeconds: start,
-          lengthSeconds: Math.max(0.5, sectionSeconds.endSeconds + PRACTICE_TAIL_SECONDS - start),
+          lengthSeconds: Math.max(0.5, previewWindow.endSeconds + PRACTICE_TAIL_SECONDS - start),
         };
       }
       previewEncoded(
@@ -233,34 +311,124 @@ export function PlayerOptions({
       );
     }
     return () => stopPreview();
-  }, [req, sectionSeconds?.startSeconds, sectionSeconds?.endSeconds, effRate]);
-  /** Set the loop endpoints (measures, already clamped by the caller). */
-  const setLoop = (start: number, end: number) => setPractice((p) => ({ ...p, start, end }));
-  /** Click on the song map: drag whichever loop edge is closer to that measure
-   *  (ties break toward the side of the section the click landed on, so a
-   *  single-measure loop can still be stretched either way). */
+  }, [req, previewWindow?.startSeconds, previewWindow?.endSeconds, effRate]);
+
+  const setLoop = (start: number, end: number) =>
+    setPractice((p) => ({ ...p, on: true, start, end }));
+  /** Click on the song map: drag whichever loop edge is closer (ties toward
+   *  the side the click landed on). First click arms an 8-measure loop. */
   const moveNearestEdge = (m: number) => {
+    if (!practice.on) {
+      setLoop(m, Math.min(measures.count, m + 7));
+      return;
+    }
     const dStart = Math.abs(m - mStart);
     const dEnd = Math.abs(m - mEnd);
     if (dStart < dEnd || (dStart === dEnd && m < mStart)) setLoop(Math.min(m, mEnd), mEnd);
     else setLoop(mStart, Math.max(m, mStart));
   };
 
-  const r = songBpmRange(req.song);
-  const bpm = r.max > 0 ? Math.round(r.max) : 0;
-  const diffName = difficultyToString(chart.difficulty);
-  const dcolor = difficultyColor(diffName);
-
+  /* ── the derived speed readout ────────────────────────────────────────── */
+  const bpm = Math.round(songBpmRange(req.song).max) || 0;
+  const travel = 720 - (settings.noteSkin === 'arcade' ? 118 : 78); // design px
+  const speed = settings.scrollValue;
   const isX = settings.scrollMode === 'X';
+  // Seconds an arrow is on screen. C and M are a target BPM (M at the fastest
+  // section); X scales with the song.
+  const secOnScreen = isX
+    ? bpm > 0
+      ? (travel / (SPACING * speed)) * (60 / bpm)
+      : 0
+    : (travel * 60) / (SPACING * speed);
+  const beatsOnScreen = isX ? travel / (SPACING * speed) : bpm > 0 ? (secOnScreen * bpm) / 60 : 0;
+  const speedLabel = isX ? `${speed.toFixed(2)}×` : `${settings.scrollMode}${Math.round(speed)}`;
+  const sliderPct = isX ? ((speed - 0.25) / 7.75) * 100 : ((speed - 50) / 1950) * 100;
+  const adjustSpeed = (dir: number) =>
+    update({
+      scrollValue: isX
+        ? Math.max(0.25, Math.min(8, +(speed + dir * 0.25).toFixed(2)))
+        : Math.max(50, Math.min(2000, speed + dir * 25)),
+    });
+
+  /* ── mods tiles (always visible; coral dot = off default) ─────────────── */
+  const d = DEFAULT_PLAY_OPTIONS;
+  const modTiles: Array<{
+    id: RowId;
+    label: string;
+    value: string;
+    off: boolean;
+    locked?: boolean;
+    adjust: (dir: number) => void;
+  }> = [
+    {
+      id: 'rate',
+      label: 'MUSIC RATE',
+      value: `${effRate.toFixed(2)}×${room && !room.isHost ? ' · ROOM' : ''}`,
+      off: effRate !== 1,
+      locked: !!room && !room.isHost,
+      adjust: (dir) => {
+        if (room && !room.isHost) return;
+        update({
+          musicRate: Math.max(0.5, Math.min(2, +(settings.musicRate + dir * 0.05).toFixed(2))),
+        });
+      },
+    },
+    {
+      id: 'turn',
+      label: 'TURN',
+      value: settings.turn.toUpperCase(),
+      off: settings.turn !== d.turn,
+      adjust: (dir) => update({ turn: cycle(TURNS, settings.turn, dir) }),
+    },
+    {
+      id: 'scrolldir',
+      label: 'SCROLL DIR',
+      value: settings.reverse ? 'REVERSE' : 'NORMAL',
+      off: settings.reverse !== d.reverse,
+      adjust: () => update({ reverse: !settings.reverse }),
+    },
+    {
+      id: 'noteskin',
+      label: 'NOTE SKIN',
+      value: SKIN_LABEL[settings.noteSkin],
+      off: settings.noteSkin !== d.noteSkin,
+      adjust: (dir) => update({ noteSkin: cycle(NOTE_SKINS, settings.noteSkin, dir) }),
+    },
+    {
+      id: 'background',
+      label: 'BACKGROUND',
+      value: settings.bgMode.toUpperCase(),
+      off: settings.bgMode !== d.bgMode,
+      adjust: (dir) => update({ bgMode: cycle(BG_MODES, settings.bgMode, dir) }),
+    },
+    {
+      id: 'hud',
+      label: 'HUD',
+      value: HUD_LABEL[settings.hudDensity],
+      off: settings.hudDensity !== d.hudDensity,
+      adjust: (dir) => update({ hudDensity: cycle(HUD_DENSITIES, settings.hudDensity, dir) }),
+    },
+  ];
+
+  const resetMods = () => {
+    update({
+      scrollMode: d.scrollMode,
+      scrollValue: d.scrollValue,
+      turn: d.turn,
+      reverse: d.reverse,
+      bgMode: d.bgMode,
+      noteSkin: d.noteSkin,
+      hudDensity: d.hudDensity,
+      ...(room && !room.isHost ? {} : { musicRate: d.musicRate }),
+    });
+  };
+
+  /* ── actions (versus flow unchanged) ──────────────────────────────────── */
   const go = () => {
     if (versusActive) {
-      // START = ready up (pins the difficulty pick in the same frame); the
-      // actual start comes from the room's load/go choreography below.
       if (room && !selfReady && room.phase === 'lobby' && room.song) {
         room.ready(pickOf(req.song, chart));
       } else if (canForceStart) {
-        // Readied host, still waiting on someone: a second START begins now
-        // with whoever's ready (the rest spectate and join the next song).
         forceStartRoom();
       }
       return;
@@ -268,9 +436,6 @@ export function PlayerOptions({
     onStart(chart, practiceSection);
   };
 
-  /** SELECT/back, one level per press. Host: back to the songs — the ROOM
-   *  persists, only the song pick is withdrawn. Guest: leave the room but keep
-   *  the loaded song (play on solo); a further press backs out. Solo: back. */
   const back = () => {
     if (room?.isHost) {
       clearAnnouncedSong();
@@ -287,9 +452,7 @@ export function PlayerOptions({
     if (room && !selfReady) room.sendPick(pickOf(req.song, chart));
   }, [room, selfReady, req.song, chart]);
 
-  // Everyone ready -> the room asks for the session; hand the chosen chart up
-  // (App attaches the live room from the store). Attach/detach only — never
-  // create anything in an effect (StrictMode runs this twice).
+  // Everyone ready -> the room asks for the session; hand the chosen chart up.
   const handoffRef = useRef<() => void>(() => {});
   handoffRef.current = () => onStart(chart, null);
   useEffect(() => {
@@ -300,216 +463,74 @@ export function PlayerOptions({
     };
   }, [room]);
 
-  type OptionRow = {
-    label: string;
-    value: string;
-    help: string;
-    valueColor?: string;
-    /** 'section' renders as a collapsible group header instead of a ◀▶ row;
-     *  'action' renders as a button (◀▶/click = press, not value-browsing). */
-    kind?: 'section' | 'action';
-    /** Indented child row belonging to the section header above it. */
-    sub?: boolean;
-    /** Accent-tinted row — the practice block, so it reads as a feature, not a mod. */
-    tone?: 'accent';
-    /** Extra breathing room above (starts a new visual group). */
-    spaceAbove?: boolean;
-    adjust: (dir: number) => void;
-  };
-
-  const advancedRows: OptionRow[] = [
-    {
-      label: 'TURN',
-      value: settings.turn.toUpperCase(),
-      help: 'Remaps which arrow goes to which panel: MIRROR flips the chart, LEFT/RIGHT rotate it, SHUFFLE deals a random (per-chart) remap. Same steps, new pattern.',
-      adjust: (dir) => update({ turn: cycle(TURNS, settings.turn, dir) }),
-    },
-    {
-      label: 'SCROLL DIR',
-      value: settings.reverse ? 'REVERSE' : 'NORMAL',
-      help: 'NORMAL scrolls arrows up to receptors at the top, DDR-style. REVERSE puts the receptors at the bottom and scrolls down (ITG players’ favorite).',
-      adjust: () => update({ reverse: !settings.reverse }),
-    },
-    {
-      label: 'NOTE SKIN',
-      value: SKIN_LABEL[settings.noteSkin],
-      help: 'Arrow artwork: DDR A3 arcade arrows, or Simply Love’s ITG-style quantization colors. Shown live in the preview.',
-      adjust: (dir) => update({ noteSkin: cycle(NOTE_SKINS, settings.noteSkin, dir) }),
-    },
-    {
-      label: 'HUD',
-      value: HUD_LABEL[settings.hudDensity],
-      help: 'How much in-play info sits beside the field: FULL adds the chart timeline and the live judgment tally, LEAN keeps just life, timing, score and time left.',
-      adjust: (dir) => update({ hudDensity: cycle(HUD_DENSITIES, settings.hudDensity, dir) }),
-    },
-    {
-      label: 'BACKGROUND',
-      value: settings.bgMode.toUpperCase(),
-      help: 'Behind the arrows. OFF hides it, DIM darkens the song’s art/video so notes stay readable, FULL shows it brighter, DANCE always plays the neon dancer that steps your chart.',
-      adjust: (dir) => update({ bgMode: cycle(BG_MODES, settings.bgMode, dir) }),
-    },
-  ];
-
-  // The practice block: top-level (not folded), accent-tinted so it reads as
-  // its own feature rather than another mod row.
-  const practiceRows: OptionRow[] = [
-    {
-      label: 'PRACTICE LOOP',
-      tone: 'accent',
-      spaceAbove: true,
-      value: practice.on ? `M${mStart}–M${mEnd}` : 'OFF',
-      valueColor: practice.on ? AC : undefined,
-      help: 'Loop one section of the song over and over: turn it ON, pick the measures below, then START. Only the looped section is judged — pair with MUSIC RATE to drill it slowly.',
-      adjust: () => setPractice((p) => ({ ...p, on: !p.on })),
-    },
-    ...(practice.on
-      ? ([
-          {
-            label: 'LOOP START',
-            tone: 'accent',
-            sub: true,
-            value: `M${mStart} · ${fmtTime(beatTime((mStart - 1) * 4))}`,
-            help: 'First measure of the practice section — every pass begins here after a short lead-in. You can also click the song map below to move the nearest edge.',
-            adjust: (dir) => setLoop(Math.max(1, Math.min(mEnd, mStart + dir)), mEnd),
-          },
-          {
-            label: 'LOOP END',
-            tone: 'accent',
-            sub: true,
-            value: `M${mEnd} · ${fmtTime(beatTime(mEnd * 4))}`,
-            help: 'Last measure of the practice section (inclusive) — once it plays out, the loop jumps back to LOOP START for another pass.',
-            adjust: (dir) =>
-              setLoop(mStart, Math.max(mStart, Math.min(measures.count, mEnd + dir))),
-          },
-        ] satisfies OptionRow[])
-      : []),
-  ];
-
-  const rows: OptionRow[] = [
-    {
-      label: 'DIFFICULTY',
-      value: `${diffName} ${chart.meter}${selfReady ? ' · LOCKED' : ''}`,
-      valueColor: dcolor,
-      help: selfReady
-        ? 'Locked — you already readied up with this chart. Leave the room to change it.'
-        : versusActive
-          ? 'Pick YOUR chart for the race — your rival picks their own. Scores compare by percent, arcade style.'
-          : `Which step chart to play. This song has ${charts.length} difficult${charts.length === 1 ? 'y' : 'ies'} — harder charts add more and faster steps.`,
-      adjust: (dir) => {
+  /* ── row navigation: ▲▼ option, ◀▶ change, everywhere ────────────────── */
+  const visibleRows: RowId[] = ROWS.filter((r) =>
+    r === 'loopstart' || r === 'loopend'
+      ? practice.on && !versusActive
+      : r === 'practice'
+        ? !versusActive
+        : true,
+  );
+  const adjustRow = (id: RowId, dir: number) => {
+    switch (id) {
+      case 'diff': {
         if (selfReady) return; // readied = pick is pinned on the wire
-        setChartIdx((v) => Math.max(0, Math.min(charts.length - 1, v + dir)));
-      },
-    },
-    {
-      label: 'SCROLL TYPE',
-      value: TYPE_LABEL[settings.scrollMode],
-      help: TYPE_HELP[settings.scrollMode],
-      adjust: (dir) => {
+        // Walk to the nearest occupied slot in that direction.
+        for (let i = diff + dir; i >= 0 && i <= 4; i += dir) {
+          if (slots[i] != null) {
+            setDiff(i);
+            return;
+          }
+        }
+        return;
+      }
+      case 'speed':
+        adjustSpeed(dir);
+        return;
+      case 'scrolltype': {
         const m = cycle(SCROLL_MODES, settings.scrollMode, dir);
-        // C and M share BPM-target values; entering/leaving X needs a rebase.
         const stillBpm = (settings.scrollMode !== 'X') === (m !== 'X');
         update({
           scrollMode: m,
           scrollValue: stillBpm ? settings.scrollValue : m === 'X' ? 2 : 550,
         });
-      },
-    },
-    {
-      // Indented child of SCROLL TYPE: this is that mode's number.
-      label: '↳ SPACING',
-      sub: true,
-      value: isX
-        ? `${settings.scrollValue.toFixed(2)}×`
-        : `${settings.scrollMode}${Math.round(settings.scrollValue)}`,
-      help: isX
-        ? `The number for MULTIPLIER above: arrows scroll at this multiple of the song’s BPM — higher = faster and more spread out.${bpm ? ` ≈ ${Math.round(bpm * settings.scrollValue)} BPM on this song.` : ''}`
-        : settings.scrollMode === 'C'
-          ? 'The number for CONSTANT above: one locked scroll speed / note spacing, in BPM, through every tempo change. Higher = faster and more spread out.'
-          : 'The number for MAX-BPM above: scroll speed at the song’s fastest section, in BPM — slower sections scale down proportionally.',
-      adjust: (dir) =>
-        update({
-          scrollValue: isX
-            ? Math.max(0.25, Math.min(8, +(settings.scrollValue + dir * 0.25).toFixed(2)))
-            : Math.max(50, Math.min(2000, settings.scrollValue + dir * 25)),
-        }),
-    },
-    {
-      label: 'MUSIC RATE',
-      value: `${effRate.toFixed(2)}×${room && !room.isHost ? ' · ROOM' : ''}`,
-      help:
-        room && !room.isHost
-          ? 'Set by the host — every machine in the room plays the same audio speed.'
-          : room
-            ? 'Playback speed for the WHOLE room — changing it un-readies everyone (the race must run one speed).'
-            : 'Playback speed of the song itself — slow it down to practice, speed it up for a challenge. Unlike SPACING, this changes the actual audio (judging scales with it).',
-      adjust: (dir) => {
-        if (room && !room.isHost) return;
-        update({
-          musicRate: Math.max(0.5, Math.min(2, +(settings.musicRate + dir * 0.05).toFixed(2))),
-        });
-      },
-    },
-    {
-      label: 'MULTIPLAYER',
-      kind: 'action',
-      value:
-        vs.k === 'idle'
-          ? 'HOST A ROOM ▸'
-          : vs.k === 'busy'
-            ? 'CREATING…'
-            : vs.k === 'error'
-              ? 'TRY AGAIN ▸'
-              : 'IN ROOM — LEAVE ✕',
-      valueColor: vs.k === 'in-room' ? '#59f07f' : undefined,
-      help: versusActive
-        ? 'Press to leave the room — everyone else is told, and they keep playing without you.'
-        : 'Race friends live on this song: press to open a room — you get a 6-arrow code and an invite link they join with. The room lasts across songs; everyone picks their own difficulty.',
-      adjust: () => {
+        return;
+      }
+      case 'practice':
+        setPractice((p) => ({ ...p, on: !p.on }));
+        return;
+      case 'loopstart':
+        setLoop(Math.max(1, Math.min(mEnd, mStart + dir)), mEnd);
+        return;
+      case 'loopend':
+        setLoop(mStart, Math.max(mStart, Math.min(measures.count, mEnd + dir)));
+        return;
+      case 'multiplayer':
         if (vs.k === 'in-room') leaveRoom();
         else if (vs.k === 'error') dismissRoomError();
         else if (vs.k === 'idle') void hostRoom();
-      },
-    },
-    {
-      label: 'ADVANCED',
-      kind: 'section',
-      // While collapsed, the header shows what's tucked away that isn't at its
-      // default — so a hidden mod can't silently surprise you mid-song.
-      value: [
-        settings.turn !== 'none' ? settings.turn.toUpperCase() : null,
-        settings.reverse ? 'REVERSE' : null,
-        settings.noteSkin !== DEFAULT_PLAY_OPTIONS.noteSkin ? SKIN_LABEL[settings.noteSkin] : null,
-        settings.hudDensity !== DEFAULT_PLAY_OPTIONS.hudDensity
-          ? `HUD ${HUD_LABEL[settings.hudDensity]}`
-          : null,
-        settings.bgMode !== DEFAULT_PLAY_OPTIONS.bgMode
-          ? `BG ${settings.bgMode.toUpperCase()}`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(' · '),
-      help: advanced
-        ? 'Collapse the advanced options back down — everything you set stays applied.'
-        : 'More options: turn mods, scroll direction, note skin, and background. Anything set off-default is summarized here.',
-      adjust: () => setAdvanced((v) => !v),
-    },
-    ...(advanced ? advancedRows.map((ar) => ({ ...ar, sub: true })) : []),
-    // Practice looping and a synchronized race are incompatible.
-    ...(versusActive ? [] : practiceRows),
-  ];
+        return;
+      default:
+        modTiles.find((t) => t.id === id)?.adjust(dir);
+    }
+  };
 
-  // The row list grows/shrinks (ADVANCED, practice), so clamp the cursor.
-  const curRow = rows[Math.min(row, rows.length - 1)];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // confirm/back honor custom keybinds (e.g. Slash → confirm), not just Enter.
       const role = keyboardRole(e.code);
-      if (e.key === 'ArrowUp')
-        setRow((v) => (Math.min(v, rows.length - 1) + rows.length - 1) % rows.length);
-      else if (e.key === 'ArrowDown')
-        setRow((v) => (Math.min(v, rows.length - 1) + 1) % rows.length);
-      else if (e.key === 'ArrowLeft') curRow.adjust(-1);
-      else if (e.key === 'ArrowRight') curRow.adjust(1);
+      if (e.key === 'Tab') {
+        setPreviewSpot((s) => (s === 'peak' ? 'start' : 'peak'));
+      } else if (e.key === 'r' || e.key === 'R') {
+        resetMods();
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        const dir = e.key === 'ArrowDown' ? 1 : -1;
+        setRow((cur) => {
+          const i = visibleRows.indexOf(cur);
+          const at = i < 0 ? 0 : i;
+          return visibleRows[(at + dir + visibleRows.length) % visibleRows.length];
+        });
+      } else if (e.key === 'ArrowLeft') adjustRow(row, -1);
+      else if (e.key === 'ArrowRight') adjustRow(row, 1);
       else if (e.key === 'Enter' || role === 'confirm') go();
       else if (e.key === 'Escape' || e.key === 'Shift' || role === 'back') back();
       else return;
@@ -519,277 +540,546 @@ export function PlayerOptions({
     return () => window.removeEventListener('keydown', onKey);
   });
 
+  const focus = (id: RowId) => row === id;
+  const ring = (id: RowId) =>
+    focus(id) ? focusStyle(true) : { borderLeft: '3px solid transparent' };
+  const diffName = difficultyToString(chart.difficulty);
+
+  const startLabel =
+    vs.k === 'in-room'
+      ? canForceStart
+        ? 'START NOW ▸'
+        : selfReady
+          ? 'WAITING FOR PLAYERS…'
+          : 'READY ▸'
+      : versusActive
+        ? 'WAITING…'
+        : practice.on
+          ? `START PRACTICE M${mStart}–M${mEnd} ▸`
+          : 'START ▸';
+
   return (
-    <Stage
-      label="PLAYER OPTIONS"
-      headerRight={
-        <div className="flex items-center gap-3 text-right">
-          <div>
-            <div className="text-[15px] font-bold">{req.song.displayFullTitle || 'Untitled'}</div>
-            <div className="text-[12px] text-[#ececec]/55">
-              {req.song.artist}
-              {bpm ? ` · BPM ${bpm}` : ''}
-            </div>
-          </div>
-          <div
-            className="border px-2 py-1 text-[12px] font-bold uppercase"
-            style={{ borderColor: dcolor, color: dcolor }}
+    <div className="fixed inset-0 flex flex-col overflow-hidden bg-[#0b0c0e] font-grotesk text-[#ececec] [font-variant-numeric:tabular-nums]">
+      {/* Header: the SYSTEM SETTINGS / PLAY MODS boundary, named and reachable */}
+      <div className="flex h-[64px] flex-none items-center gap-5 border-b border-white/[0.09] bg-[#0e0f12] px-6">
+        <span className="font-display text-[20px] font-bold tracking-[0.22em]">STEPZONE</span>
+        <div
+          className="flex h-[32px]"
+          style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)' }}
+        >
+          <button
+            onClick={onSettings}
+            disabled={!onSettings}
+            className="flex cursor-pointer items-center px-4 font-display text-[13px] tracking-[0.1em] text-[#ececec]/55 hover:text-[#ececec] disabled:cursor-default"
           >
-            {diffName} {chart.meter}
+            ◂ SYSTEM SETTINGS
+          </button>
+          <span
+            className="flex items-center px-4 font-display text-[13px] font-bold tracking-[0.1em]"
+            style={{ background: AC, color: '#0b0c0e' }}
+          >
+            PLAY MODS
+          </span>
+        </div>
+        <span className="flex-1" />
+        <div className="text-right">
+          <div className="font-display text-[17px] font-bold">
+            {req.song.displayFullTitle || 'Untitled'}
+          </div>
+          <div className="text-[12px] text-[#ececec]/55">
+            {req.song.artist}
+            {bpm ? ` · ${bpm} BPM` : ''}
+            {stats
+              ? ` · ${Math.floor(stats.lengthSeconds / 60)}:${String(Math.floor(stats.lengthSeconds % 60)).padStart(2, '0')}`
+              : ''}
           </div>
         </div>
-      }
-      footer={
-        <>
-          <span>▲▼ OPTION</span>
-          <span>◀▶ CHANGE</span>
-          <span style={{ color: AC, animation: 'blinkStart 1.4s infinite' }}>
-            {vs.k === 'in-room'
-              ? canForceStart
-                ? 'START — BEGIN NOW'
-                : selfReady
-                  ? 'WAITING FOR PLAYERS…'
-                  : 'START — READY'
-              : versusActive
-                ? 'WAITING…'
-                : 'START — PLAY'}
-          </span>
-          <button onClick={back} className="hover:text-[#ececec]">
-            {room?.isHost
-              ? 'SELECT — BACK (ROOM STAYS)'
-              : versusActive
-                ? 'SELECT — LEAVE ROOM'
-                : 'SELECT — BACK TO SONGS'}
-          </button>
-        </>
-      }
-    >
-      <div className="flex h-full w-full items-center justify-center">
-        <div className="flex h-full max-h-[860px] w-full max-w-[1680px] min-[2200px]:max-h-[1180px] min-[2200px]:max-w-[2160px]">
-          <div className="flex w-[480px] flex-none flex-col justify-center gap-[6px] px-8 py-4 max-[1024px]:w-[56%] min-[2200px]:w-[560px]">
-            <div className="flex min-h-0 flex-col gap-[6px] overflow-y-auto">
-              {rows.map((r2, i) => {
-                const on = i === row;
-                if (r2.kind === 'section') {
-                  // Group header: chevron + label + hairline; the whole row is
-                  // the toggle, with the off-default summary while collapsed.
-                  const c = advanced || on ? AC : 'rgba(236,236,236,.5)';
-                  return (
-                    <div
-                      key={r2.label}
-                      ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                      onClick={() => {
-                        setRow(i);
-                        r2.adjust(1);
-                      }}
-                      className="mt-1 flex h-[38px] flex-none cursor-pointer items-center gap-3 border border-l-[3px] px-4"
-                      style={{
-                        borderColor: on ? AC : 'transparent',
-                        borderLeftColor: on ? AC : 'transparent',
-                        background: on ? AC + '14' : 'transparent',
-                      }}
-                    >
-                      <span
-                        className="inline-block text-[10px] transition-transform duration-150"
-                        style={{ color: c, transform: advanced ? 'rotate(90deg)' : 'none' }}
-                      >
-                        ▶
-                      </span>
-                      <span className="text-[12px] tracking-[0.22em]" style={{ color: c }}>
-                        {r2.label}
-                      </span>
-                      <span className="h-px min-w-4 flex-1 bg-white/[0.08]" />
-                      {!advanced && r2.value && (
-                        <span className="max-w-[50%] truncate text-[11px] tracking-[0.1em] text-[#ececec]/55">
-                          {r2.value}
-                        </span>
-                      )}
-                      {!advanced && (
-                        <span className="text-[11px] tracking-[0.14em] text-[#ececec]/60">
-                          {r2.value ? '· ' : ''}SHOW
-                        </span>
-                      )}
-                    </div>
-                  );
-                }
-                if (r2.kind === 'action') {
-                  // A button in the row list: whole row presses (◀▶ or click),
-                  // no value-stepper chevrons — same accent language as the
-                  // song-select action buttons.
-                  return (
-                    <div
-                      key={r2.label}
-                      ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                      onClick={() => {
-                        setRow(i);
-                        r2.adjust(1);
-                      }}
-                      className="flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4 font-bold"
-                      style={{
-                        borderColor: on ? AC : AC + '59',
-                        borderLeftColor: AC,
-                        background: on ? AC + '2b' : AC + '0d',
-                      }}
-                    >
-                      <span
-                        className="flex-1 truncate text-[13px] tracking-[0.14em]"
-                        style={{ color: AC }}
-                      >
-                        {r2.label}
-                      </span>
-                      <span
-                        className="text-[14px] tracking-[0.08em]"
-                        style={r2.valueColor ? { color: r2.valueColor } : { color: '#ececec' }}
-                      >
-                        {r2.value}
-                      </span>
-                    </div>
-                  );
-                }
-                const accent = r2.tone === 'accent';
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/* ── LEFT: the mods column ─────────────────────────────────────── */}
+        <div className="flex w-[520px] flex-none flex-col gap-[13px] overflow-y-auto border-r border-white/[0.09] px-6 py-5">
+          {/* Difficulty ladder, grades included */}
+          <div style={ring('diff')} className="pl-2 -ml-2">
+            <Label>{`DIFFICULTY ◀ ▶${selfReady ? ' · LOCKED' : ''}`}</Label>
+            <div className="mt-[7px] flex gap-[5px]">
+              {SHORT.map((name, i) => {
+                const c = slots[i];
+                const on = i === diff;
+                const b = bestFor(c);
                 return (
-                  <div
-                    key={r2.label}
-                    ref={on ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                    onClick={() => setRow(i)}
-                    className={`flex h-[44px] flex-none cursor-pointer items-center gap-4 border border-l-[3px] px-4${r2.sub ? ' ml-4' : ''}${r2.spaceAbove ? ' mt-2' : ''}`}
+                  <button
+                    key={name}
+                    disabled={!c || selfReady}
+                    onClick={() => !selfReady && c && setDiff(i)}
+                    className="flex flex-col items-center gap-[3px]"
                     style={{
-                      borderColor: on ? AC : accent ? AC + '46' : 'rgba(255,255,255,.1)',
-                      borderLeftColor: on ? AC : accent ? AC + '90' : 'transparent',
-                      background: on ? AC + '14' : accent ? AC + '0d' : 'transparent',
+                      flex: on ? 1.3 : 1,
+                      padding: on ? '9px 0 8px' : '7px 0 6px',
+                      background: on ? `${DIFF_SLOT_COLORS[i]}29` : 'rgba(255,255,255,.03)',
+                      borderTop: `3px solid ${DIFF_SLOT_COLORS[i]}`,
+                      boxShadow: on ? `inset 0 0 0 1px ${DIFF_SLOT_COLORS[i]}80` : 'none',
+                      opacity: c ? (on ? 1 : 0.55) : 0.22,
                     }}
                   >
                     <span
-                      className="flex-1 truncate text-[13px] tracking-[0.14em] text-[#ececec]/85"
-                      style={accent ? { color: AC } : undefined}
+                      className="font-display leading-none font-bold tabular-nums"
+                      style={{ fontSize: on ? 24 : 18 }}
                     >
-                      {r2.label}
+                      {c ? c.meter : '–'}
                     </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setRow(i);
-                        r2.adjust(-1);
-                      }}
-                      style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
-                    >
-                      ◀
-                    </button>
+                    <span className="text-[9px] tracking-[0.1em] text-[#ececec]/55">{name}</span>
                     <span
-                      className="min-w-[130px] text-center text-[15px] font-bold"
-                      style={r2.valueColor ? { color: r2.valueColor } : undefined}
-                    >
-                      {r2.value}
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setRow(i);
-                        r2.adjust(1);
+                      className="text-[11px] font-bold"
+                      style={{
+                        color: b ? (GRADE_COLOR[b.grade] ?? '#ececec') : 'rgba(236,236,236,.25)',
                       }}
-                      style={{ color: on ? AC : 'rgba(236,236,236,.4)' }}
                     >
-                      ▶
-                    </button>
-                  </div>
+                      {b ? b.grade : '—'}
+                    </span>
+                  </button>
                 );
               })}
             </div>
+          </div>
 
-            {practice.on && (
-              <div className="mt-1 flex-none px-1">
-                <div className="mb-1 flex justify-between text-[10px] tracking-[0.18em] text-[#ececec]/40">
-                  <span>PRACTICE SECTION — CLICK TO MOVE THE NEAREST EDGE</span>
-                  <span>
-                    M{mStart}–M{mEnd} · {fmtTime(beatTime((mStart - 1) * 4))}–
-                    {fmtTime(beatTime(mEnd * 4))}
-                  </span>
-                </div>
-                <div className="relative flex h-[30px] gap-[1px] border border-white/[0.09] bg-black/25 p-[3px]">
-                  {measures.density.map((c, i) => {
-                    const inSel = i + 1 >= mStart && i + 1 <= mEnd;
-                    return (
-                      <div
-                        key={i}
-                        onClick={() => moveNearestEdge(i + 1)}
-                        className="flex min-w-0 flex-1 cursor-pointer items-end"
-                        title={`Measure ${i + 1}`}
-                      >
-                        <div
-                          className="w-full"
-                          style={{
-                            height: `${10 + 90 * (c / measures.peak)}%`,
-                            background: inSel ? AC : 'rgba(236,236,236,0.22)',
-                          }}
-                        />
-                      </div>
-                    );
-                  })}
-                  <StripPlayhead timing={preview.timing} measureCount={measures.count} />
-                </div>
-              </div>
-            )}
-
-            <div className="mt-1 min-h-[44px] flex-none px-1 text-[12px] leading-snug text-[#ececec]/62">
-              {curRow.help}
+          {/* Scroll speed: the number, in units you can feel */}
+          <div
+            className="border border-white/10 px-4 py-[13px]"
+            style={focus('speed') || focus('scrolltype') ? focusStyle(true) : undefined}
+          >
+            <div className="flex items-baseline gap-[10px]">
+              <Label>SCROLL SPEED ◀ ▶</Label>
+              <span className="flex-1" />
+              <span className="font-display text-[28px] leading-none font-bold tabular-nums">
+                {speedLabel}
+              </span>
             </div>
-            {/* The room roster (RoomDock) is pinned bottom-right globally by App. */}
+            <div className="relative mt-4 h-1 bg-white/[0.12]">
+              <div
+                className="absolute top-0 bottom-0 left-0"
+                style={{ width: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
+              />
+              <div
+                className="absolute -top-[6px] h-4 w-4 -ml-2"
+                style={{ left: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
+              />
+            </div>
+            <div className="mt-[12px] text-[13px] leading-[1.45] text-[#ececec]/62">
+              {secOnScreen > 0 ? (
+                <>
+                  Arrows cross the field in{' '}
+                  <span className="font-bold text-[#ececec]">{secOnScreen.toFixed(1)} s</span>
+                  {beatsOnScreen > 0 && (
+                    <>
+                      {' '}
+                      — about{' '}
+                      <span className="font-bold text-[#ececec]">
+                        {beatsOnScreen.toFixed(1)} beats
+                      </span>{' '}
+                      on screen{settings.scrollMode === 'M' ? ' at the fastest section' : ''}.
+                    </>
+                  )}
+                </>
+              ) : (
+                'Pick a speed — the preview shows exactly what you get.'
+              )}
+            </div>
+            <div className="mt-[12px] flex gap-1">
+              {SCROLL_MODES.map((m) => {
+                const on = settings.scrollMode === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      if (on) return;
+                      const stillBpm = (settings.scrollMode !== 'X') === (m !== 'X');
+                      update({
+                        scrollMode: m,
+                        scrollValue: stillBpm ? settings.scrollValue : m === 'X' ? 2 : 550,
+                      });
+                    }}
+                    className="flex h-8 flex-1 items-center justify-center font-display text-[12px] tracking-[0.1em]"
+                    style={
+                      on
+                        ? {
+                            background:
+                              'linear-gradient(90deg, rgba(255,93,71,.26), rgba(255,93,71,.06))',
+                            boxShadow: 'inset 0 0 0 1px rgba(255,93,71,.55)',
+                            color: '#fff',
+                            fontWeight: 700,
+                          }
+                        : {
+                            boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)',
+                            color: 'rgba(236,236,236,.6)',
+                          }
+                    }
+                  >
+                    {TYPE_LABEL[m]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Mods: everything visible, off-default marked */}
+          <div className="grid grid-cols-2 gap-2">
+            {modTiles.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => {
+                  setRow(t.id);
+                  t.adjust(1);
+                }}
+                className="flex items-center gap-[10px] px-3 py-[9px] text-left"
+                style={{
+                  ...(focus(t.id)
+                    ? focusStyle(true)
+                    : {
+                        border: `1px solid ${t.off ? 'rgba(255,93,71,.45)' : 'rgba(255,255,255,.10)'}`,
+                        background: t.off ? 'rgba(255,93,71,.07)' : 'transparent',
+                      }),
+                  opacity: t.locked ? 0.6 : 1,
+                }}
+              >
+                <span
+                  className="h-[6px] w-[6px] flex-none rounded-full"
+                  style={{ background: t.off ? AC : 'rgba(255,255,255,.14)' }}
+                />
+                <span className="min-w-0 flex-1 truncate text-[11px] tracking-[0.14em] text-[#ececec]/55">
+                  {t.label}
+                </span>
+                <span
+                  className="font-display text-[14px] font-bold whitespace-nowrap"
+                  style={{ color: t.off ? AC : '#ececec' }}
+                >
+                  {t.value}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Practice loop + the always-on song map */}
+          {!versusActive && (
+            <div style={ring('practice')} className="pl-2 -ml-2">
+              <div className="flex items-center gap-[10px]">
+                <Label>PRACTICE LOOP ◀ ▶</Label>
+                <span className="h-px flex-1 bg-white/[0.07]" />
+                <button
+                  onClick={() => setPractice((p) => ({ ...p, on: !p.on }))}
+                  className="flex h-[22px] items-center px-[10px] font-display text-[11px] tracking-[0.12em]"
+                  style={
+                    practice.on
+                      ? { background: AC, color: '#0b0c0e', fontWeight: 700 }
+                      : {
+                          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)',
+                          color: 'rgba(236,236,236,.55)',
+                        }
+                  }
+                >
+                  {practice.on ? `M${mStart}–M${mEnd}` : 'OFF'}
+                </button>
+              </div>
+              <div className="relative mt-[7px] flex h-[34px] gap-px border border-white/[0.09] bg-black/25 p-[3px]">
+                {measures.density.map((c, i) => {
+                  const inSel = practice.on && i + 1 >= mStart && i + 1 <= mEnd;
+                  const hot = !practice.on && c / measures.peak > 0.85;
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => moveNearestEdge(i + 1)}
+                      className="flex min-w-0 flex-1 cursor-pointer items-end"
+                      title={`Measure ${i + 1}`}
+                    >
+                      <div
+                        className="w-full"
+                        style={{
+                          height: `${10 + 90 * (c / measures.peak)}%`,
+                          background: inSel ? AC : hot ? AC + '88' : 'rgba(236,236,236,0.22)',
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+                <StripPlayhead timing={preview.timing} measureCount={measures.count} />
+              </div>
+              <div className="mt-[5px] text-[10px] tracking-[0.12em] text-[#ececec]/35">
+                CLICK A MEASURE TO SET THE LOOP · {measures.count} MEASURES
+                {practice.on && ' · ONLY THE LOOP IS JUDGED'}
+              </div>
+            </div>
+          )}
+
+          <span className="flex-1" />
+
+          {/* Commit */}
+          <div className="flex gap-[10px]">
+            <button
+              onClick={() => adjustRow('multiplayer', 1)}
+              className="flex h-[52px] w-[168px] flex-none items-center justify-center font-display text-[12px] font-bold tracking-[0.12em]"
+              style={{
+                ...(focus('multiplayer')
+                  ? focusStyle(true)
+                  : { boxShadow: 'inset 0 0 0 1px rgba(255,93,71,.5)' }),
+                color: vs.k === 'in-room' ? '#59f07f' : AC,
+              }}
+            >
+              {vs.k === 'idle'
+                ? 'HOST A ROOM ▸'
+                : vs.k === 'busy'
+                  ? 'CREATING…'
+                  : vs.k === 'error'
+                    ? 'TRY AGAIN ▸'
+                    : 'LEAVE ROOM ✕'}
+            </button>
             <button
               onClick={go}
               disabled={
                 versusActive && (vs.k !== 'in-room' || !room?.song || (selfReady && !canForceStart))
               }
-              className="mt-1 h-[52px] w-full flex-none text-[18px] font-bold tracking-[0.3em] disabled:opacity-40"
+              className="flex h-[52px] flex-1 items-center justify-center font-display text-[17px] font-bold tracking-[0.18em] disabled:opacity-40"
               style={{ background: AC, color: '#0b0c0e' }}
             >
-              {vs.k === 'in-room'
-                ? canForceStart
-                  ? 'START NOW ▸'
-                  : selfReady
-                    ? 'WAITING FOR PLAYERS…'
-                    : 'READY ▸'
-                : versusActive
-                  ? 'WAITING…'
-                  : practice.on
-                    ? 'START PRACTICE ▸'
-                    : 'START ▸'}
+              {startLabel}
             </button>
           </div>
+        </div>
 
-          <div className="flex min-w-0 flex-1 flex-col border-l border-white/[0.09]">
-            <div className="flex h-[40px] flex-none items-center px-6 text-[11px] tracking-[0.22em] text-[#ececec]/62">
-              PREVIEW
+        {/* ── CENTER: the preview, aimed at the part that matters ────────── */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex h-[40px] flex-none items-center gap-[10px] border-b border-white/[0.06] px-5">
+            <Label>PREVIEW</Label>
+            <span className="flex-1" />
+            <div
+              className="flex h-[26px]"
+              style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)' }}
+            >
+              {(
+                [
+                  ['start', 'FROM THE START'],
+                  ['peak', 'HARDEST SECTION'],
+                ] as const
+              ).map(([spot, label]) => {
+                const on = !practiceSection && previewSpot === spot;
+                return (
+                  <button
+                    key={spot}
+                    onClick={() => setPreviewSpot(spot)}
+                    className="flex items-center px-3 font-display text-[11px] tracking-[0.1em]"
+                    style={
+                      on
+                        ? { background: AC, color: '#0b0c0e', fontWeight: 700 }
+                        : { color: 'rgba(236,236,236,.55)' }
+                    }
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
-            <div className="min-h-0 flex-1">
-              <NoteFieldPreview
-                noteData={preview.noteData}
-                timing={preview.timing}
-                stepsType={chart.stepsType}
-                scrollMode={settings.scrollMode}
-                scrollValue={settings.scrollValue}
-                noteSkin={settings.noteSkin}
-                reverse={settings.reverse}
-                loopWindow={sectionSeconds}
-                clock={previewPositionSeconds}
-                hud
-                meta={{
-                  title: req.song.displayFullTitle || 'Untitled',
-                  subtitle: req.song.artist,
-                  difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
-                }}
-                background={
-                  settings.bgMode === 'off' || settings.bgMode === 'dance'
-                    ? null
-                    : (req.backgroundFile ?? null)
-                }
-                bgDim={settings.bgMode === 'full' || settings.bgMode === 'dance' ? 0.25 : 0.6}
-                mediaRate={effRate}
-                attract={danceAttract}
-              />
-            </div>
+            {practiceSection && (
+              <span className="font-display text-[11px] tracking-[0.1em]" style={{ color: AC }}>
+                LOOPING M{mStart}–M{mEnd}
+              </span>
+            )}
+          </div>
+          <div className="min-h-0 flex-1">
+            <NoteFieldPreview
+              noteData={preview.noteData}
+              timing={preview.timing}
+              stepsType={chart.stepsType}
+              scrollMode={settings.scrollMode}
+              scrollValue={settings.scrollValue}
+              noteSkin={settings.noteSkin}
+              reverse={settings.reverse}
+              loopWindow={previewWindow}
+              clock={previewPositionSeconds}
+              hud
+              meta={{
+                title: req.song.displayFullTitle || 'Untitled',
+                subtitle: req.song.artist,
+                difficulty: `${chart.stepsType}  ·  ${diffName.toUpperCase()} ${chart.meter}`,
+              }}
+              background={
+                settings.bgMode === 'off' || settings.bgMode === 'dance'
+                  ? null
+                  : (req.backgroundFile ?? null)
+              }
+              bgDim={settings.bgMode === 'full' || settings.bgMode === 'dance' ? 0.25 : 0.6}
+              mediaRate={effRate}
+              attract={danceAttract}
+            />
           </div>
         </div>
+
+        {/* ── RIGHT: what you're attempting ──────────────────────────────── */}
+        <div className="flex w-[320px] flex-none flex-col gap-4 overflow-y-auto border-l border-white/[0.09] bg-[#0e0f12] px-[18px] py-5">
+          <div>
+            <Label>WHAT YOU'RE ATTEMPTING</Label>
+            <div className="mt-[10px] grid grid-cols-2 gap-px bg-white/[0.07]">
+              <div className="bg-[#0e0f12] px-3 py-[9px]">
+                <div className="text-[10px] tracking-[0.18em] text-[#ececec]/35">YOUR BEST</div>
+                <div
+                  className="font-display text-[21px] font-bold tabular-nums"
+                  style={{ color: best ? '#59f07f' : 'rgba(236,236,236,.3)' }}
+                >
+                  {best ? `${(best.percent * 100).toFixed(2)}%` : '—'}{' '}
+                  {best && <span className="text-[14px]">{best.grade}</span>}
+                </div>
+              </div>
+              <div className="bg-[#0e0f12] px-3 py-[9px]">
+                <div className="text-[10px] tracking-[0.18em] text-[#ececec]/35">WORLD</div>
+                <div className="truncate font-display text-[21px] font-bold text-[#ffcf3d] tabular-nums">
+                  {topRow ? `${(topRow.percent * 100).toFixed(2)}%` : '—'}
+                </div>
+              </div>
+            </div>
+            {best && (
+              <div className="mt-2 text-[12px] text-[#ececec]/45">
+                {best.plays} play{best.plays === 1 ? '' : 's'} · last played {fmtAgo(best.updated)}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="flex items-baseline gap-[10px]">
+              <Label>DENSITY</Label>
+              <span className="h-px flex-1 bg-white/[0.07]" />
+              {stats && (
+                <span className="text-[11px] text-[#ececec]/55">
+                  {stats.peakNps.toFixed(1)} peak
+                </span>
+              )}
+            </div>
+            {stats && stats.nps.length > 0 ? (
+              <>
+                <div className="relative mt-2 h-[48px] w-full overflow-hidden bg-[#141c22]">
+                  <svg
+                    className="absolute inset-0 h-full w-full"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    <defs>
+                      <linearGradient id="nps-playmods" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stopColor="#8200a1" />
+                        <stop offset="1" stopColor="#00adc0" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      d={(() => {
+                        const bins = stats.nps;
+                        const t0 = bins[0].t0;
+                        const span = Math.max(0.001, bins[bins.length - 1].t1 - t0);
+                        const x = (t: number) => ((t - t0) / span) * 100;
+                        let path = `M 0 100`;
+                        for (const b of bins) {
+                          const y = 100 - b.h * 100;
+                          path += ` L ${x(b.t0).toFixed(2)} ${y.toFixed(2)} L ${x(b.t1).toFixed(2)} ${y.toFixed(2)}`;
+                        }
+                        return path + ` L 100 100 Z`;
+                      })()}
+                      fill="url(#nps-playmods)"
+                    />
+                  </svg>
+                  {previewWindow && (
+                    <div
+                      className="absolute inset-y-0"
+                      style={{
+                        left: `${Math.max(0, (previewWindow.startSeconds / Math.max(0.001, stats.lengthSeconds)) * 100)}%`,
+                        right: `${Math.max(0, 100 - (previewWindow.endSeconds / Math.max(0.001, stats.lengthSeconds)) * 100)}%`,
+                        boxShadow: `inset 0 0 0 2px ${AC}`,
+                      }}
+                    />
+                  )}
+                </div>
+                {previewWindow && (
+                  <div className="mt-[6px] text-[11px] tracking-[0.1em]" style={{ color: AC }}>
+                    ▣ {practiceSection ? 'PREVIEWING YOUR LOOP' : 'PREVIEWING THE PEAK'}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="mt-2 flex h-[48px] items-center justify-center bg-[#141c22] text-[10px] tracking-[0.22em] text-[#ececec]/30">
+                NO CHART DATA
+              </div>
+            )}
+          </div>
+
+          {stats && (
+            <div>
+              <Label>TECH</Label>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
+                {stats.tech &&
+                  (
+                    [
+                      [stats.tech.crossovers, 'Crossovers'],
+                      [stats.tech.footswitches, 'Footswitch'],
+                      [stats.tech.sideswitches, 'Sideswitch'],
+                      [stats.tech.jacks, 'Jacks'],
+                      [stats.tech.brackets, 'Brackets'],
+                    ] as const
+                  ).map(([n, label]) => (
+                    <div key={label} className="flex gap-[7px]">
+                      <span className="w-[34px] text-right font-bold tabular-nums">{n}</span>
+                      <span className="text-[#ececec]/50">{label}</span>
+                    </div>
+                  ))}
+              </div>
+              <div className="mt-[10px] text-[12px] leading-[1.5] text-[#ececec]/45">
+                {stats.steps} steps · {stats.jumps} jumps · {stats.holds} holds · {stats.mines}{' '}
+                mines · {stats.hands} hands
+              </div>
+            </div>
+          )}
+
+          <span className="flex-1" />
+          {versusActive && room && (
+            <div className="text-[12px] leading-[1.5] text-[#ffcf3d]">
+              {room.isHost
+                ? selfReady
+                  ? 'Waiting for the room to ready up.'
+                  : "You're the host — READY locks your pick and starts the countdown."
+                : 'The host picked this song — READY when you are.'}
+            </div>
+          )}
+        </div>
       </div>
-    </Stage>
+
+      {/* The same party bar as song select — the roster never moves. */}
+      <PartyBar
+        status={
+          room && !selfReady && room.phase === 'lobby'
+            ? room.isHost
+              ? 'READY locks your pick and starts the countdown.'
+              : 'Pick a difficulty, then READY.'
+            : undefined
+        }
+      />
+
+      <KeyLegend
+        actions={{
+          updown: 'OPTION',
+          leftright: 'CHANGE',
+          select: room?.isHost
+            ? 'BACK (ROOM STAYS)'
+            : versusActive
+              ? 'LEAVE ROOM'
+              : 'BACK TO SONGS',
+          start:
+            vs.k === 'in-room'
+              ? canForceStart
+                ? 'BEGIN NOW'
+                : selfReady
+                  ? 'WAITING…'
+                  : 'READY'
+              : 'PLAY',
+          fav: null,
+        }}
+        extras={[
+          { key: 'TAB', act: 'PREVIEW SPOT' },
+          { key: 'R', act: 'RESET MODS' },
+        ]}
+      />
+    </div>
   );
 }

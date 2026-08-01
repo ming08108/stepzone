@@ -134,9 +134,11 @@ function Label({ children, k }: { children: string; k: number }) {
   );
 }
 
-/* ── the timing bar — the highest-value addition, and it needs no new data ── */
+/* ── the timing bar — the highest-value addition, and it needs no new data ──
+   Exported: the results screen renders the SAME bar at the same scale, so the
+   in-play readout and the post-song summary can never disagree. */
 
-function TimingBar({
+export function TimingBar({
   recentMs,
   meanMs,
   k,

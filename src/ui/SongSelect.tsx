@@ -51,7 +51,7 @@ import { buildChartSeed, type ChartSeed } from './devSeed';
 import { NamePrompt } from './NamePrompt';
 import { shouldPromptForName } from '../net/identity';
 import { isRoomCode } from '../net/versus';
-import { MultiplayerPanel } from './MultiplayerPanel';
+import { PartyBar } from './PartyBar';
 import { announceBrowsing, roomBrowsing, roomState, subscribeRoom, suggestSong } from './roomStore';
 import type { PlayRequest } from './playRequest';
 import { useGamepadKeys } from './useGamepadKeys';
@@ -166,7 +166,9 @@ export function SongSelect({
   const [favs, setFavs] = useState(() => loadFavorites());
 
   const [joinCode] = useState(consumeJoinCode);
-  const [versusOpen, setVersusOpen] = useState(joinCode !== undefined);
+  // The party bar's idle ENTRY state (design 6a) — summoned from the header,
+  // or auto-shown when arriving via a ?join= link.
+  const [partyOpen, setPartyOpen] = useState(joinCode !== undefined);
   const [namePromptOpen, setNamePromptOpen] = useState(
     () => shouldPromptForName() && joinCode === undefined,
   );
@@ -446,7 +448,10 @@ export function SongSelect({
   ------------------------------------------------------------------------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (versusOpen || namePromptOpen) return;
+      // While the party bar's entry state is up it owns the pad (capture-phase
+      // handler in PartyBar); while idle-open or the name prompt is up, the
+      // list must not also react.
+      if ((partyOpen && vsRoom.k === 'idle') || namePromptOpen) return;
 
       const target = e.target as HTMLElement | null;
       const typing = target?.tagName === 'INPUT';
@@ -514,7 +519,7 @@ export function SongSelect({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pane, railItems, shown, song, start, toggleFav, versusOpen, namePromptOpen]);
+  }, [pane, railItems, shown, song, start, toggleFav, partyOpen, vsRoom.k, namePromptOpen]);
 
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
@@ -581,6 +586,14 @@ export function SongSelect({
             STEPS
           </span>
           <span className="h-[18px] w-px bg-white/[0.12]" />
+          <button
+            onClick={() => setPartyOpen((v) => !v)}
+            className="hover:text-[#ececec]"
+            style={{ color: vsRoom.k === 'in-room' ? '#59f07f' : partyOpen ? AC : undefined }}
+            title="Host or join a multiplayer room"
+          >
+            PARTY{vsRoom.k === 'in-room' ? ' ●' : ''}
+          </button>
           <button
             onClick={() => setShowSources((v) => !v)}
             className="hover:text-[#ececec]"
@@ -898,10 +911,20 @@ export function SongSelect({
         />
       </div>
 
-      {versusOpen && (
-        <MultiplayerPanel initialCode={joinCode} onClose={() => setVersusOpen(false)} />
-      )}
       {namePromptOpen && <NamePrompt onDone={() => setNamePromptOpen(false)} />}
+
+      {/* The party bar — entry, connecting, roster and transfer, all one
+          docked surface above the legend (never covering content). */}
+      <PartyBar
+        open={partyOpen}
+        onClose={() => setPartyOpen(false)}
+        joinCode={joinCode}
+        status={
+          isRoomHost && roomBrowse?.phase === 'lobby'
+            ? "You're the host — pick a song and everyone follows."
+            : undefined
+        }
+      />
 
       <KeyLegend actions={legend} note={note} />
     </div>

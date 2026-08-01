@@ -127,6 +127,75 @@
     }
   }
 
+  /* Results reveal — the arcade cascade. One-shot animations with `both` fill:
+     grade slams, percent pops, columns rise, the action bar arrives last.
+     (Reduced motion is neutralized by the global media query above.) */
+  @keyframes slamIn {
+    0% {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+    70% {
+      transform: scale(0.98);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes riseIn {
+    from {
+      transform: translateY(18px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  @keyframes dropIn {
+    from {
+      transform: translateY(-14px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  @keyframes popIn {
+    0% {
+      transform: scale(0.7);
+      opacity: 0;
+    }
+    70% {
+      transform: scale(1.08);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  /* Calibrate metronome: an expanding ring gives the beat a run-up. */
+  @keyframes beatRing {
+    0% {
+      transform: scale(0.72);
+      opacity: 0.9;
+    }
+    100% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+  }
+
   /* Standings reveal (RoomRace): rows land last-place-first. */
   @keyframes standingsIn {
     from {

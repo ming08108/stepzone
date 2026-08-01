@@ -74,6 +74,7 @@ const stored = (over: Partial<ChartScore> = {}): ChartScore => ({
   artist: 'Artist',
   difficulty: Difficulty.Hard,
   meter: 9,
+  history: [],
   ...over,
 });
 

@@ -5,15 +5,14 @@ import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { buildAttractConfig } from '../render/attractConfig';
 import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
-import { isVideoFile, songBpmRange } from '../io/songFiles';
+import { isVideoFile } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
 import { connectedPadInfo } from '../input/gamepad';
 import { looksLikeDancePad } from '../input/padDetect';
 import { difficultyToString } from '../song/difficulty';
-import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
-import { chartKey, loadScores, recordPlay, type ChartScore } from '../app/scores';
+import { chartKey, loadScores, recordPlay } from '../app/scores';
 import { submitScore } from '../net/leaderboard';
 import { type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
 import { chartDataOf } from '../song/chartData';
@@ -24,120 +23,17 @@ import { roomState, subscribeRoom } from './roomStore';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 import { useSyncExternalStore } from 'react';
-import { gradeColor, PlayHud } from './hud/PlayHud';
+import { PlayHud } from './hud/PlayHud';
 import { useHudTelemetry } from './hud/useHudTelemetry';
+import { LoadingSplash } from './LoadingSplash';
+import { Results, type Result } from './Results';
+import { recordPlayOffsets } from '../app/offsetLog';
 
 type Phase = 'ready' | 'playing' | 'done' | 'error';
-
-interface Result {
-  percent: number;
-  grade: string;
-  maxCombo: number;
-  failed: boolean;
-  counts: Record<number, number>;
-  best: ChartScore | null;
-  isNewRecord: boolean;
-  offsets: number[];
-  /** This run used a keyboard for notes, so it was held back from the board. */
-  keyboardBlocked: boolean;
-  /** These results are from watching a replay, not a fresh play. */
-  isReplay: boolean;
-}
-
-/** Early/late timing distribution of the just-played taps. */
-function OffsetGraph({ offsets }: { offsets: number[] }) {
-  if (offsets.length === 0) return null;
-  const ms = offsets.map((o) => o * 1000);
-  const N = 25;
-  const range = 180; // ±180 ms
-  const buckets = new Array<number>(N).fill(0);
-  for (const m of ms) {
-    const idx = Math.round(
-      ((Math.max(-range, Math.min(range, m)) + range) / (2 * range)) * (N - 1),
-    );
-    buckets[idx]++;
-  }
-  const max = Math.max(1, ...buckets);
-  const mean = ms.reduce((a, b) => a + b, 0) / ms.length;
-  return (
-    <div className="w-[34rem] max-w-full">
-      <div className="flex h-24 items-end justify-center gap-[3px]">
-        {buckets.map((c, i) => (
-          <div
-            key={i}
-            className={`flex-1 rounded-sm ${i === (N - 1) / 2 ? 'bg-white/40' : 'bg-accent'}`}
-            style={{ height: `${Math.max(2, (c / max) * 100)}%`, opacity: 0.35 + 0.65 * (c / max) }}
-          />
-        ))}
-      </div>
-      <div className="mt-1.5 flex justify-between text-[13px] text-muted">
-        <span>early</span>
-        <span className={mean < -5 ? 'text-[#4b8be6]' : mean > 5 ? 'text-[#ffd94b]' : 'text-ink'}>
-          avg {mean >= 0 ? '+' : ''}
-          {mean.toFixed(1)} ms {mean < -5 ? '(early)' : mean > 5 ? '(late)' : '(on time)'}
-        </span>
-        <span>late</span>
-      </div>
-    </div>
-  );
-}
 
 const AC = '#ff5d47';
 /** How long `back` must be held mid-song to quit (stray taps don't drop out). */
 const QUIT_HOLD_MS = 900;
-
-const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
-  [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
-  [TapNoteScore.W2, 'EXCELLENT', '#ffd23d'],
-  [TapNoteScore.W3, 'GREAT', '#59f07f'],
-  [TapNoteScore.W4, 'DECENT', '#c86bff'],
-  [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
-  [TapNoteScore.Miss, 'MISS', '#ff5d47'],
-];
-
-/** Results header: a big tier-colored letter grade beside the % and clear/fail. */
-function ResultHeader({ result }: { result: Result }) {
-  const gc = gradeColor(result.grade);
-  return (
-    <>
-      <div className="text-[17px] tracking-[0.32em] text-[#ececec]/70">RESULTS</div>
-      <div className="my-2 flex items-center gap-9">
-        <div
-          className="flex min-w-[176px] items-center justify-center border-2 px-8 py-3"
-          style={{
-            borderColor: gc,
-            background: `${gc}0d`,
-            boxShadow: `0 0 60px ${gc}44, inset 0 0 34px ${gc}24`,
-          }}
-        >
-          <span
-            className="font-black leading-none"
-            style={{
-              color: gc,
-              fontSize: result.grade.length > 2 ? 86 : 118,
-              letterSpacing: '0.02em',
-              textShadow: `0 0 30px ${gc}aa`,
-            }}
-          >
-            {result.grade}
-          </span>
-        </div>
-        <div className="flex flex-col items-start">
-          <div className="text-[74px] font-bold leading-none tabular-nums">
-            {(result.percent * 100).toFixed(2)}
-            <span className="text-[40px] text-[#ececec]/55">%</span>
-          </div>
-          <div
-            className="mt-2 text-[20px] font-bold tracking-[0.24em]"
-            style={{ color: result.failed ? AC : '#59f07f' }}
-          >
-            {result.failed ? 'FAILED' : 'CLEARED'}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
 
 const CTL_BTN =
   'border border-white/15 bg-black/30 px-3 py-1.5 text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:border-[#ff5d47] hover:text-[#ececec]';
@@ -173,11 +69,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   // The DOM HUD samples the live session at 15 Hz (solo only — in versus the
   // column it occupies is where 2P's field renders).
   const [hudFps, setHudFps] = useState(0);
-  // Your stored best on this chart before this run, for the live PB delta.
-  const pbPercent = useMemo(() => {
+  // Your stored best on this chart before the CURRENT run (re-read on every
+  // start, so a RETRY after a new record compares against the fresh best).
+  const [pbPercent, setPbPercent] = useState<number | null>(() => {
     const rec = loadScores()[chartKey(req.song, req.chart)];
     return rec ? rec.percent : null;
-  }, [req.song, req.chart]);
+  });
   const numTracks = useMemo(() => req.chart.getNoteData().numTracks, [req.chart]);
   // Versus locks the room's music rate; everything (session, ranking, the
   // results rate note) follows the rate the play actually ran at.
@@ -198,6 +95,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
+  // Pre-song splash progress (GameSession.onLoadStage milestones).
+  const [loadStage, setLoadStage] = useState({ stage: 'PREPARING', frac: 0.05 });
   const telemetry = useHudTelemetry(sessionRef, phase === 'playing');
   // FPS readout for the HUD's bottom strip (the old FpsMeter loop, hoisted).
   useEffect(() => {
@@ -511,6 +410,9 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     cleanupBg();
     // Fresh per-run note-device tracking (drives the submission gate).
     noteInputRef.current = { keyboard: false, pad: false };
+    // The best to beat THIS run (a retry after a record compares to the record).
+    const pbRec = loadScores()[chartKey(req.song, req.chart)];
+    setPbPercent(pbRec ? pbRec.percent : null);
     // A replay run is inert: it counts no song play (and banks no steps below).
     if (!replaying && !playCountedRef.current) {
       playCountedRef.current = true;
@@ -585,6 +487,12 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     session.rivalSources = rivalSrcs;
     setLoopNum(1);
     session.onLoop = setLoopNum;
+    setLoadStage({ stage: 'PREPARING', frac: 0.05 });
+    session.onLoadStage = (stage, frac) => {
+      if (sessionRef.current === session || sessionRef.current === null) {
+        setLoadStage({ stage, frac });
+      }
+    };
     session.onError = () => {
       if (sessionRef.current === session) setPhase('error');
     };
@@ -599,6 +507,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           maxCombo: judge.maxCombo,
           failed: judge.failed,
           counts,
+          holdCounts: { ...judge.holdCounts },
           best: null,
           isNewRecord: false,
           offsets: [...session.offsets],
@@ -676,12 +585,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         counts,
         holdCounts: { ...judge.holdCounts },
       });
+      // Bank this play's tap errors for the settings TIMING recommendation.
+      recordPlayOffsets(session.offsets);
       setResult({
         percent: judge.percentDancePoints,
         grade: judge.grade,
         maxCombo: judge.maxCombo,
         failed: judge.failed,
         counts,
+        holdCounts: { ...judge.holdCounts },
         best,
         isNewRecord,
         offsets: [...session.offsets],
@@ -802,17 +714,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
     else void el.requestFullscreen?.();
   };
 
-  const title = req.song.displayFullTitle || 'Untitled';
-  const diffName = difficultyToString(req.chart.difficulty);
-  const dcolor = difficultyColor(diffName);
-  const r = songBpmRange(req.song);
-  const bpmDisp =
-    r.max > 0
-      ? Math.round(r.min) === Math.round(r.max)
-        ? String(Math.round(r.max))
-        : `${Math.round(r.min)}–${Math.round(r.max)}`
-      : '';
-
   return (
     <div
       ref={wrapRef}
@@ -885,148 +786,69 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         </div>
       )}
 
-      {phase !== 'playing' && (
+      {/* The pre-song wait (design 6c): brief the player — chart shape, target,
+          mods — instead of blinking LOADING at them. */}
+      {phase === 'ready' && (
+        <LoadingSplash
+          song={req.song}
+          chart={req.chart}
+          pack={req.entry?.pack}
+          settings={settings}
+          effRate={effRate}
+          stage={loadStage.stage}
+          frac={loadStage.frac}
+          statusOverride={req.versus && vsWaiting ? 'SYNCING WITH THE ROOM…' : null}
+        />
+      )}
+
+      {phase === 'error' && (
         <div
           className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-3 p-6 text-center text-[#ececec] backdrop-blur-[2px]"
           style={{ background: 'rgba(5,6,8,.82)' }}
         >
-          {phase === 'ready' && (
-            <>
-              <div className="text-[19px] font-bold tracking-[0.22em]">STEPZONE</div>
-              <div className="mt-2 text-[40px] font-bold leading-tight">{title}</div>
-              <div className="text-[18px] text-[#ececec]/60">
-                {req.song.artist || '—'}
-                {bpmDisp && ` · BPM ${bpmDisp}`}
-              </div>
-              <div
-                className="mt-1 border px-4 py-1.5 text-[16px] font-bold uppercase tracking-wide"
-                style={{ borderColor: dcolor, color: dcolor }}
-              >
-                {diffName} {req.chart.meter}
-              </div>
-              <div
-                className="mt-4 text-[14px] tracking-[0.22em] text-[#ececec]/60"
-                style={{ animation: 'blinkStart 1.4s infinite' }}
-              >
-                {req.versus && vsWaiting ? 'SYNCING WITH THE ROOM…' : 'LOADING…'}
-              </div>
-            </>
-          )}
-          {phase === 'error' && (
-            <>
-              <div className="text-[19px] font-bold tracking-[0.22em]">RENDERING FAILED</div>
-              <div className="mt-2 max-w-[440px] text-[15px] leading-relaxed text-[#ececec]/70">
-                The note field needs WebGPU and couldn&apos;t start (or the GPU device was lost
-                mid-song). Try a recent Chrome or Edge with hardware acceleration enabled, then come
-                back in.
-              </div>
-              <button
-                onClick={onExit}
-                className="mt-4 border px-4 py-1.5 text-[14px] tracking-[0.18em]"
-                style={{ borderColor: AC, background: AC + '1a' }}
-              >
-                ← SONGS
-              </button>
-            </>
-          )}
-          {phase === 'done' && result && (
-            <>
-              <ResultHeader result={result} />
-              {req.versus && (
-                <RoomStandings
-                  versus={req.versus}
-                  skipSignal={skipSignal}
-                  onRevealed={(done) => (standingsRevealedRef.current = done)}
-                />
-              )}
-              {result.isNewRecord && (
-                <div className="text-[14px] font-bold tracking-[0.15em]" style={{ color: AC }}>
-                  ★ NEW RECORD
-                </div>
-              )}
-              {effRate !== 1 && (
-                <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
-                  RATE ×{effRate.toFixed(2)} — SCORE NOT SAVED
-                </div>
-              )}
-              {result.keyboardBlocked && (
-                <div className="text-[12px] tracking-[0.14em] text-[#ececec]/40">
-                  KEYBOARD PLAY — NOT SENT TO THE LEADERBOARD
-                </div>
-              )}
-              {/* A race's results screen is the standings — the per-judgment
-                  table would push a full party off-screen; solo keeps it. */}
-              {!req.versus && (
-                <div className="mt-3 w-[400px] max-w-full">
-                  {JUDGMENT_ROWS.map(([tns, label, color]) => (
-                    <div
-                      key={tns}
-                      className="flex justify-between border-b border-white/[0.06] py-1 text-[18px] tracking-[0.1em]"
-                    >
-                      <span style={{ color }}>{label}</span>
-                      <span className="font-bold tabular-nums">{result.counts[tns] ?? 0}</span>
-                    </div>
-                  ))}
-                  <div className="flex justify-between border-t border-white/20 py-1 text-[18px] tracking-[0.1em]">
-                    <span className="text-[#ececec]/60">MAX COMBO</span>
-                    <span className="font-bold tabular-nums">{result.maxCombo}</span>
-                  </div>
-                </div>
-              )}
-              <OffsetGraph offsets={result.offsets} />
-              {result.best && (
-                <div className="text-[13px] tracking-[0.1em] text-[#ececec]/50">
-                  BEST {(result.best.percent * 100).toFixed(2)}% · {result.best.plays} PLAYS
-                </div>
-              )}
-              <div className="mt-3 flex flex-col items-center gap-1.5">
-                <button
-                  ref={ctaRef}
-                  onClick={onExit}
-                  className="text-[18px] tracking-[0.22em] outline-none"
-                  style={{
-                    color: doneSel === 0 ? AC : 'rgba(236,236,236,.45)',
-                    animation: doneSel === 0 ? 'blinkStart 1.4s infinite' : undefined,
-                  }}
-                >
-                  CONTINUE
-                </button>
-                {/* RETRY would need a fresh room handshake in versus — omit it. */}
-                {!req.versus && (
-                  <button
-                    ref={retryRef}
-                    onClick={() => void start()}
-                    className="text-[16px] tracking-[0.18em] outline-none"
-                    style={{
-                      color: doneSel === 1 ? AC : 'rgba(236,236,236,.45)',
-                      animation: doneSel === 1 ? 'blinkStart 1.4s infinite' : undefined,
-                    }}
-                  >
-                    RETRY
-                  </button>
-                )}
-                {/* Re-watch the play just finished (solo only; a replay's own
-                    results have no fresh log to re-run). */}
-                {!req.versus && !result.isReplay && (
-                  <button
-                    ref={watchReplayRef}
-                    onClick={() => void start(lastReplayRef.current)}
-                    className="text-[16px] tracking-[0.18em] outline-none"
-                    style={{
-                      color: doneSel === 2 ? AC : 'rgba(236,236,236,.45)',
-                      animation: doneSel === 2 ? 'blinkStart 1.4s infinite' : undefined,
-                    }}
-                  >
-                    WATCH REPLAY
-                  </button>
-                )}
-                <div className="mt-1 text-[11px] tracking-[0.16em] text-[#ececec]/55">
-                  {req.versus ? 'START — CONTINUE' : '▲▼ SELECT · START — CONFIRM · SELECT — QUIT'}
-                </div>
-              </div>
-            </>
-          )}
+          <div className="text-[19px] font-bold tracking-[0.22em]">RENDERING FAILED</div>
+          <div className="mt-2 max-w-[440px] text-[15px] leading-relaxed text-[#ececec]/70">
+            The note field needs WebGPU and couldn&apos;t start (or the GPU device was lost
+            mid-song). Try a recent Chrome or Edge with hardware acceleration enabled, then come
+            back in.
+          </div>
+          <button
+            onClick={onExit}
+            className="mt-4 border px-4 py-1.5 text-[14px] tracking-[0.18em]"
+            style={{ borderColor: AC, background: AC + '1a' }}
+          >
+            ← SONGS
+          </button>
         </div>
+      )}
+
+      {/* Results (design 5a "SCORECARD"): verdict · breakdown · progress. */}
+      {phase === 'done' && result && (
+        <Results
+          song={req.song}
+          chart={req.chart}
+          result={result}
+          pbPercent={pbPercent}
+          effRate={effRate}
+          isVersus={!!req.versus}
+          isPractice={req.practice != null}
+          doneSel={doneSel}
+          ctaRef={ctaRef}
+          retryRef={retryRef}
+          watchReplayRef={watchReplayRef}
+          onContinue={onExit}
+          onRetry={() => void start()}
+          onWatchReplay={(events) => void start(events)}
+          lastReplay={lastReplayRef.current}
+        >
+          {req.versus && (
+            <RoomStandings
+              versus={req.versus}
+              skipSignal={skipSignal}
+              onRevealed={(done) => (standingsRevealedRef.current = done)}
+            />
+          )}
+        </Results>
       )}
     </div>
   );

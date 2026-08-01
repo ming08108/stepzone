@@ -19,15 +19,7 @@ import { BgConvertBadge } from './BgConvertBadge';
 import { RawGamepadHint } from './RawGamepadHint';
 import type { PlayRequest } from './playRequest';
 import { flushQueue } from '../net/leaderboard';
-import {
-  consumeFollow,
-  roomState,
-  subscribeRoom,
-  takeRoomForPlay,
-  type RoomUiState,
-} from './roomStore';
-import { RoomDock } from './RoomDock';
-import { RoomJoinOverlay } from './RoomJoinOverlay';
+import { consumeFollow, roomState, subscribeRoom, takeRoomForPlay } from './roomStore';
 
 type View =
   | 'menu'
@@ -41,34 +33,6 @@ type View =
   | 'isaacviewer'
   | 'replaydancer'
   | 'experiments';
-
-/** The one-line "what's happening / what to do" for the room dock, given the
- *  current screen — makes a GUEST's inability to pick songs explicit. */
-function roomDockStatus(view: View, vs: RoomUiState): string | undefined {
-  if (vs.k !== 'in-room') return undefined;
-  const room = vs.room;
-  const present = room.players.filter((p) => !p.left).length;
-  if (view === 'playoptions') {
-    if (room.self?.ready) {
-      const readyCount = room.players.filter((p) => !p.left && p.ready).length;
-      // A readied host who's still waiting can begin now with whoever's ready.
-      if (room.isHost && present > readyCount && readyCount >= 2)
-        return 'WAITING FOR PLAYERS — OR PRESS START TO BEGIN NOW';
-      return 'WAITING FOR EVERYONE TO READY UP…';
-    }
-    if (present < 2) return 'WAITING FOR PLAYERS — SHARE THE CODE OR LINK';
-    return 'PICK YOUR DIFFICULTY, THEN PRESS START TO READY UP';
-  }
-  if (room.isHost) {
-    return present < 2
-      ? 'WAITING FOR PLAYERS — PICK A SONG OR SHARE THE CODE'
-      : 'PICK A SONG FOR THE ROOM';
-  }
-  // Guest: they can't pick — the host does. Make that unmistakable.
-  if (vs.follow.k === 'resolving' || vs.follow.k === 'error') return vs.follow.message;
-  if (room.phase === 'playing') return 'A SONG IS IN PROGRESS — YOU JOIN THE NEXT ONE';
-  return 'THE HOST PICKS THE SONGS — SIT TIGHT, YOU JOIN AUTOMATICALLY';
-}
 
 export function App() {
   // ?bench / ?bench=auto deep-links into the render benchmark; ?vrm into the
@@ -199,18 +163,10 @@ export function App() {
   return (
     <>
       {body}
-      {/* The room dock lives here — one persistent element pinned bottom-right
-          on every screen except gameplay, so the party stays visible and in the
-          same place as you move between song select, options, and player
-          options. */}
-      {vs.k !== 'idle' && view !== 'play' && (
-        <div className="fixed bottom-4 right-4 z-[45] w-[432px] max-w-[92vw]">
-          <RoomDock vs={vs} status={roomDockStatus(view, vs)} />
-        </div>
-      )}
-      {/* Prominent "connecting / getting the song" overlay so joining a room —
-          especially one whose host already picked a song — never looks stuck. */}
-      <RoomJoinOverlay />
+      {/* The party lives in the docked PartyBar that SONG SELECT and PLAYER
+          OPTIONS render above their legends (design 6a) — one surface for
+          entry, connecting, roster and transfers, replacing the floating dock
+          and the blocking join overlay that used to be pinned here. */}
       <BgConvertBadge />
       {view !== 'play' && <RawGamepadHint />}
     </>

@@ -128,6 +128,8 @@ export class GameSession {
   onError?: () => void;
   /** Practice mode: fired each time the loop restarts, with the new pass number. */
   onLoop?: (count: number) => void;
+  /** Load-progress milestones during prepare(), for the pre-song splash. */
+  onLoadStage?: (stage: string, frac: number) => void;
 
   constructor(
     song: Song,
@@ -296,6 +298,7 @@ export class GameSession {
    */
   async prepare(encodedAudio: ArrayBuffer | null = null): Promise<boolean> {
     let freshField = false;
+    this.onLoadStage?.('STARTING THE GPU FIELD', 0.1);
     // Create the WebGPU field once per session (both skins render on it). If
     // the device is unavailable there is no canvas fallback — surface an error.
     if (!this.gpuField) {
@@ -324,6 +327,7 @@ export class GameSession {
       freshField = true;
     }
     if (this.stopped) return false;
+    this.onLoadStage?.('DECODING AUDIO', 0.45);
     await this.clock.resume();
     let usedAudio = false;
     if (encodedAudio) {
@@ -343,6 +347,7 @@ export class GameSession {
       this.clock.setBuffer(buffer);
     }
     this.pendingPrewarm = freshField;
+    this.onLoadStage?.('BAKING NOTE SPRITES', 0.9);
     return !this.stopped;
   }
 

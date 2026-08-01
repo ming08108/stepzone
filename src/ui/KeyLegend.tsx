@@ -31,7 +31,18 @@ const DEFAULTS: Record<LegendSlot, string> = {
 /** `null` dims a slot (still shown, still in place); omitted uses the default. */
 export type LegendActions = Partial<Record<LegendSlot, string | null>>;
 
-export function KeyLegend({ actions, note }: { actions?: LegendActions; note?: string }) {
+/** Screen-specific keyboard-only hints appended AFTER the five fixed slots. */
+export type LegendExtra = { key: string; act: string };
+
+export function KeyLegend({
+  actions,
+  note,
+  extras,
+}: {
+  actions?: LegendActions;
+  note?: string;
+  extras?: LegendExtra[];
+}) {
   return (
     <div className="flex h-[46px] flex-none items-center border-t border-white/[0.09] bg-[#0e0f12] px-[22px] font-display text-[12px] tracking-[0.12em]">
       {SLOT_ORDER.map((slot) => {
@@ -51,6 +62,14 @@ export function KeyLegend({ actions, note }: { actions?: LegendActions; note?: s
           </span>
         );
       })}
+      {extras?.map((x) => (
+        <span key={x.key} className="flex items-center gap-[9px] pr-[26px]">
+          <span className="inline-flex h-[22px] min-w-[26px] items-center justify-center border border-white/[0.18] px-[6px] text-[11px] text-[#ececec]">
+            {x.key}
+          </span>
+          <span className="text-[#ececec]/55">{x.act}</span>
+        </span>
+      ))}
       <span className="flex-1" />
       {note && (
         <span className="text-accent" style={{ animation: 'blinkStart 1.4s infinite' }}>

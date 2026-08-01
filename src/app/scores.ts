@@ -31,7 +31,13 @@ export interface ChartScore extends ChartScoreCore {
   /** Difficulty enum value (song/difficulty). */
   difficulty: number;
   meter: number;
+  /** The last few plays' percents, oldest first (this best included) — the
+   *  results screen's attempt-history strip. Capped at HISTORY_LIMIT. */
+  history: number[];
 }
+
+/** How many recent attempt percents a record keeps. */
+export const HISTORY_LIMIT = 20;
 
 const STORAGE_KEY = 'notefield.scores.v2';
 
@@ -68,6 +74,9 @@ function sanitizeScore(v: unknown): ChartScore | null {
     artist: v.artist,
     difficulty: v.difficulty,
     meter: v.meter,
+    history: Array.isArray(v.history)
+      ? v.history.filter((h): h is number => finiteNum(h) && h >= 0 && h <= 1).slice(-HISTORY_LIMIT)
+      : [],
   };
 }
 
@@ -135,6 +144,9 @@ export function recordPlay(
     artist: song.artist,
     difficulty: chart.difficulty,
     meter: chart.meter,
+    // Every attempt lands in the ring (best or not) — the results screen's
+    // "last N attempts" strip needs the misses too.
+    history: [...(map[key]?.history ?? []), r.percent].slice(-HISTORY_LIMIT),
   };
   map[key] = best;
   save(map);

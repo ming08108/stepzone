@@ -125,6 +125,7 @@ describe('buildBestsBySong', () => {
     artist: 'Ar',
     difficulty: Difficulty.Hard,
     meter: 8,
+    history: [],
     ...over,
   });
 
