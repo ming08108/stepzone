@@ -16,27 +16,20 @@
 import {
   CLEAR_COLOR,
   CLEAR_GLYPH,
+  CLEAR_LABEL,
   clearState,
   FAV_CLR,
   focusStyle,
   type ClearState,
 } from './songSelectUi';
 import { DIFF_SLOT_COLORS } from './difficultyUi';
+import { gradeColor } from './hud/PlayHud';
 import type { SongVM } from './songSelectModel';
 
 export const ROW_H = 54;
 export const ROW_H_FOCUSED = 62;
 
 const GRID = 'grid-cols-[22px_1fr_74px_58px_62px]';
-
-const GRADE_COLOR: Record<string, string> = {
-  AAA: '#ffcf3d',
-  AA: '#59f07f',
-  A: '#59f07f',
-  B: 'rgba(236,236,236,.72)',
-  C: 'rgba(236,236,236,.72)',
-  D: '#ff5c5c',
-};
 
 export function SongListHeader({ diffName }: { diffName: string }) {
   return (
@@ -88,8 +81,8 @@ export function SongRow({
       <span
         className="text-[13px] leading-none"
         style={{ color: CLEAR_COLOR[state] }}
-        title={state}
-        aria-label={state}
+        title={CLEAR_LABEL[state]}
+        aria-label={CLEAR_LABEL[state]}
       >
         {CLEAR_GLYPH[state]}
       </span>
@@ -135,7 +128,7 @@ export function SongRow({
 
       <span
         className="justify-self-end text-[14px] font-bold tabular-nums"
-        style={{ color: best ? (GRADE_COLOR[best.grade] ?? '#ececec') : 'rgba(236,236,236,.25)' }}
+        style={{ color: best ? gradeColor(best.grade) : 'rgba(236,236,236,.25)' }}
       >
         {best ? best.grade : '—'}
       </span>

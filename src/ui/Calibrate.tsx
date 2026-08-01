@@ -17,7 +17,9 @@ import { useEffect, useRef, useState } from 'react';
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { isRecord, loadJson, saveJson } from '../app/storage';
+import { tickColor } from './hud/PlayHud';
 import { KeyLegend } from './KeyLegend';
+import { PartyBar } from './PartyBar';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 
@@ -70,6 +72,10 @@ function trimmedMeanMs(offsets: readonly number[]): number | null {
   return (trimmed.reduce((s, x) => s + x, 0) / trimmed.length) * 1000;
 }
 
+/** Tap scatter on the SAME ±90 ms axis and colour tiers as the gameplay
+ *  timing bar (hud/PlayHud), so "green" means the same thing on both. */
+const SCATTER_RANGE_MS = 90;
+
 function TapScatter({
   ms,
   meanMs,
@@ -80,20 +86,22 @@ function TapScatter({
   meanMs: number | null;
   height: number;
 }) {
-  const pos = (v: number) => 50 + (Math.max(-60, Math.min(60, v)) / 60) * 50;
+  const pos = (v: number) =>
+    50 + (Math.max(-SCATTER_RANGE_MS, Math.min(SCATTER_RANGE_MS, v)) / SCATTER_RANGE_MS) * 50;
   const AXIS = 26;
   const usable = Math.max(1, height - AXIS - 9 - 14 - 4);
+  // The W1 window (±11 ms — tickColor's top tier) shaded as the target zone.
+  const zonePct = 50 - (11 / SCATTER_RANGE_MS) * 50;
   return (
     <div
       className="relative bg-[#0a0c12]"
       style={{ height, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.07)' }}
     >
-      {/* the "tight" zone: ±8 ms */}
       <div
         className="absolute"
         style={{
-          left: '43.3%',
-          right: '43.3%',
+          left: `${zonePct}%`,
+          right: `${zonePct}%`,
           top: 0,
           bottom: AXIS,
           background: 'rgba(89,240,127,.07)',
@@ -110,7 +118,7 @@ function TapScatter({
           style={{
             left: `${pos(v)}%`,
             top: 14 + ((i * 37) % usable),
-            background: Math.abs(v) <= 12 ? '#59f07f' : Math.abs(v) <= 30 ? '#ffcf3d' : '#ff9d3d',
+            background: tickColor(v),
             opacity: 0.3 + 0.7 * ((i + 1) / Math.max(1, ms.length)),
           }}
         />
@@ -131,9 +139,9 @@ function TapScatter({
         className="absolute inset-x-0 bottom-0 flex items-center justify-between px-3 text-[11px] tracking-[0.12em] text-[#ececec]/40"
         style={{ height: AXIS }}
       >
-        <span>EARLY −60 ms</span>
+        <span>EARLY −{SCATTER_RANGE_MS} ms</span>
         <span>0</span>
-        <span>+60 ms LATE</span>
+        <span>+{SCATTER_RANGE_MS} ms LATE</span>
       </div>
     </div>
   );
@@ -146,6 +154,9 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
   const rafRef = useRef(0);
   const [running, setRunning] = useState(false);
   const [count, setCount] = useState(0);
+  // Bumped when the click track actually starts — keys the anticipation ring's
+  // CSS animation to the audio clock instead of to the button press.
+  const [ringSeq, setRingSeq] = useState(0);
   const [applied, setApplied] = useState<number | null>(null);
   const [calLog, setCalLog] = useState<CalRun[]>(loadCalLog);
   const [, force] = useState(0);
@@ -179,6 +190,7 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
     clock.setBuffer(makeClickTrack(clock.ctx, clicks, DURATION + 0.5));
     clock.sync.audioOffsetSeconds = 0; // measure raw
     clock.start(0, 0.3);
+    setRingSeq((s) => s + 1); // key the ring animation to the audio start
     offsetsRef.current = [];
     setCount(0);
     setApplied(null);
@@ -221,8 +233,15 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
       return;
     }
     if (e.role === 'confirm') {
-      if (!clockRef.current) void start();
-      else if (offsetsRef.current.length >= MIN_TAPS) apply();
+      if (!clockRef.current) {
+        // Stopped WITH usable data: START takes the lit APPLY button, it must
+        // not silently restart and wipe the taps. A fresh START comes after
+        // applying (or with no data).
+        if (applied === null && offsetsRef.current.length >= MIN_TAPS) apply();
+        else void start();
+      } else if (offsetsRef.current.length >= MIN_TAPS) {
+        apply();
+      }
       return;
     }
     const clock = clockRef.current;
@@ -255,6 +274,16 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
         <span className="text-[13px] text-[#ececec]/50">
           Offset is a property of your output device — recalibrate when it changes
         </span>
+        <button
+          onClick={() => {
+            stop();
+            onBack();
+          }}
+          className="flex h-[30px] items-center px-3 font-display text-[12px] tracking-[0.12em] text-[#ececec]/60 hover:text-[#ececec]"
+          style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)' }}
+        >
+          ✕ BACK
+        </button>
       </div>
 
       <div className="flex min-h-0 flex-1 gap-10 overflow-y-auto px-[5%] py-9">
@@ -272,8 +301,15 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
           <div className="relative flex h-[210px] w-[210px] items-center justify-center">
             {running && (
               <span
+                // Keyed to the click track's start (+0.3s lead-in), so every
+                // cycle COMPLETES on a click — a run-up you can actually pace.
+                key={ringSeq}
                 className="absolute inset-0 rounded-full border-[3px]"
-                style={{ borderColor: AC, animation: `beatRing ${BEAT * 1000}ms linear infinite` }}
+                style={{
+                  borderColor: AC,
+                  animation: `beatRing ${BEAT * 1000}ms linear infinite`,
+                  animationDelay: '0.3s',
+                }}
               />
             )}
             <div className="absolute inset-[26px] rounded-full border-4 border-white/[0.14]" />
@@ -476,12 +512,21 @@ export function Calibrate({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
+      {/* An in-room party stays visible here too (design 6a). */}
+      <PartyBar />
+
       <KeyLegend
         actions={{
-          updown: 'TAP THE BEAT',
-          leftright: 'TAP THE BEAT',
+          updown: running ? 'TAP THE BEAT' : null,
+          leftright: running ? 'TAP THE BEAT' : null,
           select: running ? 'STOP' : 'BACK TO SETTINGS',
-          start: running ? (count >= MIN_TAPS ? 'APPLY' : 'TAPPING…') : 'START',
+          start: running
+            ? count >= MIN_TAPS
+              ? 'APPLY'
+              : 'TAPPING…'
+            : applied === null && count >= MIN_TAPS
+              ? 'APPLY'
+              : 'START',
           fav: null,
         }}
       />

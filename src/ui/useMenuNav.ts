@@ -27,7 +27,26 @@ function moveFocus(dir: number): void {
   let next = idx + dir;
   if (next < 0) next = items.length - 1;
   if (next >= items.length) next = 0;
-  items[next]?.focus();
+  const el = items[next];
+  if (!el) return;
+  el.focus();
+  // A gamepad produces no key events, so the browser never grants
+  // :focus-visible — mark the pad cursor explicitly (styled in index.css).
+  active?.removeAttribute('data-pad-focus');
+  el.setAttribute('data-pad-focus', '');
+}
+
+/** Adjust a focused <input type=range> from the pad (native arrows only work
+ *  for the keyboard). Uses the native value setter so React's onChange fires. */
+function adjustRange(el: HTMLInputElement, dir: number): void {
+  const step = Number(el.step) || 1;
+  const min = el.min === '' ? -Infinity : Number(el.min);
+  const max = el.max === '' ? Infinity : Number(el.max);
+  const next = String(Math.min(max, Math.max(min, Number(el.value) + dir * step)));
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (set) set.call(el, next);
+  else el.value = next;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 export function useMenuNav(onBack?: () => void): void {
@@ -73,9 +92,15 @@ export function useMenuNav(onBack?: () => void): void {
       }
 
       const dir = e.role === 'up' || e.role === 'left' ? -1 : 1;
+      if (isRange && (e.role === 'left' || e.role === 'right')) {
+        // ◀▶ ADJUSTS a focused slider on every device: the keyboard gets the
+        // native behavior, the pad (no key events) gets an explicit nudge.
+        if (e.device === 'keyboard') return;
+        adjustRange(active as HTMLInputElement, dir);
+        return;
+      }
       if (e.device === 'keyboard') {
         if (isField) return;
-        if (isRange && (e.role === 'left' || e.role === 'right')) return; // native slider adjust
         e.nativeEvent?.preventDefault();
       }
       moveFocus(dir);

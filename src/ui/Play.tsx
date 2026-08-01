@@ -337,9 +337,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         setSkipSignal((s) => s + 1);
         return;
       }
-      // A focused button already activates on the native Enter keydown — only
-      // route to a button when nothing else will handle it.
-      if (e.device === 'keyboard' && document.activeElement?.tagName === 'BUTTON') return;
+      // A focused button already activates on the native Enter keydown — skip
+      // ONLY for real Enter presses, or a confirm bound to any other key
+      // (Slash, a pad-adapter key) is silently dead on the results screen.
+      if (
+        e.device === 'keyboard' &&
+        document.activeElement?.tagName === 'BUTTON' &&
+        (e.nativeEvent?.code === 'Enter' || e.nativeEvent?.code === 'NumpadEnter')
+      )
+        return;
       e.nativeEvent?.preventDefault();
       const sel = doneSelRef.current;
       (sel === 2 ? watchReplayRef : sel === 1 ? retryRef : ctaRef).current?.click();
@@ -586,7 +592,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         holdCounts: { ...judge.holdCounts },
       });
       // Bank this play's tap errors for the settings TIMING recommendation.
-      recordPlayOffsets(session.offsets);
+      // Rate-modded plays are skipped: songSecondsAtPerf scales wall-clock by
+      // the rate BEFORE adding the offset, so a 20 ms hardware latency logs as
+      // 30 ms at 1.5× and would bias the suggestion.
+      if (effRate === 1) recordPlayOffsets(session.offsets, settings.audioOffsetMs);
       setResult({
         percent: judge.percentDancePoints,
         grade: judge.grade,
@@ -723,12 +732,15 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           views side by side over a single shared background. */}
       <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
-      {/* Solo: the DOM HUD owns the chrome around the untouched field — score,
-          timing, chart timeline, bottom strip (song info, progress, fullscreen,
-          the signposted SELECT · HOLD TO QUIT, FPS). The old bottom-left
-          ⛶ / ← SONGS cluster is gone: it was drawn on top of the score panel
-          and was a mouse-only instant exit pad players couldn't see. */}
-      {phase === 'playing' && !req.versus && (
+      {/* Solo ARCADE: the DOM HUD owns the chrome around the untouched field —
+          score, timing, chart timeline, bottom strip (song info, progress,
+          fullscreen, the signposted SELECT · HOLD TO QUIT, FPS). The old
+          bottom-left ⛶ / ← SONGS cluster is gone: it was drawn on top of the
+          score panel and was a mouse-only instant exit pad players couldn't
+          see. The ITG skin keeps Simply Love's own GPU side panel (its
+          hudUnderlay draws life/percent/density) — the DOM HUD would draw on
+          top of it, so it stays off for that skin. */}
+      {phase === 'playing' && !req.versus && settings.noteSkin === 'arcade' && (
         <PlayHud
           song={req.song}
           chart={req.chart}
@@ -738,7 +750,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           reverse={settings.reverse}
           numTracks={numTracks}
           musicRate={effRate}
-          pbPercent={pbPercent}
+          // Rate-modded runs aren't comparable to the stored 1.0× best — no delta.
+          pbPercent={effRate === 1 ? pbPercent : null}
           practiceNote={
             sessionRef.current?.isReplay
               ? '▶ REPLAY'
@@ -751,14 +764,21 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
         />
       )}
 
-      {/* Versus keeps the minimal old chrome: the race screen has no HUD column
-          (2P's field lives there), but fullscreen + FPS shouldn't vanish. */}
-      {phase === 'playing' && req.versus && (
+      {/* Versus (no HUD column — 2P's field lives there) and the ITG skin
+          (Simply Love draws its own panel) keep minimal chrome: fullscreen,
+          FPS, and the hold-to-quit signpost the DOM strip normally carries. */}
+      {phase === 'playing' && (req.versus || settings.noteSkin !== 'arcade') && (
         <>
-          <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
+          <div className="absolute bottom-4 left-4 z-[3] flex items-center gap-3">
             <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
               ⛶
             </button>
+            <span className="flex items-center gap-2 font-display text-[12px] tracking-[0.14em] text-[#ececec]/45">
+              <span className="inline-flex h-[20px] min-w-[26px] items-center justify-center border border-white/[0.14] px-1.5 text-[11px] text-[#ececec]">
+                SELECT
+              </span>
+              HOLD TO QUIT
+            </span>
           </div>
           <FpsMeter />
         </>

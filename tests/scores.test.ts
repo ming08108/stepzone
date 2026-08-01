@@ -136,19 +136,25 @@ describe('mergeBest (pure best-merge policy, review #4)', () => {
     expect(best.updated).toBe(123456);
   });
 
-  it('failed follows the better percent, like grade', () => {
-    // A failed run with a higher percent replaces a clear: the record is a fail.
+  it('cleared is monotonic: any non-failed play clears the chart forever', () => {
+    // A higher-percent FAILED run must not demote a stored clear back to ◔.
     const up = mergeBest(
       stored({ percent: 0.8, failed: false }),
       play({ percent: 0.9, failed: true }),
     );
-    expect(up.best.failed).toBe(true);
-    // A worse failed run does not taint a stored clear.
-    const down = mergeBest(
-      stored({ percent: 0.9, failed: false }),
-      play({ percent: 0.5, failed: true }),
+    expect(up.best.failed).toBe(false);
+    // A clear at any percent clears a previously-failed record.
+    const clears = mergeBest(
+      stored({ percent: 0.9, failed: true }),
+      play({ percent: 0.5, failed: false }),
     );
-    expect(down.best.failed).toBe(false);
+    expect(clears.best.failed).toBe(false);
+    // Two failed runs stay failed.
+    const still = mergeBest(
+      stored({ percent: 0.5, failed: true }),
+      play({ percent: 0.6, failed: true }),
+    );
+    expect(still.best.failed).toBe(true);
   });
 });
 

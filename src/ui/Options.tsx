@@ -23,14 +23,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Settings } from '../app/settings';
 import { dayKey, loadStats } from '../app/stats';
-import { allLoggedOffsets, loadOffsetLog, offsetSuggestion } from '../app/offsetLog';
-import { HoldNoteScore, TapNoteScore } from '../notes/noteTypes';
+import { loadOffsetLog, offsetsRelativeTo, offsetSuggestion } from '../app/offsetLog';
+import { HoldNoteScore } from '../notes/noteTypes';
 import { defaultBindings, type Bindings, type ControlRole } from '../input/controls';
 import { connectedPadInfo, pressedGamepadButtons, type PadInfo } from '../input/gamepad';
 import { setBindCaptureActive } from '../input/inputBus';
 import { getIdentity, setPlayerName } from '../net/identity';
 import { DANCER_MODELS } from '../render/dancerModels';
+import { JUDGMENT_TIERS } from './judgmentTiers';
 import { KeyLegend } from './KeyLegend';
+import { PartyBar } from './PartyBar';
 import { TimingBar } from './hud/PlayHud';
 import { focusStyle } from './songSelectUi';
 import { useSettings } from './SettingsContext';
@@ -72,14 +74,7 @@ function keyLabel(code: string): string {
   return named[code] ?? code;
 }
 
-const LIFETIME_JUDGMENTS: Array<[TapNoteScore, string, string]> = [
-  [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
-  [TapNoteScore.W2, 'EXCELLENT', '#ffd23d'],
-  [TapNoteScore.W3, 'GREAT', '#59f07f'],
-  [TapNoteScore.W4, 'DECENT', '#c86bff'],
-  [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
-  [TapNoteScore.Miss, 'MISS', '#ff5d47'],
-];
+const LIFETIME_JUDGMENTS = JUDGMENT_TIERS;
 
 /** Whole-number `Xh Ym` (or `Ym`, or `Ys` under a minute). */
 function formatPlayTime(seconds: number): string {
@@ -133,7 +128,13 @@ export function Options({
   const [playerName, setPlayerNameState] = useState(() => getIdentity().name);
   const [stats] = useState(loadStats);
   const offsetLog = useMemo(() => loadOffsetLog(), []);
-  const loggedMs = useMemo(() => allLoggedOffsets(offsetLog), [offsetLog]);
+  // Each play is stamped with the offset it was measured under; re-express the
+  // errors at the CURRENT setting so the bar (and the suggestion) track your
+  // slider edits live — and APPLY converges instead of compounding.
+  const loggedMs = useMemo(
+    () => offsetsRelativeTo(settings.audioOffsetMs, offsetLog),
+    [settings.audioOffsetMs, offsetLog],
+  );
   const suggestion = offsetSuggestion(settings.audioOffsetMs, offsetLog);
   useMenuNav(onBack);
 
@@ -379,7 +380,7 @@ export function Options({
                 </>
               ) : (
                 <div className="mt-[12px] text-[13px] leading-[1.5] text-[#ececec]/55">
-                  {meanMs != null && Math.abs(meanMs) <= 5
+                  {loggedMs.length >= 12 && meanMs != null && Math.abs(meanMs) <= 5
                     ? 'You are centred — nothing to fix.'
                     : 'Play a little more for a reliable read.'}
                 </div>
@@ -728,6 +729,13 @@ export function Options({
         <span className="font-display text-[12px] tracking-[0.12em] text-[#ececec]/50">
           SAVED AUTOMATICALLY
         </span>
+        <button
+          onClick={onBack}
+          className="flex h-[30px] items-center px-3 font-display text-[12px] tracking-[0.12em] text-[#ececec]/60 hover:text-[#ececec]"
+          style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)' }}
+        >
+          ✕ BACK TO SONGS
+        </button>
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -748,7 +756,13 @@ export function Options({
               return (
                 <button
                   key={s.id}
-                  onClick={() => setSection(s.id)}
+                  onClick={() => {
+                    // A live rebind capture must not survive a pane switch —
+                    // it would keep swallowing the input bus with its
+                    // indicator hidden, and bind the next press invisibly.
+                    setCapture(null);
+                    setSection(s.id);
+                  }}
                   className="flex h-[44px] items-center gap-[10px] pr-3 pl-[9px] text-left"
                   style={{ ...focusStyle(on), color: on ? '#fff' : 'rgba(236,236,236,.72)' }}
                 >
@@ -778,10 +792,14 @@ export function Options({
         <div className="min-h-0 flex-1 overflow-y-auto px-10 py-7">{panes[section]}</div>
       </div>
 
+      {/* An in-room party stays visible here too — a guest mid-transfer must
+          never wonder where the room went (design 6a: one docked surface). */}
+      <PartyBar />
+
       <KeyLegend
         actions={{
-          updown: 'SETTING',
-          leftright: 'ADJUST',
+          updown: 'MOVE',
+          leftright: 'ADJUST · MOVE',
           select: 'BACK TO SONGS',
           start: 'ACTIVATE',
           fav: null,

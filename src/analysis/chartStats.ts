@@ -38,10 +38,17 @@ export interface ChartStats {
   nps: NpsBin[];
   peakNps: number;
   lengthSeconds: number;
+  /** 0-based measure index of nps[0] — bins start at the first measure WITH a
+   *  note, so labelling bin i as "M{i+1}" is wrong on any chart with a lead-in;
+   *  the true measure number of bin i is firstMeasure + i + 1. */
+  firstMeasure: number;
 }
 
 /** Per-measure notes-per-second series (ITG "density graph"), peak-normalised. */
-function computeDensity(nd: NoteData, timing: TimingData): { nps: NpsBin[]; peak: number } {
+function computeDensity(
+  nd: NoteData,
+  timing: TimingData,
+): { nps: NpsBin[]; peak: number; firstM: number } {
   const counts = new Map<number, number>();
   let firstM = Infinity;
   let lastM = -1;
@@ -59,7 +66,7 @@ function computeDensity(nd: NoteData, timing: TimingData): { nps: NpsBin[]; peak
       if (m > lastM) lastM = m;
     }
   }
-  if (lastM < 0) return { nps: [], peak: 0 };
+  if (lastM < 0) return { nps: [], peak: 0, firstM: 0 };
 
   const raw: Array<{ t0: number; t1: number; nps: number }> = [];
   let peak = 0;
@@ -71,8 +78,12 @@ function computeDensity(nd: NoteData, timing: TimingData): { nps: NpsBin[]; peak
     if (nps > peak) peak = nps;
     t0 = t1;
   }
-  if (peak <= 0) return { nps: [], peak: 0 };
-  return { nps: raw.map((r) => ({ t0: r.t0, t1: r.t1, h: Math.min(1, r.nps / peak) })), peak };
+  if (peak <= 0) return { nps: [], peak: 0, firstM: 0 };
+  return {
+    nps: raw.map((r) => ({ t0: r.t0, t1: r.t1, h: Math.min(1, r.nps / peak) })),
+    peak,
+    firstM,
+  };
 }
 
 /** All song-select stats for one chart. */
@@ -92,7 +103,7 @@ export function computeChartStats(nd: NoteData, timing: TimingData, stepsType: s
     }
   }
 
-  const { nps, peak } = computeDensity(nd, timing);
+  const { nps, peak, firstM } = computeDensity(nd, timing);
   const lengthSeconds = timing.getElapsedTimeFromBeat(noteRowToBeat(nd.lastRow()));
 
   return {
@@ -108,5 +119,6 @@ export function computeChartStats(nd: NoteData, timing: TimingData, stepsType: s
     nps,
     peakNps: peak,
     lengthSeconds,
+    firstMeasure: firstM,
   };
 }

@@ -26,9 +26,15 @@ const LIMIT = 10;
  *  (callers collapse their UI); otherwise the board. */
 export type BoardState = LeaderboardResponse | 'loading' | 'offline';
 
-export function useLeaderboard(entry: LibraryEntry | null, diff: number): BoardState {
+export function useLeaderboard(
+  entry: LibraryEntry | null,
+  diff: number,
+  /** Board rate override — a room guest plays at the ROOM's rate, not the
+   *  local musicRate setting. Defaults to the setting. */
+  rateOverride?: number,
+): BoardState {
   const { settings } = useSettings();
-  const rate = settings.musicRate;
+  const rate = rateOverride ?? settings.musicRate;
   const [state, setState] = useState<BoardState>('loading');
 
   useEffect(() => {

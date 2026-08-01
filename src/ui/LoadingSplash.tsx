@@ -100,7 +100,8 @@ export function LoadingSplash({
     let b = maxI;
     while (a > 0 && stats.nps[a - 1].h >= 0.8) a--;
     while (b < stats.nps.length - 1 && stats.nps[b + 1].h >= 0.8) b++;
-    return { a, b, measure: maxI + 1 };
+    // Bins start at the first measure WITH a note — offset by the lead-in.
+    return { a, b, measure: stats.firstMeasure + maxI + 1 };
   }, [stats]);
 
   // The rank just above your PB — what a small improvement buys.
@@ -158,7 +159,8 @@ export function LoadingSplash({
                     className="min-w-0 flex-1"
                     style={{
                       height: `${Math.round(8 + 92 * b.h)}%`,
-                      background: b.h > 0.85 ? '#8200a1' : b.h > 0.55 ? '#4a5fb0' : '#00adc0',
+                      // Same density buckets as the in-play chart timeline.
+                      background: b.h > 0.8 ? '#8200a1' : b.h > 0.55 ? '#4a5fb0' : '#00adc0',
                     }}
                   />
                 ))}

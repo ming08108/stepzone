@@ -51,6 +51,7 @@ export const GRADE_COLORS: Record<string, string> = {
   B: '#5db4ff',
   C: '#ff9d3d',
   D: '#ff5d47',
+  F: '#e01818', // judge.grade returns 'F' for a failed run
 };
 export const gradeColor = (g: string): string => GRADE_COLORS[g] ?? '#ececec';
 
@@ -58,8 +59,9 @@ export const gradeColor = (g: string): string => GRADE_COLORS[g] ?? '#ececec';
  *  clamps silently against the edge. */
 const TIMING_RANGE_MS = 90;
 
-/** Tick colour by |error|, matching the judgment tiers it corresponds to. */
-function tickColor(ms: number): string {
+/** Tick colour by |error|, matching the judgment tiers it corresponds to.
+ *  Exported so Calibrate's tap scatter uses the same tiers as the timing bar. */
+export function tickColor(ms: number): string {
   const a = Math.abs(ms);
   if (a <= 11) return '#38f0ff';
   if (a <= 23) return '#ffd23d';
@@ -142,10 +144,14 @@ export function TimingBar({
   recentMs,
   meanMs,
   k,
+  showCaption = true,
 }: {
   recentMs: number[];
   meanMs: number | null;
   k: number;
+  /** Results shows its own avg line beside the section label — suppress the
+   *  bar's baked-in caption there so the sentence isn't printed twice. */
+  showCaption?: boolean;
 }) {
   const pos = (ms: number) =>
     50 + (Math.max(-TIMING_RANGE_MS, Math.min(TIMING_RANGE_MS, ms)) / TIMING_RANGE_MS) * 50;
@@ -208,12 +214,14 @@ export function TimingBar({
       >
         EARLY −{TIMING_RANGE_MS}
       </div>
-      <div
-        className="absolute w-full text-center tracking-[0.1em]"
-        style={{ bottom: 4 * k, fontSize: 12 * k, color: driftColor }}
-      >
-        {meanMs == null ? '—' : `avg ${meanMs >= 0 ? '+' : ''}${meanMs.toFixed(1)} ms — ${drift}`}
-      </div>
+      {showCaption && (
+        <div
+          className="absolute w-full text-center tracking-[0.1em]"
+          style={{ bottom: 4 * k, fontSize: 12 * k, color: driftColor }}
+        >
+          {meanMs == null ? '—' : `avg ${meanMs >= 0 ? '+' : ''}${meanMs.toFixed(1)} ms — ${drift}`}
+        </div>
+      )}
       <div
         className="absolute tracking-[0.14em] text-[#ececec]/40"
         style={{ right: 10 * k, bottom: 4 * k, fontSize: 11 * k }}
@@ -388,22 +396,28 @@ export function PlayHud({
         />
       )}
 
-      {/* LIFE caption under the (relocated, field-aligned) GPU gauge */}
-      <div
-        className="absolute flex justify-between font-display tracking-[0.22em] text-[#ececec]/35"
-        style={{
-          left: m.fieldLeft,
-          width: m.fieldWidth,
-          // The GPU gauge now sits at gy = 41×ds with gh = 26×ds (ddrA3Skin.pushGauge).
-          top: m.ds * 67 + 6 * k,
-          fontSize: 11 * k,
-        }}
-      >
-        <span style={danger ? { color: '#e01818' } : undefined}>{danger ? 'DANGER' : 'LIFE'}</span>
-        <span style={{ color: danger ? '#e01818' : '#59f07f' }}>
-          {Math.round(telemetry.life * 100)}%
-        </span>
-      </div>
+      {/* LIFE caption under the (relocated, field-aligned) GPU gauge. Hidden
+          under reverse — there the gauge tucks flush between the receptors and
+          the bottom strip (ddrA3Skin.pushGauge) with no room for a label. */}
+      {!reverse && (
+        <div
+          className="absolute flex justify-between font-display tracking-[0.22em] text-[#ececec]/35"
+          style={{
+            left: m.fieldLeft,
+            width: m.fieldWidth,
+            // The GPU gauge sits at gy = 41×ds with gh = 26×ds (ddrA3Skin.pushGauge).
+            top: m.ds * 67 + 6 * k,
+            fontSize: 11 * k,
+          }}
+        >
+          <span style={danger ? { color: '#e01818' } : undefined}>
+            {danger ? 'DANGER' : 'LIFE'}
+          </span>
+          <span style={{ color: danger ? '#e01818' : '#59f07f' }}>
+            {Math.round(telemetry.life * 100)}%
+          </span>
+        </div>
+      )}
 
       {full && stats && (
         <ChartTimeline

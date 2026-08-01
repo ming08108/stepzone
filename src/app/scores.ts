@@ -122,7 +122,10 @@ export function mergeBest(
     grade: prev && prev.percent >= r.percent ? prev.grade : r.grade,
     maxCombo: Math.max(r.maxCombo, prev?.maxCombo ?? 0),
     counts: isNewRecord ? r.counts : (prev?.counts ?? r.counts),
-    failed: prev && prev.percent >= r.percent ? prev.failed : r.failed,
+    // "Have I cleared this" is monotonic: ANY non-failed play clears the chart
+    // forever, even if a later, higher-percent run failed out. (A failed 72%
+    // must not demote a cleared 60% back to ◔.)
+    failed: (prev?.failed ?? true) && r.failed,
     plays: (prev?.plays ?? 0) + 1,
     updated: now,
   };

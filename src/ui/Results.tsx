@@ -28,6 +28,7 @@ import type { Song } from '../song/song';
 import type { Steps } from '../song/steps';
 import { difficultyColor } from './difficultyUi';
 import { gradeColor, TimingBar } from './hud/PlayHud';
+import { JUDGMENT_TIERS } from './judgmentTiers';
 import { useSettings } from './SettingsContext';
 
 const AC = '#ff5d47';
@@ -48,15 +49,9 @@ export interface Result {
   isReplay: boolean;
 }
 
-/** ITG wording + tier colours (matches the in-play HUD tally). */
-const TIERS: Array<[TapNoteScore, string, string]> = [
-  [TapNoteScore.W1, 'FANTASTIC', '#38f0ff'],
-  [TapNoteScore.W2, 'EXCELLENT', '#ffd23d'],
-  [TapNoteScore.W3, 'GREAT', '#59f07f'],
-  [TapNoteScore.W4, 'DECENT', '#c86bff'],
-  [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
-  [TapNoteScore.Miss, 'MISS', '#ff5d47'],
-];
+/** Skin-neutral tier wording + palette, shared with the settings lifetime
+ *  tallies (the in-play HUD uses the active skin's own wording instead). */
+const TIERS = JUDGMENT_TIERS;
 
 const MAX_TAP = tapDancePoints(TapNoteScore.W1);
 
@@ -162,6 +157,19 @@ export function Results({
     possible > 0
       ? (((result.counts[tns] ?? 0) * (MAX_TAP - tapDancePoints(tns))) / possible) * 100
       : 0;
+  // The non-tap leaks the tier table can't show: dropped holds forfeit their 3
+  // points, hit mines subtract 2, and once the run FAILS the judge freezes the
+  // numerator while notes keep resolving — that residual is "lost after
+  // failing". Together these reconcile the table to the headline percent.
+  const holdsDropped =
+    (result.holdCounts[HoldNoteScore.LetGo] ?? 0) + (result.holdCounts[HoldNoteScore.Missed] ?? 0);
+  const holdsLost = possible > 0 ? ((holdsDropped * 3) / possible) * 100 : 0;
+  const minesHit = result.counts[TapNoteScore.HitMine] ?? 0;
+  const minesLost = possible > 0 ? ((minesHit * 2) / possible) * 100 : 0;
+  const tierLostTotal = TIERS.reduce((a, [t]) => a + lostPct(t), 0);
+  const failedResidual = result.failed
+    ? Math.max(0, 100 - pct - tierLostTotal - holdsLost - minesLost)
+    : 0;
   const biggestLeak = useMemo(() => {
     let best: { label: string; color: string; lost: number; n: number } | null = null;
     for (const [tns, label, color] of TIERS) {
@@ -171,13 +179,16 @@ export function Results({
         best = { label, color, lost, n: result.counts[tns] ?? 0 };
       }
     }
+    if (holdsLost > 0.05 && (!best || holdsLost > best.lost)) {
+      best = { label: 'DROPPED HOLDS', color: '#59f07f', lost: holdsLost, n: holdsDropped };
+    }
     return best;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
   const missLost = lostPct(TapNoteScore.Miss);
 
   /* ── timing summary + the concrete next step ──────────────────────────── */
-  const recentMs = result.offsets.map((o) => o * 1000);
+  const recentMs = result.offsets.slice(-60).map((o) => o * 1000);
   const meanMs = recentMs.length ? recentMs.reduce((a, b) => a + b, 0) / recentMs.length : null;
   const suggest =
     meanMs != null && Math.abs(meanMs) > 5 ? Math.round(settings.audioOffsetMs - meanMs) : null;
@@ -257,7 +268,9 @@ export function Results({
               >
                 {result.failed ? 'FAILED' : 'CLEARED'}
               </div>
-              {delta != null ? (
+              {/* A rate-modded / practice / replay run isn't comparable to the
+                  stored 1.0× best — no delta theatre for those. */}
+              {delta != null && !caveat ? (
                 <div
                   className="mt-1 flex items-baseline gap-[10px] origin-left"
                   style={{ animation: 'popIn 420ms cubic-bezier(.2,1.1,.3,1) 1450ms both' }}
@@ -281,7 +294,11 @@ export function Results({
                   className="mt-1 text-[13px] tracking-[0.1em] text-[#ececec]/45"
                   style={{ animation: 'fadeIn 320ms linear 1450ms both' }}
                 >
-                  FIRST SCORE ON THIS CHART
+                  {caveat
+                    ? pbPercent != null
+                      ? `YOUR 1.00× BEST: ${(pbPercent * 100).toFixed(2)}%`
+                      : 'NOT COMPARABLE TO A RECORD'
+                    : 'FIRST SCORE ON THIS CHART'}
                 </div>
               )}
             </div>
@@ -381,7 +398,7 @@ export function Results({
               TIMING
             </SectionLabel>
             <div className="mt-[10px]">
-              <TimingBar recentMs={recentMs.slice(-60)} meanMs={meanMs} k={0.72} />
+              <TimingBar recentMs={recentMs} meanMs={meanMs} k={0.72} showCaption={false} />
             </div>
             {suggest != null && (
               <div className="mt-[8px] text-[13px] text-[#ececec]/55">
@@ -464,6 +481,74 @@ export function Results({
                     </div>
                   );
                 })}
+                {/* The leaks the tap tiers can't show — so the column actually
+                    reconciles with the headline percent. */}
+                {holdsTotal > 0 && (
+                  <div className="grid h-[42px] grid-cols-[1fr_88px_74px_104px] items-center gap-3 border-b border-white/[0.05]">
+                    <span className="flex items-center gap-[10px]">
+                      <span className="h-2 w-2 bg-[#59f07f]" />
+                      <span className="font-display text-[16px] font-semibold tracking-[0.08em] text-[#59f07f]">
+                        DROPPED HOLDS
+                      </span>
+                    </span>
+                    <span className="text-right font-display text-[20px] font-bold">
+                      {holdsDropped}
+                    </span>
+                    <span className="text-right text-[13px] text-[#ececec]/45">
+                      of {holdsTotal}
+                    </span>
+                    <span
+                      className="text-right font-display text-[16px] font-bold"
+                      style={{
+                        color:
+                          holdsLost >= 1
+                            ? '#c86bff'
+                            : holdsLost > 0
+                              ? 'rgba(236,236,236,.7)'
+                              : 'rgba(236,236,236,.3)',
+                      }}
+                    >
+                      {holdsLost > 0 ? holdsLost.toFixed(2) : '—'}
+                    </span>
+                  </div>
+                )}
+                {minesHit > 0 && (
+                  <div className="grid h-[42px] grid-cols-[1fr_88px_74px_104px] items-center gap-3 border-b border-white/[0.05]">
+                    <span className="flex items-center gap-[10px]">
+                      <span className="h-2 w-2 bg-[#e01818]" />
+                      <span className="font-display text-[16px] font-semibold tracking-[0.08em] text-[#e01818]">
+                        MINES HIT
+                      </span>
+                    </span>
+                    <span className="text-right font-display text-[20px] font-bold">
+                      {minesHit}
+                    </span>
+                    <span className="text-right text-[13px] text-[#ececec]/45">−2 each</span>
+                    <span className="text-right font-display text-[16px] font-bold text-[#ececec]/70">
+                      {minesLost.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+                {failedResidual > 0.05 && (
+                  <div className="grid h-[42px] grid-cols-[1fr_88px_74px_104px] items-center gap-3 border-b border-white/[0.05]">
+                    <span className="flex items-center gap-[10px]">
+                      <span className="h-2 w-2" style={{ background: AC }} />
+                      <span
+                        className="font-display text-[16px] font-semibold tracking-[0.08em]"
+                        style={{ color: AC }}
+                      >
+                        AFTER FAILING
+                      </span>
+                    </span>
+                    <span className="text-right font-display text-[20px] font-bold">—</span>
+                    <span className="text-right text-[13px] text-[#ececec]/45">
+                      scoring stopped
+                    </span>
+                    <span className="text-right font-display text-[16px] font-bold text-[#c86bff]">
+                      {failedResidual.toFixed(2)}
+                    </span>
+                  </div>
+                )}
                 <div className="grid h-[42px] grid-cols-[1fr_88px_74px_104px] items-center gap-3 border-t border-white/20">
                   <span className="font-display text-[15px] tracking-[0.08em] text-[#ececec]/60">
                     MAX COMBO
@@ -609,7 +694,9 @@ export function Results({
           style={{
             background: AC,
             color: '#0b0c0e',
-            boxShadow: doneSel === 0 ? `0 0 0 2px #fff` : undefined,
+            // ONE selection treatment for the whole bar: a white inset keyline
+            // + coral glow (readable on the filled and the outlined buttons).
+            boxShadow: doneSel === 0 ? `inset 0 0 0 2px #fff, 0 0 20px ${AC}66` : undefined,
           }}
         >
           CONTINUE ▸
@@ -622,7 +709,7 @@ export function Results({
             style={{
               boxShadow:
                 doneSel === 1
-                  ? `inset 0 0 0 1px ${AC}, 0 0 20px ${AC}40`
+                  ? `inset 0 0 0 2px #fff, 0 0 20px ${AC}66`
                   : 'inset 0 0 0 1px rgba(255,255,255,.18)',
               color: doneSel === 1 ? '#ececec' : undefined,
             }}
@@ -638,7 +725,7 @@ export function Results({
             style={{
               boxShadow:
                 doneSel === 2
-                  ? `inset 0 0 0 1px ${AC}, 0 0 20px ${AC}40`
+                  ? `inset 0 0 0 2px #fff, 0 0 20px ${AC}66`
                   : 'inset 0 0 0 1px rgba(255,255,255,.18)',
               color: doneSel === 2 ? '#ececec' : undefined,
             }}
@@ -647,23 +734,32 @@ export function Results({
           </button>
         )}
         <span className="flex-1" />
-        {(
-          [
-            ['▲▼', 'ACTION'],
-            ['START', 'CONFIRM'],
-            ['SELECT', 'BACK TO SONGS'],
-          ] as const
-        ).map(([key, act]) => (
-          <span
-            key={key}
-            className="flex items-center gap-[9px] pl-[22px] font-display text-[12px] tracking-[0.12em]"
-          >
-            <span className="inline-flex h-[22px] min-w-[26px] items-center justify-center border border-white/[0.18] px-[6px] text-[11px] text-[#ececec]">
-              {key}
+        {
+          // Versus has one action and START's first press skips the standings
+          // reveal — the legend must not advertise a dead ▲▼.
+          (
+            (isVersus
+              ? [
+                  ['START', 'SKIP · CONTINUE'],
+                  ['SELECT', 'BACK TO SONGS'],
+                ]
+              : [
+                  ['▲▼', 'ACTION'],
+                  ['START', 'CONFIRM'],
+                  ['SELECT', 'BACK TO SONGS'],
+                ]) as ReadonlyArray<readonly [string, string]>
+          ).map(([key, act]) => (
+            <span
+              key={key}
+              className="flex items-center gap-[9px] pl-[22px] font-display text-[12px] tracking-[0.12em]"
+            >
+              <span className="inline-flex h-[22px] min-w-[26px] items-center justify-center border border-white/[0.18] px-[6px] text-[11px] text-[#ececec]">
+                {key}
+              </span>
+              <span className="text-[#ececec]/55">{act}</span>
             </span>
-            <span className="text-[#ececec]/55">{act}</span>
-          </span>
-        ))}
+          ))
+        }
       </div>
     </div>
   );

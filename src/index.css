@@ -87,6 +87,13 @@
     outline-offset: 2px;
     border-radius: 6px;
   }
+  /* Pad cursor: gamepads produce no key events, so :focus-visible never
+     triggers for them — useMenuNav marks the element it focused instead. */
+  [data-pad-focus] {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
 
   @media (prefers-reduced-motion: reduce) {
     *,

@@ -95,6 +95,7 @@ export function App() {
           setView('play');
         }}
         onBack={() => setView('menu')}
+        onSettings={() => setView('options')}
       />
     );
   } else if (view === 'play' && req) {

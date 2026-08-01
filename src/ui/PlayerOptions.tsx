@@ -53,6 +53,7 @@ import { buildAttractConfig } from '../render/attractConfig';
 import type { TimingData } from '../timing/timingData';
 import { keyboardRole } from '../input/inputBus';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, difficultySlot } from './difficultyUi';
+import { gradeColor } from './hud/PlayHud';
 import { KeyLegend } from './KeyLegend';
 import { NoteFieldPreview } from './NoteFieldPreview';
 import { PartyBar } from './PartyBar';
@@ -75,14 +76,6 @@ import {
 
 const AC = '#ff5d47';
 const SHORT = ['BEG', 'EASY', 'MED', 'HARD', 'EXPERT'] as const;
-const GRADE_COLOR: Record<string, string> = {
-  AAA: '#ffcf3d',
-  AA: '#59f07f',
-  A: '#59f07f',
-  B: 'rgba(236,236,236,.72)',
-  C: 'rgba(236,236,236,.72)',
-  D: '#ff5c5c',
-};
 
 /** Step to the next/previous entry of a const union array, wrapping. */
 function cycle<T>(list: readonly T[], cur: T, dir: number): T {
@@ -151,6 +144,7 @@ const ROWS = [
   'noteskin',
   'background',
   'hud',
+  'previewspot',
   'practice',
   'loopstart',
   'loopend',
@@ -183,6 +177,18 @@ export function PlayerOptions({
   const [previewSpot, setPreviewSpot] = useState<'start' | 'peak'>('peak');
   // Practice loop selection: 1-based inclusive measures, clamped to the chart.
   const [practice, setPractice] = useState({ on: false, start: 1, end: 8 });
+  // Gameplay canvas size — the derived speed readout must use the REAL design
+  // scale (ds = min(h,w)/720), not the 720 reference, or the seconds are off
+  // by exactly ds at every other resolution.
+  const [viewport, setViewport] = useState(() => ({
+    w: window.innerWidth,
+    h: window.innerHeight,
+  }));
+  useEffect(() => {
+    const on = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
   useGamepadKeys();
 
   // Live room (roomStore — global state, survives screen transitions).
@@ -209,12 +215,21 @@ export function PlayerOptions({
     const i = slots.indexOf(req.chart);
     return i >= 0 ? i : difficultySlot(difficultyToString(req.chart.difficulty));
   });
+  // A room guest gets a NEW req without remounting (App swaps it in place when
+  // the host picks the next song) — re-derive the slot or the ladder can
+  // highlight a slot the new song doesn't have.
+  useEffect(() => {
+    const i = slots.indexOf(req.chart);
+    setDiff(i >= 0 ? i : difficultySlot(difficultyToString(req.chart.difficulty)));
+  }, [req.chart, slots]);
   const chart = slots[diff] ?? req.chart;
 
   const scores = useMemo(() => loadScores(), []);
   const bestFor = (c: Steps | null) => (c ? (scores[chartKey(req.song, c)] ?? null) : null);
   const best = bestFor(chart);
-  const board = useLeaderboard(req.entry ?? null, diff);
+  // A guest plays at the room's rate — the board must match it, not the local
+  // musicRate setting.
+  const board = useLeaderboard(req.entry ?? null, diff, effRate);
   const topRow = board !== 'loading' && board !== 'offline' ? (board.rows[0] ?? null) : null;
 
   // The preview's chart data, memoized so the preview effect only rebuilds
@@ -224,23 +239,34 @@ export function PlayerOptions({
     [req.song, chart],
   );
 
+  // Chart stats run the full StepParity solver — debounce behind the cursor
+  // (same policy as the song-select inspector) so ◀▶ on the ladder never
+  // blocks the main thread mid-browse.
+  const [settledPreview, setSettledPreview] = useState(preview);
+  useEffect(() => {
+    const id = setTimeout(() => setSettledPreview(preview), 130);
+    return () => clearTimeout(id);
+  }, [preview]);
   const stats = useMemo(() => {
     try {
-      return computeChartStats(preview.noteData, preview.timing, chart.stepsType);
+      return computeChartStats(settledPreview.noteData, settledPreview.timing, chart.stepsType);
     } catch {
       return null;
     }
-  }, [preview, chart.stepsType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settledPreview]);
 
-  // The hardest passage — the run of adjacent near-peak measures around the max.
+  // The hardest passage — the run of adjacent near-peak measures around the
+  // max, clamped to ±8 measures: on a stamina chart every bin is ≥0.8 and an
+  // unclamped walk would "preview" the entire song.
   const peakWin = useMemo(() => {
     if (!stats || stats.nps.length === 0) return null;
     let maxI = 0;
     for (let i = 1; i < stats.nps.length; i++) if (stats.nps[i].h > stats.nps[maxI].h) maxI = i;
     let a = maxI;
     let b = maxI;
-    while (a > 0 && stats.nps[a - 1].h >= 0.8) a--;
-    while (b < stats.nps.length - 1 && stats.nps[b + 1].h >= 0.8) b++;
+    while (a > Math.max(0, maxI - 8) && stats.nps[a - 1].h >= 0.8) a--;
+    while (b < Math.min(stats.nps.length - 1, maxI + 8) && stats.nps[b + 1].h >= 0.8) b++;
     // At least 8 measures of context so the loop is danceable.
     while (b - a < 7 && (a > 0 || b < stats.nps.length - 1)) {
       if (a > 0) a--;
@@ -330,11 +356,16 @@ export function PlayerOptions({
 
   /* ── the derived speed readout ────────────────────────────────────────── */
   const bpm = Math.round(songBpmRange(req.song).max) || 0;
-  const travel = 720 - (settings.noteSkin === 'arcade' ? 118 : 78); // design px
+  // Real gameplay geometry: receptors sit at receptorOffset×ds css px and the
+  // scroll rate is SPACING(64) css px/beat UNscaled (gpuNoteField applies the
+  // config value directly), so travel must be measured in css px with the true
+  // design scale — not on the 720 reference grid.
+  const ds = Math.max(0.5, Math.min(viewport.h / 720, viewport.w / 720));
+  const travel = viewport.h - (settings.noteSkin === 'arcade' ? 118 : 78) * ds; // css px
   const speed = settings.scrollValue;
   const isX = settings.scrollMode === 'X';
-  // Seconds an arrow is on screen. C and M are a target BPM (M at the fastest
-  // section); X scales with the song.
+  // C and M are a target BPM (M hits it at the fastest section): px/s =
+  // value/60 × SPACING. X is a beat multiplier: px/beat = SPACING × value.
   const secOnScreen = isX
     ? bpm > 0
       ? (travel / (SPACING * speed)) * (60 / bpm)
@@ -471,6 +502,17 @@ export function PlayerOptions({
         ? !versusActive
         : true,
   );
+  // A row can vanish under the cursor (practice toggled off, a room forming) —
+  // reseat it, or ◀▶ keeps adjusting an invisible control.
+  useEffect(() => {
+    if (!visibleRows.includes(row)) setRow('speed');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [practice.on, versusActive]);
+  // Practice looping and a synchronized race are incompatible — a loop armed
+  // before hosting must not silently drive the preview from behind hidden UI.
+  useEffect(() => {
+    if (versusActive) setPractice((p) => (p.on ? { ...p, on: false } : p));
+  }, [versusActive]);
   const adjustRow = (id: RowId, dir: number) => {
     switch (id) {
       case 'diff': {
@@ -496,13 +538,18 @@ export function PlayerOptions({
         });
         return;
       }
+      case 'previewspot':
+        setPreviewSpot((s) => (s === 'peak' ? 'start' : 'peak'));
+        return;
       case 'practice':
         setPractice((p) => ({ ...p, on: !p.on }));
         return;
       case 'loopstart':
+        if (!practice.on) return; // never re-arm the loop from a hidden row
         setLoop(Math.max(1, Math.min(mEnd, mStart + dir)), mEnd);
         return;
       case 'loopend':
+        if (!practice.on) return;
         setLoop(mStart, Math.max(mStart, Math.min(measures.count, mEnd + dir)));
         return;
       case 'multiplayer':
@@ -518,9 +565,8 @@ export function PlayerOptions({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const role = keyboardRole(e.code);
-      if (e.key === 'Tab') {
-        setPreviewSpot((s) => (s === 'peak' ? 'start' : 'peak'));
-      } else if (e.key === 'r' || e.key === 'R') {
+      // Tab keeps its native focus traversal; the preview spot is a ◀▶ row.
+      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         resetMods();
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         const dir = e.key === 'ArrowDown' ? 1 : -1;
@@ -631,9 +677,7 @@ export function PlayerOptions({
                     <span className="text-[9px] tracking-[0.1em] text-[#ececec]/55">{name}</span>
                     <span
                       className="text-[11px] font-bold"
-                      style={{
-                        color: b ? (GRADE_COLOR[b.grade] ?? '#ececec') : 'rgba(236,236,236,.25)',
-                      }}
+                      style={{ color: b ? gradeColor(b.grade) : 'rgba(236,236,236,.25)' }}
                     >
                       {b ? b.grade : '—'}
                     </span>
@@ -644,81 +688,102 @@ export function PlayerOptions({
           </div>
 
           {/* Scroll speed: the number, in units you can feel */}
-          <div
-            className="border border-white/10 px-4 py-[13px]"
-            style={focus('speed') || focus('scrolltype') ? focusStyle(true) : undefined}
-          >
-            <div className="flex items-baseline gap-[10px]">
-              <Label>SCROLL SPEED ◀ ▶</Label>
-              <span className="flex-1" />
-              <span className="font-display text-[28px] leading-none font-bold tabular-nums">
-                {speedLabel}
-              </span>
+          <div className="border border-white/10 px-4 py-[13px]">
+            <div style={ring('speed')} className="pl-2 -ml-2">
+              <div className="flex items-baseline gap-[10px]">
+                <Label>SCROLL SPEED ◀ ▶</Label>
+                <span className="flex-1" />
+                <span className="font-display text-[28px] leading-none font-bold tabular-nums">
+                  {speedLabel}
+                </span>
+              </div>
+              <div className="relative mt-4 h-1 bg-white/[0.12]">
+                <div
+                  className="absolute top-0 bottom-0 left-0"
+                  style={{ width: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
+                />
+                <div
+                  className="pointer-events-none absolute -top-[6px] h-4 w-4 -ml-2"
+                  style={{ left: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
+                />
+                {/* The real (invisible) slider: mouse drag/click works. */}
+                <input
+                  type="range"
+                  aria-label="scroll speed"
+                  min={isX ? 0.25 : 50}
+                  max={isX ? 8 : 2000}
+                  step={isX ? 0.25 : 25}
+                  value={speed}
+                  onChange={(e) => update({ scrollValue: Number(e.target.value) })}
+                  className="absolute -top-[8px] -bottom-[8px] left-0 w-full cursor-pointer opacity-0"
+                />
+              </div>
+              <div className="mt-[12px] text-[13px] leading-[1.45] text-[#ececec]/62">
+                {secOnScreen > 0 ? (
+                  <>
+                    Arrows cross the field in{' '}
+                    <span className="font-bold text-[#ececec]">{secOnScreen.toFixed(1)} s</span>
+                    {beatsOnScreen > 0 && (
+                      <>
+                        {' '}
+                        — about{' '}
+                        <span className="font-bold text-[#ececec]">
+                          {beatsOnScreen.toFixed(1)} beats
+                        </span>{' '}
+                        on screen{settings.scrollMode !== 'X' ? ' at the fastest section' : ''}.
+                      </>
+                    )}
+                  </>
+                ) : beatsOnScreen > 0 ? (
+                  <>
+                    About{' '}
+                    <span className="font-bold text-[#ececec]">
+                      {beatsOnScreen.toFixed(1)} beats
+                    </span>{' '}
+                    of chart on screen.
+                  </>
+                ) : (
+                  'Pick a speed — the preview shows exactly what you get.'
+                )}
+              </div>
             </div>
-            <div className="relative mt-4 h-1 bg-white/[0.12]">
-              <div
-                className="absolute top-0 bottom-0 left-0"
-                style={{ width: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
-              />
-              <div
-                className="absolute -top-[6px] h-4 w-4 -ml-2"
-                style={{ left: `${Math.max(0, Math.min(100, sliderPct))}%`, background: AC }}
-              />
-            </div>
-            <div className="mt-[12px] text-[13px] leading-[1.45] text-[#ececec]/62">
-              {secOnScreen > 0 ? (
-                <>
-                  Arrows cross the field in{' '}
-                  <span className="font-bold text-[#ececec]">{secOnScreen.toFixed(1)} s</span>
-                  {beatsOnScreen > 0 && (
-                    <>
-                      {' '}
-                      — about{' '}
-                      <span className="font-bold text-[#ececec]">
-                        {beatsOnScreen.toFixed(1)} beats
-                      </span>{' '}
-                      on screen{settings.scrollMode === 'M' ? ' at the fastest section' : ''}.
-                    </>
-                  )}
-                </>
-              ) : (
-                'Pick a speed — the preview shows exactly what you get.'
-              )}
-            </div>
-            <div className="mt-[12px] flex gap-1">
-              {SCROLL_MODES.map((m) => {
-                const on = settings.scrollMode === m;
-                return (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      if (on) return;
-                      const stillBpm = (settings.scrollMode !== 'X') === (m !== 'X');
-                      update({
-                        scrollMode: m,
-                        scrollValue: stillBpm ? settings.scrollValue : m === 'X' ? 2 : 550,
-                      });
-                    }}
-                    className="flex h-8 flex-1 items-center justify-center font-display text-[12px] tracking-[0.1em]"
-                    style={
-                      on
-                        ? {
-                            background:
-                              'linear-gradient(90deg, rgba(255,93,71,.26), rgba(255,93,71,.06))',
-                            boxShadow: 'inset 0 0 0 1px rgba(255,93,71,.55)',
-                            color: '#fff',
-                            fontWeight: 700,
-                          }
-                        : {
-                            boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)',
-                            color: 'rgba(236,236,236,.6)',
-                          }
-                    }
-                  >
-                    {TYPE_LABEL[m]}
-                  </button>
-                );
-              })}
+            <div style={ring('scrolltype')} className="mt-[12px] pl-2 -ml-2">
+              <div className="flex gap-1">
+                {SCROLL_MODES.map((m) => {
+                  const on = settings.scrollMode === m;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => {
+                        setRow('scrolltype');
+                        if (on) return;
+                        const stillBpm = (settings.scrollMode !== 'X') === (m !== 'X');
+                        update({
+                          scrollMode: m,
+                          scrollValue: stillBpm ? settings.scrollValue : m === 'X' ? 2 : 550,
+                        });
+                      }}
+                      className="flex h-8 flex-1 items-center justify-center font-display text-[12px] tracking-[0.1em]"
+                      style={
+                        on
+                          ? {
+                              background:
+                                'linear-gradient(90deg, rgba(255,93,71,.26), rgba(255,93,71,.06))',
+                              boxShadow: 'inset 0 0 0 1px rgba(255,93,71,.55)',
+                              color: '#fff',
+                              fontWeight: 700,
+                            }
+                          : {
+                              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)',
+                              color: 'rgba(236,236,236,.6)',
+                            }
+                      }
+                    >
+                      {TYPE_LABEL[m]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -733,10 +798,13 @@ export function PlayerOptions({
                 }}
                 className="flex items-center gap-[10px] px-3 py-[9px] text-left"
                 style={{
+                  // Both states set the same box metrics (3px left bar + inset
+                  // ring) so the grid never jitters as the cursor moves.
                   ...(focus(t.id)
                     ? focusStyle(true)
                     : {
-                        border: `1px solid ${t.off ? 'rgba(255,93,71,.45)' : 'rgba(255,255,255,.10)'}`,
+                        borderLeft: '3px solid transparent',
+                        boxShadow: `inset 0 0 0 1px ${t.off ? 'rgba(255,93,71,.45)' : 'rgba(255,255,255,.10)'}`,
                         background: t.off ? 'rgba(255,93,71,.07)' : 'transparent',
                       }),
                   opacity: t.locked ? 0.6 : 1,
@@ -766,7 +834,10 @@ export function PlayerOptions({
                 <Label>PRACTICE LOOP ◀ ▶</Label>
                 <span className="h-px flex-1 bg-white/[0.07]" />
                 <button
-                  onClick={() => setPractice((p) => ({ ...p, on: !p.on }))}
+                  onClick={() => {
+                    setRow('practice');
+                    setPractice((p) => ({ ...p, on: !p.on }));
+                  }}
                   className="flex h-[22px] items-center px-[10px] font-display text-[11px] tracking-[0.12em]"
                   style={
                     practice.on
@@ -787,7 +858,10 @@ export function PlayerOptions({
                   return (
                     <div
                       key={i}
-                      onClick={() => moveNearestEdge(i + 1)}
+                      onClick={() => {
+                        setRow('practice');
+                        moveNearestEdge(i + 1);
+                      }}
                       className="flex min-w-0 flex-1 cursor-pointer items-end"
                       title={`Measure ${i + 1}`}
                     >
@@ -807,6 +881,33 @@ export function PlayerOptions({
                 CLICK A MEASURE TO SET THE LOOP · {measures.count} MEASURES
                 {practice.on && ' · ONLY THE LOOP IS JUDGED'}
               </div>
+              {/* The loop edges are ▲▼ rows — they need visible homes, or ◀▶
+                  edits the loop blind (the pad's only way to nudge an edge). */}
+              {practice.on && (
+                <div className="mt-[6px] flex gap-2">
+                  {(
+                    [
+                      ['loopstart', 'LOOP START', mStart, beatTime((mStart - 1) * 4)],
+                      ['loopend', 'LOOP END', mEnd, beatTime(mEnd * 4)],
+                    ] as const
+                  ).map(([id, label, m, sec]) => (
+                    <div
+                      key={id}
+                      style={ring(id)}
+                      className="flex flex-1 items-baseline gap-2 px-2 py-[5px]"
+                    >
+                      <span className="text-[10px] tracking-[0.16em] text-[#ececec]/45">
+                        {label} ◀ ▶
+                      </span>
+                      <span className="flex-1" />
+                      <span className="font-display text-[14px] font-bold tabular-nums">M{m}</span>
+                      <span className="text-[11px] text-[#ececec]/40 tabular-nums">
+                        {Math.floor(sec / 60)}:{String(Math.floor(sec % 60)).padStart(2, '0')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -815,7 +916,10 @@ export function PlayerOptions({
           {/* Commit */}
           <div className="flex gap-[10px]">
             <button
-              onClick={() => adjustRow('multiplayer', 1)}
+              onClick={() => {
+                setRow('multiplayer');
+                adjustRow('multiplayer', 1);
+              }}
               className="flex h-[52px] w-[168px] flex-none items-center justify-center font-display text-[12px] font-bold tracking-[0.12em]"
               style={{
                 ...(focus('multiplayer')
@@ -848,11 +952,15 @@ export function PlayerOptions({
         {/* ── CENTER: the preview, aimed at the part that matters ────────── */}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-[40px] flex-none items-center gap-[10px] border-b border-white/[0.06] px-5">
-            <Label>PREVIEW</Label>
+            <Label>PREVIEW ◀ ▶</Label>
             <span className="flex-1" />
             <div
               className="flex h-[26px]"
-              style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)' }}
+              style={
+                focus('previewspot')
+                  ? { ...focusStyle(true), height: 26 }
+                  : { boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.12)' }
+              }
             >
               {(
                 [
@@ -864,7 +972,10 @@ export function PlayerOptions({
                 return (
                   <button
                     key={spot}
-                    onClick={() => setPreviewSpot(spot)}
+                    onClick={() => {
+                      setRow('previewspot');
+                      setPreviewSpot(spot);
+                    }}
                     className="flex items-center px-3 font-display text-[11px] tracking-[0.1em]"
                     style={
                       on
@@ -981,16 +1092,24 @@ export function PlayerOptions({
                       fill="url(#nps-playmods)"
                     />
                   </svg>
-                  {previewWindow && (
-                    <div
-                      className="absolute inset-y-0"
-                      style={{
-                        left: `${Math.max(0, (previewWindow.startSeconds / Math.max(0.001, stats.lengthSeconds)) * 100)}%`,
-                        right: `${Math.max(0, 100 - (previewWindow.endSeconds / Math.max(0.001, stats.lengthSeconds)) * 100)}%`,
-                        boxShadow: `inset 0 0 0 2px ${AC}`,
-                      }}
-                    />
-                  )}
+                  {previewWindow &&
+                    (() => {
+                      // Same axis as the SVG path: bins start at the first
+                      // NOTE-bearing measure, not song second 0.
+                      const t0 = stats.nps[0].t0;
+                      const span = Math.max(0.001, stats.nps[stats.nps.length - 1].t1 - t0);
+                      const x = (t: number) => Math.max(0, Math.min(100, ((t - t0) / span) * 100));
+                      return (
+                        <div
+                          className="absolute inset-y-0"
+                          style={{
+                            left: `${x(previewWindow.startSeconds)}%`,
+                            right: `${100 - x(previewWindow.endSeconds)}%`,
+                            boxShadow: `inset 0 0 0 2px ${AC}`,
+                          }}
+                        />
+                      );
+                    })()}
                 </div>
                 {previewWindow && (
                   <div className="mt-[6px] text-[11px] tracking-[0.1em]" style={{ color: AC }}>
@@ -1033,25 +1152,23 @@ export function PlayerOptions({
           )}
 
           <span className="flex-1" />
-          {versusActive && room && (
-            <div className="text-[12px] leading-[1.5] text-[#ffcf3d]">
-              {room.isHost
-                ? selfReady
-                  ? 'Waiting for the room to ready up.'
-                  : "You're the host — READY locks your pick and starts the countdown."
-                : 'The host picked this song — READY when you are.'}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* The same party bar as song select — the roster never moves. */}
+      {/* The same party bar as song select — the roster never moves, and it
+          carries the ONE situation line (no duplicate hints in the rail). */}
       <PartyBar
         status={
-          room && !selfReady && room.phase === 'lobby'
-            ? room.isHost
-              ? 'READY locks your pick and starts the countdown.'
-              : 'Pick a difficulty, then READY.'
+          room?.phase === 'lobby'
+            ? selfReady
+              ? canForceStart
+                ? 'Waiting for players — or press START to begin now.'
+                : 'Waiting for everyone to ready up…'
+              : present.length < 2
+                ? 'Waiting for players — share the code or link.'
+                : room.isHost
+                  ? 'READY locks your pick and starts the countdown.'
+                  : 'Pick a difficulty, then READY.'
             : undefined
         }
       />
@@ -1072,13 +1189,12 @@ export function PlayerOptions({
                 : selfReady
                   ? 'WAITING…'
                   : 'READY'
-              : 'PLAY',
+              : vs.k === 'busy' || vs.k === 'error'
+                ? 'WAITING…'
+                : 'PLAY',
           fav: null,
         }}
-        extras={[
-          { key: 'TAB', act: 'PREVIEW SPOT' },
-          { key: 'R', act: 'RESET MODS' },
-        ]}
+        extras={[{ key: 'R', act: 'RESET MODS' }]}
       />
     </div>
   );

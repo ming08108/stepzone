@@ -683,13 +683,17 @@ export class DdrA3GpuSkin implements GpuSkin {
     const b = ctx.batch;
     const fieldW = ctx.numTracks * ctx.colW;
     // Field-aligned and lowered into the eyeline: the gauge used to sit 160px
-    // above the receptors at a width nothing else shared. The DOM HUD's
-    // `LIFE nn%` caption sits directly under gy + gh — keep them in sync
-    // (PlayHud positions it at ds*67 + 6k).
+    // above the receptors at a width nothing else shared. Under reverse the
+    // receptors are at the bottom and notes stream DOWN through the top, so
+    // the gauge mirrors below them instead of sitting in the note path. The
+    // DOM HUD's `LIFE nn%` caption tracks gy + gh — keep PlayHud in sync
+    // (it positions at ds*67 + 6k, mirrored under reverse).
     const gw = fieldW;
     const gh = 26 * ds;
     const gx = ctx.fieldLeft;
-    const gy = 41 * ds;
+    // (Reverse tucks it flush between the receptor box and the bottom strip —
+    // that slot is exactly gauge-height at 1080p, so the DOM caption hides.)
+    const gy = ctx.reverse ? ctx.height - 78 * ds : 41 * ds;
     const capL = 24 * ds;
     const capR = 16 * ds;
     const tx = gx + capL;

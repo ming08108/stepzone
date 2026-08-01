@@ -171,7 +171,9 @@ export function SongInspector({
   const playable = vm != null && vm.levels[diff] != null;
 
   return (
-    <div className="flex w-[372px] flex-none flex-col overflow-hidden border-l border-white/[0.09] bg-[#0e0f12]">
+    // Hidden below ~1100px — the fixed rail + inspector would otherwise crush
+    // the song list to nothing (the old side column had the same guard).
+    <div className="hidden w-[372px] flex-none flex-col overflow-hidden border-l border-white/[0.09] bg-[#0e0f12] min-[1100px]:flex">
       {/* Identity */}
       <div className="relative h-[118px] flex-none overflow-hidden border-b border-white/[0.09]">
         <div

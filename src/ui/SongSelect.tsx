@@ -84,6 +84,8 @@ import {
   applyCollection,
   buildLastPlayed,
   collectionLabel,
+  focusStyle,
+  sameCollection,
   AC,
   type Collection,
 } from './songSelectUi';
@@ -93,7 +95,13 @@ import { SongInspector } from './SongInspector';
 import { KeyLegend, type LegendActions } from './KeyLegend';
 
 /** Which pane owns ▲▼. */
-type Pane = 'rail' | 'list';
+/** Which pane owns ▲▼. SELECT cycles LIST → RAIL → FILTERS → LIST; the
+ *  filters pane is the pad path to sort / level range / faves / reset / party
+ *  (◀▶ adjusts there — the one scoped exception to "◀▶ is difficulty"). */
+type Pane = 'rail' | 'list' | 'filters';
+
+const FILTER_ROWS = ['faves', 'lvmin', 'lvmax', 'sort', 'reset', 'party'] as const;
+type FilterRow = (typeof FILTER_ROWS)[number];
 
 // A ?join=CODE share link, consumed ONCE at module level: StrictMode's dev
 // double-mount re-runs state initializers after the URL param is stripped, so
@@ -165,10 +173,15 @@ export function SongSelect({
   const [favOnly, setFavOnly] = useState(saved.favOnly);
   const [favs, setFavs] = useState(() => loadFavorites());
 
+  const [fcursor, setFcursor] = useState(0);
+
   const [joinCode] = useState(consumeJoinCode);
-  // The party bar's idle ENTRY state (design 6a) — summoned from the header,
-  // or auto-shown when arriving via a ?join= link.
-  const [partyOpen, setPartyOpen] = useState(joinCode !== undefined);
+  // The party bar's summoned state (design 6a): idle → the HOST/JOIN entry;
+  // non-idle → the bar takes START/SELECT for cancel/dismiss/leave. Opened
+  // from the FILTERS pane's PARTY chip, or auto via a ?join= link.
+  const [partyOpen, setPartyOpen] = useState(
+    () => joinCode !== undefined && roomState().k === 'idle',
+  );
   const [namePromptOpen, setNamePromptOpen] = useState(
     () => shouldPromptForName() && joinCode === undefined,
   );
@@ -185,6 +198,15 @@ export function SongSelect({
   const isRoomHost = vsRoom.k === 'in-room' && vsRoom.room.isHost;
   const roomBrowse = vsRoom.k === 'in-room' ? vsRoom.room : null;
   const browsingLabel = isRoomGuest ? (roomBrowsing()?.title ?? null) : null;
+
+  // The summoned entry bar closes itself the moment a room comes up — leaving
+  // a room (or dismissing an error) must land you back on the songs, not in
+  // the HOST/JOIN entry with the pad captured.
+  const prevRoomK = useRef(vsRoom.k);
+  useEffect(() => {
+    if (prevRoomK.current === 'idle' && vsRoom.k !== 'idle') setPartyOpen(false);
+    prevRoomK.current = vsRoom.k;
+  }, [vsRoom.k]);
 
   const stats = useMemo(() => loadStats(), []);
   const scores = useMemo(() => loadScores(), []);
@@ -285,8 +307,18 @@ export function SongSelect({
     if (shown.length === 0 && filtered.length > 0 && collection.kind === 'pack') {
       setCollection({ kind: 'all' });
       setRailCursor(4);
+      setSel(0);
     }
   }, [shown.length, filtered.length, collection]);
+
+  // The rail's pack rows appear/disappear/reorder as search and filters
+  // change — re-seat the cursor on the ACTIVE collection so the full-strength
+  // marker never drifts onto an unrelated pack.
+  useEffect(() => {
+    const idx = railItems.findIndex((it) => sameCollection(it.collection, collection));
+    if (idx >= 0) setRailCursor((cur) => (cur === idx ? cur : idx));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railItems]);
 
   const railClamped = Math.min(railCursor, Math.max(0, railItems.length - 1));
   const selClamped = Math.min(sel, Math.max(0, shown.length - 1));
@@ -350,7 +382,10 @@ export function SongSelect({
     const queued = new Set<string>();
     const jobs: { pack: string; sourceId: string; dir: string }[] = [];
     for (const s of filtered) {
-      const pack = s.pack || '—';
+      // Packless songs can never resolve art (the store only tracks REAL pack
+      // names) — queuing '—' would re-walk a folder on every filter change.
+      if (!s.pack) continue;
+      const pack = s.pack;
       if (queued.has(pack) || packArtUrl(pack) !== undefined) continue;
       const e = s.entry;
       if (!e?.sourceId || !e.lazyDir || !e.lazyDir.includes('/')) continue;
@@ -435,12 +470,38 @@ export function SongSelect({
     setFavOnly(false);
   };
 
+  /** ◀▶ / confirm on the FILTERS pane — the pad path to the context-bar chips. */
+  const adjustFilter = (frow: FilterRow, dir: number) => {
+    switch (frow) {
+      case 'faves':
+        setFavOnly((v) => !v);
+        return;
+      case 'lvmin':
+        setMinLv((v) => Math.max(1, Math.min(effMaxLv, v + dir)));
+        return;
+      case 'lvmax':
+        setMaxLv((v) => Math.max(minLv, Math.min(levelCeil, Math.min(v, levelCeil) + dir)));
+        return;
+      case 'sort':
+        setSort((s) => SORTS[(SORTS.indexOf(s) + dir + SORTS.length) % SORTS.length]);
+        setSel(0);
+        return;
+      case 'reset':
+        resetFilters();
+        return;
+      case 'party':
+        setPartyOpen(true);
+        return;
+    }
+  };
+
   /* ── keyboard / pad ───────────────────────────────────────────────────────
-     The whole model, in four lines:
+     The whole model:
        ▲▼      move the cursor in the focused pane
-       ◀▶      difficulty — always, in every pane, in every state
-       SELECT  swap the focused pane (LIBRARY ⇄ SONGS)
-       START   play (or, from the rail, jump into the songs)
+       ◀▶      difficulty (in FILTERS it adjusts the focused chip — the one
+               scoped exception, entered and left explicitly with SELECT)
+       SELECT  cycle the focused pane: SONGS → LIBRARY → FILTERS → SONGS
+       START   play (rail: jump into the songs · filters: apply the chip)
      Plus, for keyboard players: F favorites; click the search box to type
      (no `/` shortcut — Slash is a default CONFIRM bind, and one key meaning
      "search" here and "start the song" on the next screen is exactly the
@@ -448,16 +509,18 @@ export function SongSelect({
   ------------------------------------------------------------------------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // While the party bar's entry state is up it owns the pad (capture-phase
-      // handler in PartyBar); while idle-open or the name prompt is up, the
-      // list must not also react.
-      if ((partyOpen && vsRoom.k === 'idle') || namePromptOpen) return;
+      // While the party bar is summoned it owns the pad (capture-phase
+      // handlers in PartyBar); while a join is in flight (busy) a stray START
+      // must not launch a solo song; the name prompt is modal.
+      if (partyOpen || vsRoom.k === 'busy' || namePromptOpen) return;
 
       const target = e.target as HTMLElement | null;
       const typing = target?.tagName === 'INPUT';
       const role = keyboardRole(e.code);
       const isConfirm = e.key === 'Enter' || role === 'confirm';
-      const isSwap = e.key === 'Escape' || e.key === 'Shift' || e.key === 'Tab' || role === 'back';
+      // Tab is NOT a swap key: it keeps native focus traversal so the search
+      // box (and the header buttons) stay keyboard-reachable.
+      const isSwap = e.key === 'Escape' || e.key === 'Shift' || role === 'back';
 
       if (typing) {
         // Search owns typing — every printable key, including ones bound to
@@ -471,16 +534,18 @@ export function SongSelect({
         return;
       }
 
-      // ◀▶ is difficulty everywhere.
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
-        setDiff((v) => Math.max(0, Math.min(4, v + (e.key === 'ArrowRight' ? 1 : -1))));
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        if (pane === 'filters') adjustFilter(FILTER_ROWS[fcursor], dir);
+        // ◀▶ is difficulty everywhere else.
+        else setDiff((v) => Math.max(0, Math.min(4, v + dir)));
         return;
       }
 
       if (isSwap) {
         e.preventDefault();
-        setPane((p) => (p === 'rail' ? 'list' : 'rail'));
+        setPane((p) => (p === 'list' ? 'rail' : p === 'rail' ? 'filters' : 'list'));
         return;
       }
 
@@ -489,15 +554,15 @@ export function SongSelect({
         const dir = e.key === 'ArrowDown' ? 1 : -1;
         if (pane === 'rail') {
           const n = Math.max(1, railItems.length);
-          setRailCursor((p) => {
-            const next = Math.max(0, Math.min(n - 1, Math.min(p, n - 1) + dir));
-            const item = railItems[next];
-            if (item) {
-              setCollection(item.collection);
-              setSel(0);
-            }
-            return next;
-          });
+          const next = Math.max(0, Math.min(n - 1, Math.min(railCursor, n - 1) + dir));
+          const item = railItems[next];
+          setRailCursor(next);
+          if (item) {
+            setCollection(item.collection);
+            setSel(0);
+          }
+        } else if (pane === 'filters') {
+          setFcursor((c) => (c + dir + FILTER_ROWS.length) % FILTER_ROWS.length);
         } else {
           const n = Math.max(1, shown.length);
           setSel((s) => (Math.min(s, n - 1) + dir + n) % n);
@@ -508,6 +573,7 @@ export function SongSelect({
       if (isConfirm) {
         e.preventDefault();
         if (pane === 'rail') setPane('list');
+        else if (pane === 'filters') adjustFilter(FILTER_ROWS[fcursor], 1);
         else void start();
         return;
       }
@@ -519,7 +585,23 @@ export function SongSelect({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pane, railItems, shown, song, start, toggleFav, partyOpen, vsRoom.k, namePromptOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    pane,
+    fcursor,
+    railCursor,
+    railItems,
+    shown,
+    song,
+    start,
+    toggleFav,
+    partyOpen,
+    vsRoom.k,
+    namePromptOpen,
+    minLv,
+    effMaxLv,
+    levelCeil,
+  ]);
 
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
@@ -536,20 +618,30 @@ export function SongSelect({
     ROW_H,
   );
 
-  const legend: LegendActions = isRoomGuest
-    ? { updown: 'SONG', start: 'SUGGEST', fav: 'FAVORITE' }
+  // The legend tracks who actually owns the pad RIGHT NOW — including the
+  // summoned party bar (whose capture handlers take every role).
+  const legend: LegendActions = partyOpen
+    ? vsRoom.k === 'idle'
+      ? { updown: null, leftright: 'HOST / JOIN', select: 'CLOSE', start: 'CONFIRM', fav: null }
+      : { updown: null, leftright: null, select: 'BACK TO SONGS', start: 'ROOM ACTION', fav: null }
     : pane === 'rail'
-      ? { updown: 'COLLECTION', select: 'SONGS', start: 'SHOW SONGS', fav: null }
-      : { updown: 'SONG', select: 'LIBRARY', start: 'PLAY' };
+      ? { updown: 'COLLECTION', select: 'FILTERS', start: 'SHOW SONGS', fav: null }
+      : pane === 'filters'
+        ? { updown: 'FILTER', leftright: 'ADJUST', select: 'SONGS', start: 'APPLY', fav: null }
+        : isRoomGuest
+          ? { updown: 'SONG', select: 'LIBRARY', start: 'SUGGEST', fav: 'FAVORITE' }
+          : { updown: 'SONG', select: 'LIBRARY', start: 'PLAY' };
 
   const note = isRoomGuest
     ? suggested
       ? `SUGGESTED “${suggested}”`
-      : roomBrowse?.song
-        ? 'THE HOST PICKED A SONG — GET READY'
-        : browsingLabel
-          ? `HOST IS LOOKING AT: ${browsingLabel}`
-          : 'IN A ROOM — THE HOST PICKS THE SONG'
+      : roomBrowse?.phase === 'playing'
+        ? 'A SONG IS IN PROGRESS — YOU JOIN THE NEXT ONE'
+        : roomBrowse?.song
+          ? 'THE HOST PICKED A SONG — GET READY'
+          : browsingLabel
+            ? `HOST IS LOOKING AT: ${browsingLabel}`
+            : 'IN A ROOM — THE HOST PICKS THE SONG'
     : undefined;
 
   return (
@@ -586,14 +678,6 @@ export function SongSelect({
             STEPS
           </span>
           <span className="h-[18px] w-px bg-white/[0.12]" />
-          <button
-            onClick={() => setPartyOpen((v) => !v)}
-            className="hover:text-[#ececec]"
-            style={{ color: vsRoom.k === 'in-room' ? '#59f07f' : partyOpen ? AC : undefined }}
-            title="Host or join a multiplayer room"
-          >
-            PARTY{vsRoom.k === 'in-room' ? ' ●' : ''}
-          </button>
           <button
             onClick={() => setShowSources((v) => !v)}
             className="hover:text-[#ececec]"
@@ -735,55 +819,113 @@ export function SongSelect({
               {shown.length.toLocaleString()} songs
             </span>
             <span className="flex-1" />
-            <button
-              onClick={() => setFavOnly((v) => !v)}
-              className="flex h-[30px] items-center gap-2 border px-[10px] text-[12px] tracking-[0.08em]"
-              style={{
-                borderColor: favOnly ? AC : 'rgba(255,255,255,.14)',
-                color: favOnly ? '#ececec' : 'rgba(236,236,236,.6)',
-                background: favOnly ? AC + '14' : 'transparent',
-              }}
-            >
-              <span className="opacity-55">FAVES</span>
-              <span className="font-bold">{favOnly ? '★ ONLY' : 'ALL'}</span>
-            </button>
-            <div className="flex h-[30px] items-center gap-2 border border-white/[0.14] px-[10px] text-[12px] tracking-[0.08em] text-[#ececec]/60">
-              <span className="opacity-55">LV</span>
-              <button
-                className="px-[3px] font-bold hover:text-white"
-                aria-label="decrease min level"
-                onClick={() => setMinLv((v) => Math.max(1, v - 1))}
-              >
-                −
-              </button>
-              <span className="min-w-[42px] text-center font-bold text-[#ececec] tabular-nums">
-                {minLv}–{effMaxLv}
-              </span>
-              <button
-                className="px-[3px] font-bold hover:text-white"
-                aria-label="increase max level"
-                onClick={() => setMaxLv((v) => Math.min(levelCeil, Math.min(v, levelCeil) + 1))}
-              >
-                +
-              </button>
-            </div>
-            <button
-              onClick={() => {
-                setSort(SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]);
-                setSel(0);
-              }}
-              className="flex h-[30px] items-center gap-2 border border-white/[0.14] px-[10px] text-[12px] tracking-[0.08em] text-[#ececec]/60 hover:border-[#ff5d47]"
-            >
-              <span className="opacity-55">SORT</span>
-              <span className="font-bold text-[#ececec]">{sort.toUpperCase()} ▾</span>
-            </button>
-            <button
-              onClick={resetFilters}
-              className="h-[30px] px-[10px] text-[12px] tracking-[0.08em] text-[#ececec]/45 hover:text-[#ff5d47]"
-              title="Clear search, level range, faves and sort"
-            >
-              ↺
-            </button>
+            {/* The filter chips double as the FILTERS pane's rows — the same
+                focusStyle cursor as everywhere else when the pane owns ▲▼. */}
+            {(() => {
+              const fring = (r: FilterRow) =>
+                pane === 'filters' && FILTER_ROWS[fcursor] === r
+                  ? focusStyle(true)
+                  : { borderLeft: '3px solid transparent' };
+              return (
+                <>
+                  <button
+                    onClick={() => setFavOnly((v) => !v)}
+                    className="flex h-[30px] items-center gap-2 px-[10px] text-[12px] tracking-[0.08em]"
+                    style={{
+                      ...fring('faves'),
+                      boxShadow:
+                        pane === 'filters' && FILTER_ROWS[fcursor] === 'faves'
+                          ? undefined
+                          : `inset 0 0 0 1px ${favOnly ? AC : 'rgba(255,255,255,.14)'}`,
+                      color: favOnly ? '#ececec' : 'rgba(236,236,236,.6)',
+                      background: favOnly ? AC + '14' : undefined,
+                    }}
+                  >
+                    <span className="opacity-55">FAVES</span>
+                    <span className="font-bold">{favOnly ? '★ ONLY' : 'ALL'}</span>
+                  </button>
+                  {/* Both level bounds, both directions — steppable by mouse
+                      AND by the filters pane (the old chip could only widen). */}
+                  {(
+                    [
+                      ['lvmin', 'MIN', minLv, (d: number) => adjustFilter('lvmin', d)],
+                      ['lvmax', 'MAX', effMaxLv, (d: number) => adjustFilter('lvmax', d)],
+                    ] as const
+                  ).map(([id, label, value, adj]) => (
+                    <div
+                      key={id}
+                      className="flex h-[30px] items-center gap-1 px-[8px] text-[12px] tracking-[0.08em] text-[#ececec]/60"
+                      style={{
+                        ...fring(id),
+                        boxShadow:
+                          pane === 'filters' && FILTER_ROWS[fcursor] === id
+                            ? undefined
+                            : 'inset 0 0 0 1px rgba(255,255,255,.14)',
+                      }}
+                    >
+                      <span className="opacity-55">LV {label}</span>
+                      <button
+                        className="px-[3px] font-bold hover:text-white"
+                        aria-label={`decrease ${label} level`}
+                        onClick={() => adj(-1)}
+                      >
+                        −
+                      </button>
+                      <span className="min-w-[22px] text-center font-bold text-[#ececec] tabular-nums">
+                        {value}
+                      </span>
+                      <button
+                        className="px-[3px] font-bold hover:text-white"
+                        aria-label={`increase ${label} level`}
+                        onClick={() => adj(1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => {
+                      setSort(SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length]);
+                      setSel(0);
+                    }}
+                    className="flex h-[30px] items-center gap-2 px-[10px] text-[12px] tracking-[0.08em] text-[#ececec]/60 hover:text-[#ececec]"
+                    style={{
+                      ...fring('sort'),
+                      boxShadow:
+                        pane === 'filters' && FILTER_ROWS[fcursor] === 'sort'
+                          ? undefined
+                          : 'inset 0 0 0 1px rgba(255,255,255,.14)',
+                    }}
+                  >
+                    <span className="opacity-55">SORT</span>
+                    <span className="font-bold text-[#ececec]">{sort.toUpperCase()} ▾</span>
+                  </button>
+                  <button
+                    onClick={resetFilters}
+                    className="flex h-[30px] items-center px-[10px] text-[12px] tracking-[0.08em] text-[#ececec]/45 hover:text-[#ff5d47]"
+                    style={fring('reset')}
+                    title="Clear search, level range, faves and sort"
+                  >
+                    ↺
+                  </button>
+                  <button
+                    onClick={() => setPartyOpen((v) => !v)}
+                    className="flex h-[30px] items-center gap-1 px-[10px] font-display text-[12px] tracking-[0.1em]"
+                    style={{
+                      ...fring('party'),
+                      boxShadow:
+                        pane === 'filters' && FILTER_ROWS[fcursor] === 'party'
+                          ? undefined
+                          : `inset 0 0 0 1px ${vsRoom.k === 'in-room' ? 'rgba(89,240,127,.5)' : 'rgba(255,93,71,.5)'}`,
+                      color: vsRoom.k === 'in-room' ? '#59f07f' : AC,
+                    }}
+                    title="Host or join a multiplayer room"
+                  >
+                    PARTY{vsRoom.k === 'in-room' ? ' ●' : ''}
+                  </button>
+                </>
+              );
+            })()}
           </div>
 
           <SongListHeader diffName={DIFF_SLOT_NAMES[diff]} />
@@ -822,11 +964,15 @@ export function SongSelect({
                 {shown.slice(first, last).map((s, k) => {
                   const i = first + k;
                   const focused = i === selClamped;
+                  // The row only GROWS (ROW_H_FOCUSED) while the list owns
+                  // ▲▼ — the -4px seat must match, or the cursor row overlaps
+                  // its neighbour whenever the rail/filters pane has focus.
+                  const grown = focused && pane === 'list';
                   return (
                     <div
-                      key={s.key + i}
+                      key={`${s.pack}·${s.key}`}
                       className="absolute inset-x-0"
-                      style={{ top: i * ROW_H + (focused ? -4 : 0), zIndex: focused ? 1 : 0 }}
+                      style={{ top: i * ROW_H + (grown ? -4 : 0), zIndex: focused ? 1 : 0 }}
                     >
                       <SongRow
                         vm={s}
@@ -850,20 +996,36 @@ export function SongSelect({
               </div>
             </div>
 
-            {shown.length === 0 && !loading && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-                <div className="font-display text-[15px] tracking-[0.2em] text-[#ececec]/45">
-                  NOTHING IN {collectionLabel(collection).toUpperCase()}
-                </div>
-                <button
-                  onClick={resetFilters}
-                  className="border px-[14px] py-[6px] text-[12px] tracking-[0.12em]"
-                  style={{ borderColor: AC, color: AC }}
-                >
-                  CLEAR FILTERS ↺
-                </button>
-              </div>
-            )}
+            {shown.length === 0 &&
+              !loading &&
+              (() => {
+                // Only offer CLEAR FILTERS when filters are actually the
+                // reason — an empty Favorites collection isn't fixed by it.
+                const filtersActive =
+                  search !== '' || minLv !== 1 || maxLv !== 999 || favOnly || sort !== 'title';
+                return (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+                    <div className="font-display text-[15px] tracking-[0.2em] text-[#ececec]/45">
+                      NOTHING IN {collectionLabel(collection).toUpperCase()}
+                    </div>
+                    {filtersActive ? (
+                      <button
+                        onClick={resetFilters}
+                        className="border px-[14px] py-[6px] text-[12px] tracking-[0.12em]"
+                        style={{ borderColor: AC, color: AC }}
+                      >
+                        CLEAR FILTERS ↺
+                      </button>
+                    ) : (
+                      <div className="text-[12px] tracking-[0.1em] text-[#ececec]/35">
+                        {collection.kind === 'favorites'
+                          ? 'PRESS F ON A SONG (OR CLICK ITS STAR) TO ADD ONE'
+                          : 'NOTHING HERE YET'}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
             {drag && (
               <div

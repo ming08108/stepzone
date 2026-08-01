@@ -38,7 +38,7 @@ import {
 
 const AC = '#ff5d47';
 const READY = '#59f07f';
-const DONE = '#38f0ff';
+const DONE = '#37d5ff'; // the system cyan (difficulty slot 0)
 
 /** Auto-join dedupe across StrictMode's dev double-mount. */
 const autoJoined = new Set<string>();
@@ -190,6 +190,10 @@ export function PartyBar({
       ArrowRight: 'R',
     };
     const onKey = (e: KeyboardEvent) => {
+      // The bar is docked, not modal — the screen (and its search box) stays
+      // live. Never steal keys aimed at a text field.
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       // confirm/back honor custom keybinds (e.g. a pad adapter), not just Enter.
       const role = keyboardRole(e.code);
       const isConfirm = e.key === 'Enter' || role === 'confirm';
@@ -201,8 +205,14 @@ export function PartyBar({
       e.stopPropagation();
       const s = entryRef.current;
       if (isBack) {
-        if (s.k === 'enter') setEntry({ k: 'menu', sel: 1 });
-        else onCloseRef.current?.();
+        // Code entry: SELECT deletes the last arrow (a mistyped code doesn't
+        // cost the whole thing); empty → back to the menu; menu → close.
+        if (s.k === 'enter') {
+          if (s.code.length > 0) setEntry({ k: 'enter', code: s.code.slice(0, -1) });
+          else setEntry({ k: 'menu', sel: 1 });
+        } else {
+          onCloseRef.current?.();
+        }
         return;
       }
       if (s.k === 'menu') {
@@ -223,17 +233,62 @@ export function PartyBar({
     return () => window.removeEventListener('keydown', onKey, true);
   }, [entryVisible]);
 
+  // While the bar is SUMMONED (open) in a non-idle state, START takes the
+  // primary action — cancel/dismiss, or (twice, to be safe) leave the room —
+  // and SELECT puts the pad back on the screen. This is the pad path the old
+  // mouse-only dock never had.
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const focusedActions = open && vs.k !== 'idle';
+  useEffect(() => {
+    if (!focusedActions) {
+      setConfirmLeave(false);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const role = keyboardRole(e.code);
+      const isConfirm = e.key === 'Enter' || role === 'confirm';
+      const isBack = e.key === 'Escape' || e.key === 'Shift' || e.key === 'Tab' || role === 'back';
+      if (!isConfirm && !isBack) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (isBack) {
+        setConfirmLeave(false);
+        onCloseRef.current?.();
+        return;
+      }
+      const now = roomState();
+      if (now.k === 'busy') leaveRoom();
+      else if (now.k === 'error') dismissRoomError();
+      else if (now.k === 'in-room') {
+        if (confirmLeave) {
+          leaveRoom();
+          onCloseRef.current?.();
+        } else {
+          setConfirmLeave(true);
+          window.setTimeout(() => setConfirmLeave(false), 2500);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [focusedActions, confirmLeave]);
+
   if (vs.k === 'idle' && !open) return null;
 
   const accent = vs.k === 'error' ? '#ff5c5c' : vs.k === 'busy' ? '#ffcf3d' : AC;
 
   const suggestions = roomSuggestions();
   const transfer = vs.k === 'in-room' && vs.follow.k === 'resolving' ? vs.follow : null;
+  // A guest's transfer/load FAILURE must be visible, not a silent flip back to
+  // the suggestions panel (the old blocking overlay used to carry this).
+  const followError = vs.k === 'in-room' && vs.follow.k === 'error' ? vs.follow : null;
 
   return (
     <div
       className="flex h-[112px] flex-none items-center gap-5 px-6"
-      style={{ borderTop: `2px solid ${accent}`, background: '#12100f' }}
+      style={{ borderTop: `2px solid ${accent}`, background: '#0e0f12' }}
     >
       {/* ── idle: the whole entry, inline ─────────────────────────────────── */}
       {vs.k === 'idle' && (
@@ -324,8 +379,27 @@ export function PartyBar({
           )}
 
           <div className="flex w-[190px] flex-none flex-col items-end gap-2">
-            <span className="font-display text-[11px] tracking-[0.12em] text-[#ececec]/40">
-              {entry.k === 'enter' ? 'PRESS THE 6 ARROWS' : 'START — HOST · ◀▶ — JOIN'}
+            <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 font-display text-[11px] tracking-[0.12em] text-[#ececec]/40">
+              {entry.k === 'enter' ? (
+                <>
+                  PRESS THE 6 ARROWS ·
+                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                    SELECT
+                  </span>
+                  UNDO
+                </>
+              ) : (
+                <>
+                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                    ◀▶
+                  </span>
+                  CHOOSE
+                  <span className="inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                    START
+                  </span>
+                  CONFIRM
+                </>
+              )}
             </span>
             <button
               onClick={() => onCloseRef.current?.()}
@@ -363,17 +437,27 @@ export function PartyBar({
           </div>
           <div
             className="min-w-0 flex-1 text-[14px] leading-[1.5]"
-            style={{ color: vs.k === 'error' ? '#ff8570' : 'rgba(236,236,236,.7)' }}
+            style={{ color: vs.k === 'error' ? '#ff5c5c' : 'rgba(236,236,236,.7)' }}
           >
             {vs.message}
           </div>
-          <button
-            onClick={vs.k === 'error' ? dismissRoomError : leaveRoom}
-            className="flex h-[34px] w-[160px] flex-none items-center justify-center font-display text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:text-[#ececec]"
-            style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)' }}
-          >
-            {vs.k === 'error' ? 'DISMISS ✕' : 'CANCEL ✕'}
-          </button>
+          <div className="flex w-[190px] flex-none flex-col items-end gap-2">
+            {focusedActions && (
+              <span className="font-display text-[11px] tracking-[0.12em] text-[#ececec]/40">
+                <span className="mr-1 inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                  START
+                </span>
+                {vs.k === 'error' ? 'DISMISS' : 'CANCEL'}
+              </span>
+            )}
+            <button
+              onClick={vs.k === 'error' ? dismissRoomError : leaveRoom}
+              className="flex h-[34px] w-[160px] items-center justify-center font-display text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:text-[#ececec]"
+              style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)' }}
+            >
+              {vs.k === 'error' ? 'DISMISS ✕' : 'CANCEL ✕'}
+            </button>
+          </div>
         </>
       )}
 
@@ -401,35 +485,78 @@ export function PartyBar({
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-1 gap-[10px]">
-            {vs.room.players
-              .filter((p) => !p.left)
-              .slice(0, 4)
-              .map((p) => (
-                <PlayerCard
-                  key={p.id}
-                  p={p}
-                  you={p.id === vs.room.selfId}
-                  canPromote={vs.room.isHost && vs.room.phase === 'lobby'}
-                />
-              ))}
-          </div>
+          {(() => {
+            // Rooms hold up to 8; the bar fits 4 cards. YOU must always be one
+            // of them (a 6th joiner has to see their own state), and the rest
+            // are summarized in a +N chip so nobody silently vanishes.
+            const active = vs.room.players.filter((p) => !p.left);
+            let shown = active.slice(0, 4);
+            const selfIdx = active.findIndex((p) => p.id === vs.room.selfId);
+            if (selfIdx >= 4) shown = [...active.slice(0, 3), active[selfIdx]];
+            const hidden = active.length - shown.length;
+            return (
+              <div className="flex min-w-0 flex-1 items-stretch gap-[10px]">
+                {shown.map((p) => (
+                  <PlayerCard
+                    key={p.id}
+                    p={p}
+                    you={p.id === vs.room.selfId}
+                    canPromote={vs.room.isHost && vs.room.phase === 'lobby'}
+                  />
+                ))}
+                {hidden > 0 && (
+                  <div className="flex w-[52px] flex-none items-center justify-center font-display text-[13px] font-bold text-[#ececec]/50">
+                    +{hidden}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="flex w-[280px] flex-none flex-col gap-[6px]">
-            {transfer ? (
+            {followError ? (
               <>
-                <div className="font-display text-[10px] tracking-[0.2em] text-[#ffcf3d]">
-                  GETTING THE SONG
+                <div className="font-display text-[10px] tracking-[0.2em] text-[#ff5c5c]">
+                  COULDN&apos;T GET THE SONG
                 </div>
-                <div className="relative h-2 overflow-hidden bg-white/10">
+                <div className="text-[12px] leading-[1.4] text-[#ff5c5c]">
+                  {followError.message}
+                </div>
+                <div className="text-[11px] tracking-[0.08em] text-[#ececec]/45">
+                  You&apos;ll rejoin on the host&apos;s next pick.
+                </div>
+              </>
+            ) : transfer ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-display text-[10px] tracking-[0.2em] text-[#ffcf3d]">
+                    GETTING THE SONG
+                  </span>
+                  <span className="flex-1" />
+                  {transfer.progress !== undefined && (
+                    <span className="text-[11px] font-bold text-[#ffcf3d] tabular-nums">
+                      {Math.round(Math.max(0, Math.min(1, transfer.progress)) * 100)}%
+                    </span>
+                  )}
+                </div>
+                {transfer.progress !== undefined ? (
+                  <div className="relative h-2 overflow-hidden bg-white/10">
+                    <div
+                      className="absolute top-0 bottom-0 left-0 transition-[width] duration-150"
+                      style={{
+                        width: `${Math.round(Math.max(0, Math.min(1, transfer.progress)) * 100)}%`,
+                        background: '#ffcf3d',
+                      }}
+                    />
+                  </div>
+                ) : (
                   <div
-                    className="absolute top-0 bottom-0 left-0 transition-[width] duration-150"
-                    style={{
-                      width: `${Math.round(Math.max(0, Math.min(1, transfer.progress ?? 0)) * 100)}%`,
-                      background: '#ffcf3d',
-                    }}
-                  />
-                </div>
+                    className="text-[12px] tracking-[0.3em] text-[#ffcf3d]/70"
+                    style={{ animation: 'blinkStart 1.4s infinite' }}
+                  >
+                    • • •
+                  </div>
+                )}
                 <div className="truncate text-[11px] tracking-[0.08em] text-[#ececec]/55">
                   {transfer.message} — browsing stays open
                 </div>
@@ -459,12 +586,29 @@ export function PartyBar({
 
           <div className="flex w-[220px] flex-none flex-col gap-2">
             {status && <div className="text-[12px] leading-[1.4] text-[#ffcf3d]">{status}</div>}
+            {focusedActions && (
+              <span className="font-display text-[11px] tracking-[0.12em] text-[#ececec]/40">
+                <span className="mr-1 inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                  START
+                </span>
+                {confirmLeave ? 'AGAIN TO LEAVE!' : 'LEAVE'}
+                <span className="mx-1 ml-2 inline-flex h-[18px] min-w-[24px] items-center justify-center border border-white/[0.18] px-1 text-[10px] text-[#ececec]">
+                  SELECT
+                </span>
+                DONE
+              </span>
+            )}
             <button
               onClick={leaveRoom}
-              className="flex h-[32px] items-center justify-center font-display text-[12px] tracking-[0.12em] text-[#ececec]/70 hover:text-[#ff5d47]"
-              style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)' }}
+              className="flex h-[32px] items-center justify-center font-display text-[12px] tracking-[0.12em] hover:text-[#ff5d47]"
+              style={{
+                boxShadow: confirmLeave
+                  ? `inset 0 0 0 1px ${AC}`
+                  : 'inset 0 0 0 1px rgba(255,255,255,.16)',
+                color: confirmLeave ? AC : 'rgba(236,236,236,.7)',
+              }}
             >
-              LEAVE ROOM ✕
+              {confirmLeave ? 'PRESS START AGAIN ✕' : 'LEAVE ROOM ✕'}
             </button>
           </div>
         </>
