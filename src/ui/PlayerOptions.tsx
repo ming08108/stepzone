@@ -17,6 +17,7 @@ import { previewEncoded, previewPositionSeconds, stopPreview } from '../audio/so
 import {
   BG_MODES,
   DEFAULT_PLAY_OPTIONS,
+  HUD_DENSITIES,
   NOTE_SKINS,
   PRACTICE_LEAD_SECONDS,
   PRACTICE_TAIL_SECONDS,
@@ -103,6 +104,7 @@ const TYPE_HELP = {
   M: 'MAX-BPM (MMod) reads the speed off the song’s fastest section — XMod feel, CMod-style cap on how fast it ever gets.',
 } as const;
 const SKIN_LABEL = { arcade: 'DDR A3', itg: 'SIMPLY LOVE' } as const;
+const HUD_LABEL = { full: 'FULL', lean: 'LEAN' } as const;
 
 export function PlayerOptions({
   req,
@@ -335,6 +337,12 @@ export function PlayerOptions({
       adjust: (dir) => update({ noteSkin: cycle(NOTE_SKINS, settings.noteSkin, dir) }),
     },
     {
+      label: 'HUD',
+      value: HUD_LABEL[settings.hudDensity],
+      help: 'How much in-play info sits beside the field: FULL adds the chart timeline and the live judgment tally, LEAN keeps just life, timing, score and time left.',
+      adjust: (dir) => update({ hudDensity: cycle(HUD_DENSITIES, settings.hudDensity, dir) }),
+    },
+    {
       label: 'BACKGROUND',
       value: settings.bgMode.toUpperCase(),
       help: 'Behind the arrows. OFF hides it, DIM darkens the song’s art/video so notes stay readable, FULL shows it brighter, DANCE always plays the neon dancer that steps your chart.',
@@ -471,6 +479,9 @@ export function PlayerOptions({
         settings.turn !== 'none' ? settings.turn.toUpperCase() : null,
         settings.reverse ? 'REVERSE' : null,
         settings.noteSkin !== DEFAULT_PLAY_OPTIONS.noteSkin ? SKIN_LABEL[settings.noteSkin] : null,
+        settings.hudDensity !== DEFAULT_PLAY_OPTIONS.hudDensity
+          ? `HUD ${HUD_LABEL[settings.hudDensity]}`
+          : null,
         settings.bgMode !== DEFAULT_PLAY_OPTIONS.bgMode
           ? `BG ${settings.bgMode.toUpperCase()}`
           : null,

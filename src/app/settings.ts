@@ -14,6 +14,7 @@
 import {
   BG_MODES,
   DEFAULT_PLAY_OPTIONS,
+  HUD_DENSITIES,
   NOTE_SKINS,
   SCROLL_MODES,
   TURNS,
@@ -139,6 +140,7 @@ function sanitizeSettings(v: unknown): { settings: Settings; migrated: boolean }
       reverse: bool(p.reverse, d.reverse),
       bgMode: pick(p.bgMode, BG_MODES, d.bgMode),
       noteSkin: pick(p.noteSkin, NOTE_SKINS, d.noteSkin),
+      hudDensity: pick(p.hudDensity, HUD_DENSITIES, d.hudDensity),
       dancerModel: pick(p.dancerModel, DANCER_MODEL_IDS, d.dancerModel),
     },
   };

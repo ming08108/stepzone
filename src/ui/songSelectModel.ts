@@ -18,7 +18,7 @@ export const SORTS = ['title', 'artist', 'pack', 'bpm', 'level', 'best', 'plays'
 export type Sort = (typeof SORTS)[number];
 
 /** Best recorded score per difficulty slot (aligned with the 5 slot names). */
-export type SlotBest = { percent: number; grade: string } | null;
+export type SlotBest = { percent: number; grade: string; failed?: boolean } | null;
 export type Bests = ReadonlyArray<SlotBest>;
 
 export const NO_BESTS: Bests = [null, null, null, null, null];
@@ -102,7 +102,7 @@ export function buildBestsBySong(scores: Record<string, ChartScore>): Map<string
     const slots = m.get(sk) ?? [null, null, null, null, null];
     const prev = slots[slot];
     if (!prev || s.percent > prev.percent) {
-      slots[slot] = { percent: s.percent, grade: s.grade };
+      slots[slot] = { percent: s.percent, grade: s.grade, failed: s.failed };
     }
     m.set(sk, slots);
   }

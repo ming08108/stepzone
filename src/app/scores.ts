@@ -12,6 +12,9 @@ export interface ChartScoreCore {
   maxCombo: number;
   /** TapNoteScore -> count, for the best play. */
   counts: Record<number, number>;
+  /** The best play failed out. Records written before this field existed load
+   *  as false — an old record is far more likely to be a clear than a fail. */
+  failed: boolean;
   plays: number;
   updated: number;
 }
@@ -58,6 +61,7 @@ function sanitizeScore(v: unknown): ChartScore | null {
     grade: v.grade,
     maxCombo: v.maxCombo,
     counts,
+    failed: typeof v.failed === 'boolean' ? v.failed : false,
     plays: v.plays,
     updated: finiteNum(v.updated) ? v.updated : 0,
     title: v.title,
@@ -88,12 +92,14 @@ export interface RecordInput {
   grade: string;
   maxCombo: number;
   counts: Record<number, number>;
+  /** This play failed out (life hit zero). */
+  failed: boolean;
 }
 
 /**
  * Pure best-merge policy: fold a finished play into the stored best.
  * A new record is strictly-better percent (or a first play); percent and
- * maxCombo merge independently as maxes; grade/counts follow the better
+ * maxCombo merge independently as maxes; grade/counts/failed follow the better
  * percent; plays always increments.
  */
 export function mergeBest(
@@ -107,6 +113,7 @@ export function mergeBest(
     grade: prev && prev.percent >= r.percent ? prev.grade : r.grade,
     maxCombo: Math.max(r.maxCombo, prev?.maxCombo ?? 0),
     counts: isNewRecord ? r.counts : (prev?.counts ?? r.counts),
+    failed: prev && prev.percent >= r.percent ? prev.failed : r.failed,
     plays: (prev?.plays ?? 0) + 1,
     updated: now,
   };

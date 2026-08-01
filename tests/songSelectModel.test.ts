@@ -118,6 +118,7 @@ describe('buildBestsBySong', () => {
     grade: 'C',
     maxCombo: 0,
     counts: {},
+    failed: false,
     plays: 1,
     updated: 0,
     title: 'T',
@@ -134,8 +135,8 @@ describe('buildBestsBySong', () => {
       c: score({ percent: 0.6, grade: 'B', difficulty: Difficulty.Beginner }),
     });
     const slots = m.get(songKey('T', 'Ar'))!;
-    expect(slots[3]).toEqual({ percent: 0.95, grade: 'S' }); // Hard = slot 3, best kept
-    expect(slots[0]).toEqual({ percent: 0.6, grade: 'B' }); // Beginner = slot 0
+    expect(slots[3]).toEqual({ percent: 0.95, grade: 'S', failed: false }); // Hard = slot 3, best kept
+    expect(slots[0]).toEqual({ percent: 0.6, grade: 'B', failed: false }); // Beginner = slot 0
     expect(slots[2]).toBeNull();
   });
 });

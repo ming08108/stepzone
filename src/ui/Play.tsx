@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { GameSession } from '../game/session';
 import { Judge } from '../gameplay/judge';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
@@ -13,7 +13,7 @@ import { difficultyToString } from '../song/difficulty';
 import { difficultyColor } from './difficultyUi';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
-import { chartKey, recordPlay, type ChartScore } from '../app/scores';
+import { chartKey, loadScores, recordPlay, type ChartScore } from '../app/scores';
 import { submitScore } from '../net/leaderboard';
 import { type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
 import { chartDataOf } from '../song/chartData';
@@ -24,6 +24,8 @@ import { roomState, subscribeRoom } from './roomStore';
 import { useControls } from './useControls';
 import { useSettings } from './SettingsContext';
 import { useSyncExternalStore } from 'react';
+import { gradeColor, PlayHud } from './hud/PlayHud';
+import { useHudTelemetry } from './hud/useHudTelemetry';
 
 type Phase = 'ready' | 'playing' | 'done' | 'error';
 
@@ -92,17 +94,6 @@ const JUDGMENT_ROWS: Array<[TapNoteScore, string, string]> = [
   [TapNoteScore.W5, 'WAY OFF', '#ff9d3d'],
   [TapNoteScore.Miss, 'MISS', '#ff5d47'],
 ];
-
-/** Letter-grade tier colors (gold AAA → red D), matching the judgment palette. */
-const GRADE_COLORS: Record<string, string> = {
-  AAA: '#ffd23d',
-  AA: '#38f0ff',
-  A: '#59f07f',
-  B: '#5db4ff',
-  C: '#ff9d3d',
-  D: '#ff5d47',
-};
-const gradeColor = (g: string): string => GRADE_COLORS[g] ?? '#ececec';
 
 /** Results header: a big tier-colored letter grade beside the % and clear/fail. */
 function ResultHeader({ result }: { result: Result }) {
@@ -179,6 +170,15 @@ function FpsMeter() {
 
 export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) {
   const { settings } = useSettings();
+  // The DOM HUD samples the live session at 15 Hz (solo only — in versus the
+  // column it occupies is where 2P's field renders).
+  const [hudFps, setHudFps] = useState(0);
+  // Your stored best on this chart before this run, for the live PB delta.
+  const pbPercent = useMemo(() => {
+    const rec = loadScores()[chartKey(req.song, req.chart)];
+    return rec ? rec.percent : null;
+  }, [req.song, req.chart]);
+  const numTracks = useMemo(() => req.chart.getNoteData().numTracks, [req.chart]);
   // Versus locks the room's music rate; everything (session, ranking, the
   // results rate note) follows the rate the play actually ran at.
   const effRate = req.versus?.musicRate ?? settings.musicRate;
@@ -198,6 +198,25 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
   const [phase, setPhase] = useState<Phase>('ready');
   const [result, setResult] = useState<Result | null>(null);
   const [loopNum, setLoopNum] = useState(1);
+  const telemetry = useHudTelemetry(sessionRef, phase === 'playing');
+  // FPS readout for the HUD's bottom strip (the old FpsMeter loop, hoisted).
+  useEffect(() => {
+    if (phase !== 'playing') return;
+    let raf = 0;
+    let frames = 0;
+    let last = performance.now();
+    const loop = (t: number) => {
+      frames++;
+      if (t - last >= 500) {
+        setHudFps(Math.round((frames * 1000) / (t - last)));
+        frames = 0;
+        last = t;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
   // Hold-to-quit: `back` held mid-song for QUIT_HOLD_MS exits (with a fill).
   const [quitting, setQuitting] = useState(false);
   const quitTimerRef = useRef<number | null>(null);
@@ -508,6 +527,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
       reverse: settings.reverse,
       bgMode: settings.bgMode,
       noteSkin: settings.noteSkin,
+      hudDensity: settings.hudDensity,
       practice: req.practice ?? null,
     });
     session.resize(canvas.clientWidth, canvas.clientHeight);
@@ -603,6 +623,7 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             grade: judge.grade,
             maxCombo: judge.maxCombo,
             counts,
+            failed: judge.failed,
           });
       // Submission gate (anti-cheat): a keyboard note press this run holds the
       // play off the leaderboard entirely — local records still stand. A
@@ -801,16 +822,46 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
           views side by side over a single shared background. */}
       <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
 
-      <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
-        <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
-          ⛶
-        </button>
-        <button onClick={onExit} className={CTL_BTN}>
-          ← SONGS
-        </button>
-      </div>
+      {/* Solo: the DOM HUD owns the chrome around the untouched field — score,
+          timing, chart timeline, bottom strip (song info, progress, fullscreen,
+          the signposted SELECT · HOLD TO QUIT, FPS). The old bottom-left
+          ⛶ / ← SONGS cluster is gone: it was drawn on top of the score panel
+          and was a mouse-only instant exit pad players couldn't see. */}
+      {phase === 'playing' && !req.versus && (
+        <PlayHud
+          song={req.song}
+          chart={req.chart}
+          telemetry={telemetry}
+          density={settings.hudDensity}
+          skin={settings.noteSkin}
+          reverse={settings.reverse}
+          numTracks={numTracks}
+          musicRate={effRate}
+          pbPercent={pbPercent}
+          practiceNote={
+            sessionRef.current?.isReplay
+              ? '▶ REPLAY'
+              : req.practice
+                ? `PRACTICE · M${Math.floor(req.practice.startBeat / 4) + 1}–M${Math.max(1, Math.floor(req.practice.endBeat / 4))} · LOOP ${loopNum}`
+                : null
+          }
+          fps={hudFps}
+          onFullscreen={toggleFullscreen}
+        />
+      )}
 
-      {phase === 'playing' && <FpsMeter />}
+      {/* Versus keeps the minimal old chrome: the race screen has no HUD column
+          (2P's field lives there), but fullscreen + FPS shouldn't vanish. */}
+      {phase === 'playing' && req.versus && (
+        <>
+          <div className="absolute bottom-4 left-4 z-[3] flex gap-2">
+            <button onClick={toggleFullscreen} title="Fullscreen" className={CTL_BTN}>
+              ⛶
+            </button>
+          </div>
+          <FpsMeter />
+        </>
+      )}
 
       {phase === 'playing' && quitting && (
         <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-black/35">
@@ -831,25 +882,6 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
               RELEASE TO KEEP PLAYING
             </div>
           </div>
-        </div>
-      )}
-
-      {phase === 'playing' && req.practice && (
-        <div
-          className="absolute right-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.18em] text-[#ececec]/85"
-          style={{ borderColor: AC }}
-        >
-          PRACTICE · M{Math.floor(req.practice.startBeat / 4) + 1}–M
-          {Math.max(1, Math.floor(req.practice.endBeat / 4))} · LOOP {loopNum}
-        </div>
-      )}
-
-      {phase === 'playing' && sessionRef.current?.isReplay && (
-        <div
-          className="absolute right-4 top-4 z-[3] border bg-black/45 px-3 py-1.5 text-[12px] tracking-[0.18em] text-[#ececec]/85"
-          style={{ borderColor: AC }}
-        >
-          ▶ REPLAY
         </div>
       )}
 

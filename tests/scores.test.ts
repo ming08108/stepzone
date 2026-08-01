@@ -58,6 +58,7 @@ const play = (over: Partial<RecordInput> = {}): RecordInput => ({
   grade: 'A',
   maxCombo: 100,
   counts: { 5: 50, 4: 10 },
+  failed: false,
   ...over,
 });
 
@@ -66,6 +67,7 @@ const stored = (over: Partial<ChartScore> = {}): ChartScore => ({
   grade: 'A',
   maxCombo: 100,
   counts: { 5: 50, 4: 10 },
+  failed: false,
   plays: 3,
   updated: 1000,
   title: 'Song',
@@ -131,6 +133,21 @@ describe('mergeBest (pure best-merge policy, review #4)', () => {
     const { best } = mergeBest(stored({ plays: 7 }), play({ percent: 0 }), 123456);
     expect(best.plays).toBe(8);
     expect(best.updated).toBe(123456);
+  });
+
+  it('failed follows the better percent, like grade', () => {
+    // A failed run with a higher percent replaces a clear: the record is a fail.
+    const up = mergeBest(
+      stored({ percent: 0.8, failed: false }),
+      play({ percent: 0.9, failed: true }),
+    );
+    expect(up.best.failed).toBe(true);
+    // A worse failed run does not taint a stored clear.
+    const down = mergeBest(
+      stored({ percent: 0.9, failed: false }),
+      play({ percent: 0.5, failed: true }),
+    );
+    expect(down.best.failed).toBe(false);
   });
 });
 

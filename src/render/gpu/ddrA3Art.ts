@@ -39,27 +39,13 @@
 
 import { NoteType, TapNoteScore } from '../../notes/noteTypes';
 import type { JudgmentStyle } from '../types';
-import { OUTLINE_INK, roundFont, squareFont } from './text';
+import { OUTLINE_INK, roundFont } from './text';
 
 // --- Palette -----------------------------------------------------------------
 
 export const GOLD_LIGHT = '#f6dc5a'; // gold-cab trim highlight
 export const GOLD_MID = '#c9a227';
 export const GOLD_DARK = '#6e5310';
-export const PANEL_BG = 'rgba(0,0,0,0.86)';
-
-// A3 difficulty colors (Scripts/02 Colors.lua) — yes, Difficult=red, Expert=green.
-export const DIFF_COLOR: ReadonlyArray<readonly [string, string]> = [
-  ['BEGINNER', '#1ed6ff'],
-  ['EASY', '#ffaa19'],
-  ['BASIC', '#ffaa19'],
-  ['MEDIUM', '#ff1e3c'],
-  ['DIFFICULT', '#ff1e3c'],
-  ['HARD', '#32eb19'],
-  ['EXPERT', '#32eb19'],
-  ['CHALLENGE', '#eb1eff'],
-  ['EDIT', '#afafaf'],
-];
 
 // DDR A3 judgment tiers (Title Case, per the Judgment 1x5 sprite). W5 has no
 // A3 window — it gets the legacy DDR "Boo"; a stepped-on mine reads as N.G.
@@ -520,82 +506,6 @@ export function paintGaugeDividers(
     c.lineTo(x0 - tip / 2, gh - 1 * ds);
   }
   c.stroke();
-}
-
-/** Song title/artist panel content (black band + lettering). */
-export function paintSongPanel(
-  c: CanvasRenderingContext2D,
-  pw: number,
-  ph: number,
-  ds: number,
-  title: string,
-  subtitle: string,
-  /** Fill the black panel band. The GPU field draws it as geometry and passes
-   *  false so only the (bake-once) title/artist text lands in the sprite. */
-  bg = true,
-): void {
-  if (bg) {
-    c.fillStyle = PANEL_BG;
-    c.fillRect(0, 0, pw, ph);
-  }
-  c.textAlign = 'center';
-  c.fillStyle = '#f4f4f6';
-  c.font = squareFont(700, 19 * ds);
-  c.fillText(title || 'stepzone', pw / 2, 23 * ds, pw - 24 * ds);
-  if (subtitle) {
-    c.fillStyle = '#c9cacd';
-    c.font = squareFont(600, 13 * ds);
-    c.fillText(subtitle, pw / 2, 41 * ds, pw - 24 * ds);
-  }
-}
-
-/** Difficulty label ("EXPERT 16": tier-coloured name + white meter), drawn at
- *  the score row's native position in a `pw`-wide sprite. Constant per session,
- *  so the GPU field bakes it once and draws the geometry frame separately. */
-export function paintDifficulty(
-  c: CanvasRenderingContext2D,
-  diff: string,
-  ds: number,
-  pw: number,
-): void {
-  let dc = GOLD_LIGHT;
-  for (const [name, color] of DIFF_COLOR) {
-    if (diff.includes(name)) {
-      dc = color;
-      break;
-    }
-  }
-  const meter = /^(.*?)\s*(\d+)$/.exec(diff);
-  c.textAlign = 'left';
-  c.font = squareFont(700, 13 * ds);
-  if (meter) {
-    c.fillStyle = dc;
-    c.fillText(meter[1], 16 * ds, 16 * ds, pw * 0.5);
-    c.fillStyle = '#f2f2f4';
-    c.fillText(
-      meter[2],
-      16 * ds + Math.min(pw * 0.5, c.measureText(meter[1]).width) + 6 * ds,
-      16 * ds,
-    );
-  } else {
-    c.fillStyle = dc;
-    c.fillText(diff, 16 * ds, 16 * ds, pw * 0.62);
-  }
-}
-
-/** Grade ("AA") drawn left-aligned at (`pad`, 16.5ds); the GPU field bakes one
- *  sprite per grade value and right-aligns it, so a grade change swaps sprites
- *  instead of re-baking the whole score frame. */
-export function paintGrade(
-  c: CanvasRenderingContext2D,
-  grade: string,
-  ds: number,
-  pad: number,
-): void {
-  c.textAlign = 'left';
-  c.fillStyle = '#ffd83c';
-  c.font = roundFont(14 * ds);
-  c.fillText(grade, pad, 16.5 * ds);
 }
 
 /** Paint the judgment lettering with baked glow/rims at a left baseline. */

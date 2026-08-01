@@ -22,9 +22,6 @@ import {
   ARROW_PENCIL,
   COMBO_PLAIN,
   COMBO_TINT,
-  GOLD_DARK,
-  GOLD_LIGHT,
-  GOLD_MID,
   HOLD_GREEN,
   HOLD_GREY,
   HOLD_PURPLE,
@@ -32,22 +29,18 @@ import {
   JUDGMENT_LIFE,
   NOTE_GREEN,
   NOTE_GREY,
-  PANEL_BG,
   QUANT_BAND,
   QUANT_TUBE,
   TUBE_GREY,
   paintBoom,
-  paintDifficulty,
   paintGaugeChrome,
   paintGaugeDividers,
-  paintGrade,
   paintHoldTile,
   paintJudgment,
   paintMineArcs,
   paintMineOrb,
   paintNote,
   paintReceptor,
-  paintSongPanel,
   traceSegments,
   tracePoly,
   type HoldSkin,
@@ -56,7 +49,6 @@ import { measureWidth, roundFont } from './text';
 import type { AtlasRect } from './atlas';
 import type { Tint } from './glyphs';
 import { cropUV, type QuadOpts } from './quads';
-import type { ColorFn } from './shapes';
 import type { GpuSkin, SkinCtx } from './skin';
 
 /** Beat pulse weight (0..1): 1 exactly ON the beat, easing to 0 at the half-beat
@@ -92,30 +84,8 @@ function parseColor(s: string): [number, number, number, number] {
   return c;
 }
 
-/** Money-score digit tints (glyphs bake white; these are the exact A3 colors). */
-const SCORE_BRIGHT: Tint = parseColor('#f6f6f8');
-const SCORE_DIM: Tint = parseColor('#494a4f');
-
-/** Copy a precomputed rgba tuple into a ColorFn's out param (no allocation). */
-function writeCol(out: [number, number, number, number], c: Tint): void {
-  out[0] = c[0];
-  out[1] = c[1];
-  out[2] = c[2];
-  out[3] = c[3];
-}
-
-// Panel-geometry colors (ShapeBatch fills/strokes) — parsed once, not per vertex.
-const PANEL_BG_RGBA = parseColor(PANEL_BG);
-const GOLD_MID_RGBA = parseColor(GOLD_MID);
-const PANEL_BG_COL: ColorFn = (_x, _y, o) => writeCol(o, PANEL_BG_RGBA);
-const GOLD_MID_COL: ColorFn = (_x, _y, o) => writeCol(o, GOLD_MID_RGBA);
-const GOLD_L = parseColor(GOLD_LIGHT);
-const GOLD_D = parseColor(GOLD_DARK);
-
 /** A3 step zone, design px (matches DdrA3Theme / the former field constant). */
 const RECEPTOR_OFFSET = 118;
-
-type WhiteRect = NonNullable<ReturnType<SkinCtx['white']>>;
 
 export class DdrA3GpuSkin implements GpuSkin {
   readonly receptorOffset = RECEPTOR_OFFSET;
@@ -133,10 +103,6 @@ export class DdrA3GpuSkin implements GpuSkin {
   private readonly addOpt: QuadOpts = { add: true };
   // Quant core color (band[1]) parsed to a float tint once, for the held glow.
   private readonly glowTint = new Map<NoteType, Tint>();
-  /** Per-view eased money score (0..1) + last timestamp, so the panel counts
-   *  up smoothly toward the real score instead of snapping on each hit. */
-  private readonly scoreShown = new Map<string, { v: number; t: number }>();
-
   fieldLeft(bare: boolean, width: number, numTracks: number, colW: number, ds: number): number {
     return bare
       ? (width - numTracks * colW) / 2
@@ -237,21 +203,6 @@ export class DdrA3GpuSkin implements GpuSkin {
       },
       variant: 'q' + quant,
     };
-  }
-
-  /** Bake (once) the gold grade sprite ("AAA".."D") + its layout metrics.
-   *  Shared by the panel and prewarm (which bakes every grade so a grade-up
-   *  mid-song never rasterizes). */
-  private gradeSprite(ctx: SkinCtx, grade: string) {
-    const ds = ctx.ds;
-    const rowH = 23 * ds;
-    const gpad = 4 * ds;
-    const gw = measureWidth(roundFont(14 * ds), grade) ?? 20 * ds;
-    const gsw = gw + 2 * gpad;
-    const rect = ctx.atlas.sprite(`grade:${grade}:${Math.round(ds * 10)}`, gsw, rowH, (c) =>
-      paintGrade(c, grade, ds, gpad),
-    );
-    return { rect, gw, gsw };
   }
 
   // --- Art hooks --------------------------------------------------------------
@@ -622,7 +573,7 @@ export class DdrA3GpuSkin implements GpuSkin {
   hudOverlay(
     ctx: SkinCtx,
     judge: Judge,
-    progress: number,
+    _progress: number,
     fb: Feedback,
     now: number,
     beatPulse: number,
@@ -635,8 +586,6 @@ export class DdrA3GpuSkin implements GpuSkin {
     const white = ctx.white();
     if (white) {
       this.pushGauge(ctx, judge, now, beatPulse);
-      this.pushSongPanel(ctx, progress, white);
-      this.pushScorePanel(ctx, judge, now);
     }
   }
 
@@ -733,11 +682,14 @@ export class DdrA3GpuSkin implements GpuSkin {
     const { ds } = ctx;
     const b = ctx.batch;
     const fieldW = ctx.numTracks * ctx.colW;
-    const cx = ctx.fieldLeft + fieldW / 2;
-    const gw = fieldW + 1.6 * ctx.colW;
+    // Field-aligned and lowered into the eyeline: the gauge used to sit 160px
+    // above the receptors at a width nothing else shared. The DOM HUD's
+    // `LIFE nn%` caption sits directly under gy + gh — keep them in sync
+    // (PlayHud positions it at ds*67 + 6k).
+    const gw = fieldW;
     const gh = 26 * ds;
-    const gx = Math.max(6 * ds, cx - gw / 2);
-    const gy = 12 * ds;
+    const gx = ctx.fieldLeft;
+    const gy = 41 * ds;
     const capL = 24 * ds;
     const capR = 16 * ds;
     const tx = gx + capL;
@@ -846,136 +798,6 @@ export class DdrA3GpuSkin implements GpuSkin {
     if (div) b.push(tx + fillW / 2, gy + gh / 2, fillW, gh, div);
   }
 
-  private pushSongPanel(ctx: SkinCtx, progress: number, white: WhiteRect): void {
-    const { ds, width, height } = ctx;
-    const pw = Math.min(0.36 * width, 430 * ds);
-    const ph = 52 * ds;
-    const px = (width - pw) / 2;
-    const py = height - ph - 8 * ds;
-    const meta = ctx.meta;
-    // Black panel band as geometry; title/artist text bakes once (constant).
-    ctx.shapes.poly(
-      [
-        [px, py],
-        [px + pw, py],
-        [px + pw, py + ph],
-        [px, py + ph],
-      ],
-      PANEL_BG_COL,
-    );
-    const spr = ctx.atlas.slot(
-      `song:${ctx.viewKey}`,
-      `${meta.title}|${meta.subtitle}|${Math.round(pw)}`,
-      pw,
-      ph,
-      (c) => paintSongPanel(c, pw, ph, ds, meta.title, meta.subtitle, false),
-    );
-    if (spr) ctx.hud.push(px + pw / 2, py + ph / 2, pw, ph, spr);
-    const prog = Math.max(0, Math.min(1, progress));
-    const barY = py + ph - 1.25 * ds;
-    ctx.hud.push(px + pw / 2, barY, pw, 2.5 * ds, white, 1, 1, 1, 0.12);
-    if (prog > 0)
-      ctx.hud.push(
-        px + (pw * prog) / 2,
-        barY,
-        pw * prog,
-        2.5 * ds,
-        white,
-        216 / 255,
-        182 / 255,
-        42 / 255,
-        0.9,
-      );
-  }
-
-  private pushScorePanel(ctx: SkinCtx, judge: Judge, now: number): void {
-    const { ds, height } = ctx;
-    const sh = ctx.shapes;
-    const pw = 280 * ds;
-    const px = 16 * ds;
-    const rowH = 23 * ds;
-    const scoreH = 38 * ds;
-    const py = height - rowH - scoreH - 12 * ds;
-    const diff = ctx.meta.difficulty.toUpperCase();
-    const grade = judge.grade;
-    // Panel-local (X,Y) → screen (px+X, py+Y).
-    const P = (x: number, y: number): [number, number] => [px + x, py + y];
-
-    // Row 1: angled black plate + gold hairline.
-    const row1: Array<[number, number]> = [P(14 * ds, 0), P(pw, 0), P(pw, rowH), P(4 * ds, rowH)];
-    sh.poly(row1, PANEL_BG_COL);
-    sh.outline(row1, 1.2 * ds, GOLD_MID_COL);
-    // Gold slash divider.
-    sh.edge(px + pw * 0.68, py + 3 * ds, px + pw * 0.64, py + rowH - 3 * ds, 2 * ds, GOLD_MID_COL);
-
-    // Row 2: hexagonal money bar + vertical gold-gradient trim.
-    const sy = rowH + 2 * ds;
-    const cut = 12 * ds;
-    const hex: Array<[number, number]> = [
-      P(cut, sy),
-      P(pw - cut, sy),
-      P(pw, sy + scoreH / 2),
-      P(pw - cut, sy + scoreH),
-      P(cut, sy + scoreH),
-      P(0, sy + scoreH / 2),
-    ];
-    sh.poly(hex, PANEL_BG_COL);
-    const top = py + sy;
-    const trim: ColorFn = (_x, y, o) => {
-      const t = Math.max(0, Math.min(1, (y - top) / scoreH));
-      o[0] = GOLD_L[0] + (GOLD_D[0] - GOLD_L[0]) * t;
-      o[1] = GOLD_L[1] + (GOLD_D[1] - GOLD_L[1]) * t;
-      o[2] = GOLD_L[2] + (GOLD_D[2] - GOLD_L[2]) * t;
-      o[3] = 1;
-    };
-    sh.outline(hex, 1.6 * ds, trim);
-
-    // Difficulty label (bake-once, constant per session) → HUD text batch.
-    const diffSpr = ctx.atlas.sprite(`diff:${diff}:${Math.round(pw)}`, pw, rowH, (c) =>
-      paintDifficulty(c, diff, ds, pw),
-    );
-    if (diffSpr) ctx.hud.push(px + pw / 2, py + rowH / 2, pw, rowH, diffSpr);
-    // Grade (one sprite per grade value, right-aligned → no frame re-bake).
-    const g = this.gradeSprite(ctx, grade);
-    if (g.rect) ctx.hud.push(px + pw - 10 * ds - g.gw / 2, py + rowH / 2, g.gsw, rowH, g.rect);
-
-    // Money digits, centered in the hex bar, leading zeros dimmed (glyph quads).
-    // Ease the shown value toward the real score so it rolls up instead of
-    // snapping on each hit (frame-rate independent; per view).
-    const target = Math.max(0, Math.min(1, judge.percentDancePoints));
-    const prev = this.scoreShown.get(ctx.viewKey);
-    let shown = target;
-    if (prev) {
-      const dt = Math.max(0, now - prev.t);
-      shown = prev.v + (target - prev.v) * (1 - Math.exp(-dt / 0.09));
-      if (Math.abs(target - shown) < 1e-6) shown = target;
-    }
-    this.scoreShown.set(ctx.viewKey, { v: shown, t: now });
-    const digits = String(Math.max(0, Math.min(9999999, Math.round(shown * 1000000)))).padStart(
-      7,
-      '0',
-    );
-    const firstSig = digits.search(/[1-9]/);
-    let text = '';
-    const dim: boolean[] = [];
-    for (let i = 0; i < 7; i++) {
-      const isDim = firstSig === -1 || i < firstSig;
-      if (i === 1 || i === 4) {
-        text += ',';
-        dim.push(firstSig === -1 || i - 1 < firstSig);
-      }
-      text += digits[i];
-      dim.push(isDim);
-    }
-    const scoreOpts = { px: 25 * ds };
-    const total = ctx.glyphs.measure('score', scoreOpts, text);
-    const sx = px + (pw - total) / 2;
-    const dy = py + sy + scoreH / 2 + 8 * ds;
-    ctx.glyphs.drawNumber(ctx.hud, 'score', text, sx, dy, scoreOpts, 'left', (i) =>
-      dim[i] ? SCORE_DIM : SCORE_BRIGHT,
-    );
-  }
-
   // --- Prewarm / cache lifecycle ---------------------------------------------
 
   prewarm(ctx: SkinCtx): void {
@@ -1029,15 +851,10 @@ export class DdrA3GpuSkin implements GpuSkin {
         );
       }
 
-      // Every grade sprite so a grade-up (D→C→…→AAA) never bakes mid-song.
-      // (Grade set mirrors gameplay/scoring.ts GRADE_TIERS.)
-      for (const grade of ['AAA', 'AA', 'A', 'B', 'C', 'D']) this.gradeSprite(ctx, grade);
-
-      // All digit/comma glyphs (both styles) so a climbing combo/score never
-      // bakes a first-seen digit mid-song. Combo bakes at its reference.
+      // All digit/comma glyphs so a climbing combo never bakes a first-seen
+      // digit mid-song. Combo bakes at its reference.
       const chars = '0123456789,';
       ctx.glyphs.measure('combo', { px: 1, bakePx: Math.round(ctx.colW * 0.9) }, chars);
-      ctx.glyphs.measure('score', { px: 25 * ds }, chars);
     } catch {
       // Prewarm is best-effort; a failure must not break real rendering.
     }
@@ -1049,7 +866,7 @@ export class DdrA3GpuSkin implements GpuSkin {
   private prewarmGauge(ctx: SkinCtx): void {
     const { ds } = ctx;
     const fieldW = ctx.numTracks * ctx.colW;
-    const gw = fieldW + 1.6 * ctx.colW;
+    const gw = fieldW; // mirrors pushGauge (field-aligned)
     const gh = 26 * ds;
     const capL = 24 * ds;
     const capR = 16 * ds;

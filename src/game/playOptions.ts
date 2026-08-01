@@ -46,6 +46,11 @@ export type BgMode = (typeof BG_MODES)[number];
 export const NOTE_SKINS = ['arcade', 'itg'] as const;
 export type NoteSkin = (typeof NOTE_SKINS)[number];
 
+/** In-play DOM HUD density: 'full' adds the chart timeline + judgment tally,
+ *  'lean' keeps life, timing, score and time left. */
+export const HUD_DENSITIES = ['full', 'lean'] as const;
+export type HudDensity = (typeof HUD_DENSITIES)[number];
+
 /**
  * Options that shape a play session. `Settings` extends this (adding the
  * persistence-only fields `bindings` and `renderer`), and `SessionConfig` in
@@ -82,6 +87,8 @@ export interface PlayOptions {
   bgMode: BgMode;
   /** Note field renderer style. */
   noteSkin: NoteSkin;
+  /** How much of the in-play HUD to show beside the field. */
+  hudDensity: HudDensity;
 }
 
 export const DEFAULT_PLAY_OPTIONS: PlayOptions = {
@@ -94,4 +101,5 @@ export const DEFAULT_PLAY_OPTIONS: PlayOptions = {
   reverse: false,
   bgMode: 'dim',
   noteSkin: 'arcade',
+  hudDensity: 'full',
 };
