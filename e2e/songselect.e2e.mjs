@@ -4,13 +4,13 @@
  * Starts its own Vite dev server on a spare port and always tears it down.
  *
  * What it pins that unit tests cannot:
- * - the full user flow: boot → pack grid → song list → PLAYER OPTIONS →
- *   gameplay (audible clock advancing) → hold-to-quit → back to the list;
+ * - the full user flow: boot → song list → PLAY MODS → gameplay (audible clock
+ *   advancing) → hold-to-quit → back to the list;
  * - the library store surviving screen unmounts (gameplay round-trips);
  * - blob-URL hygiene end to end: URL.createObjectURL/revokeObjectURL are
  *   wrapped in-page, a pack is loaded through the real drop path (banners +
  *   pack art actually minted), re-dropped (stale pack art must be revoked and
- *   replaced), and every rendered blob: image must still decode at the end.
+ *   replaced), and every blob URL still rendered as art must still decode.
  *
  * Run with `npm run e2e`. Requires Google Chrome on the machine.
  */
@@ -39,7 +39,7 @@ async function dropPack(page) {
   const mintedBefore = await page.evaluate(() => window.__urlLog.minted.length);
   await page.evaluate(
     ({ sscOne, sscTwo }) => {
-      // 1×1 transparent PNG — a decodable image so <img> naturalWidth is real.
+      // 1×1 transparent PNG — a decodable image so blob art actually decodes.
       const PNG_B64 =
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==';
       const png = Uint8Array.from(atob(PNG_B64), (c) => c.charCodeAt(0));
@@ -96,33 +96,46 @@ async function dropPack(page) {
   );
 }
 
-/** The pack-grid card img for a pack name (blob: src), or null. */
-const packCardArt = (page, pack) =>
+/** The rail's pack-row art for a pack name. The redesigned rail paints art as
+ *  a CSS background-image (no <img>), so read the computed style. */
+const packRailArt = (page, pack) =>
   page.evaluate((name) => {
-    for (const img of document.querySelectorAll('img')) {
-      if (!img.src.startsWith('blob:')) continue;
-      const card = img.closest('div[class]')?.parentElement;
-      if (card && card.textContent.includes(name)) {
-        return { src: img.src, decoded: img.complete && img.naturalWidth > 0 };
+    for (const btn of document.querySelectorAll('button')) {
+      if (!btn.textContent.includes(name)) continue;
+      for (const el of btn.querySelectorAll('span')) {
+        const m = getComputedStyle(el).backgroundImage.match(/url\("?(blob:[^")]+)"?\)/);
+        if (m) return m[1];
       }
     }
     return null;
   }, pack);
 
+/** Whether a blob URL still decodes as an image (a revoked URL errors). */
+const urlDecodes = (page, url) =>
+  page.evaluate(
+    (u) =>
+      new Promise((res) => {
+        const img = new Image();
+        img.onload = () => res(img.naturalWidth > 0);
+        img.onerror = () => res(false);
+        img.src = u;
+      }),
+    url,
+  );
+
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
-/** Wait until the pack's blob-URL card art has actually decoded (and, if
- *  `notSrc` is given, differs from a prior src), then return it. Decode is async,
- *  so checking too early — especially on slow CI — spuriously sees naturalWidth 0. */
+/** Wait until the rail shows blob art for the pack (and, if `notSrc` is given,
+ *  a DIFFERENT url than before), then return the url. */
 async function waitPackArt(page, pack, notSrc = null, timeout = 12_000) {
   await page
     .waitForFunction(
       ({ name, old }) => {
-        for (const img of document.querySelectorAll('img')) {
-          if (!img.src.startsWith('blob:')) continue;
-          const card = img.closest('div[class]')?.parentElement;
-          if (card && card.textContent.includes(name)) {
-            return img.complete && img.naturalWidth > 0 && (!old || img.src !== old);
+        for (const btn of document.querySelectorAll('button')) {
+          if (!btn.textContent.includes(name)) continue;
+          for (const el of btn.querySelectorAll('span')) {
+            const m = getComputedStyle(el).backgroundImage.match(/url\("?(blob:[^")]+)"?\)/);
+            if (m) return !old || m[1] !== old;
           }
         }
         return false;
@@ -131,11 +144,10 @@ async function waitPackArt(page, pack, notSrc = null, timeout = 12_000) {
       { timeout },
     )
     .catch(() => {});
-  return packCardArt(page, pack);
+  return packRailArt(page, pack);
 }
 
-/** Wait until the on-screen text contains `needle` (substring). Returns as soon
- *  as it appears — no fixed sleep. */
+/** Wait until the on-screen text contains `needle` (substring). */
 const waitText = (page, needle, timeout = 20_000) =>
   page.waitForFunction((n) => document.body.innerText.includes(n), needle, { timeout });
 
@@ -148,8 +160,10 @@ const waitChanged = (page, prev, timeout = 20_000) =>
 async function backToSongSelect(page) {
   for (let i = 0; i < 12; i++) {
     const txt = await bodyText(page);
-    if (txt.includes('STEPZONE')) return true;
-    await page.keyboard.press(/RESULTS|GRADE|CLEARED|FAILED/i.test(txt) ? 'Enter' : 'Escape');
+    if (txt.includes('ALL SONGS') || txt.includes('LIBRARY')) return true;
+    await page.keyboard.press(
+      /WHERE THE POINTS WENT|RESULTS|GRADE|CLEARED|FAILED/i.test(txt) ? 'Enter' : 'Escape',
+    );
     // Wait for the screen to react (text change) rather than a fixed delay.
     await waitChanged(page, txt, 8_000);
   }
@@ -158,11 +172,16 @@ async function backToSongSelect(page) {
 
 // --- Suite ----------------------------------------------------------------------
 
-const vite = await createServer({ root: ROOT, server: { port: 5199, strictPort: false } });
+const vite = await createServer({
+  root: ROOT,
+  // Explicit IPv4 loopback: on some machines vite binds IPv6-only while the
+  // browser resolves localhost to 127.0.0.1 first — pin both to one family.
+  server: { port: 5199, strictPort: false, host: '127.0.0.1' },
+});
 await vite.listen();
 let browser = null;
 try {
-  const base = vite.resolvedUrls?.local[0] ?? 'http://localhost:5199/';
+  const base = vite.resolvedUrls?.local[0] ?? 'http://127.0.0.1:5199/';
   console.log(`vite at ${base}`);
   browser = await chromium.launch({
     channel: 'chrome',
@@ -201,13 +220,13 @@ try {
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e.message)));
 
-  // 1. Boot: starter library on the pack grid.
-  await page.goto(base, { waitUntil: 'load' });
+  // 1. Boot: the 3-pane song select with the starter library.
+  await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForFunction(() => document.body.innerText.includes('ALL SONGS'), null, {
     timeout: 30_000,
   });
   const boot = await bodyText(page);
-  step('boots to the pack grid with the starter library', boot.includes('Stepzone Starter'));
+  step('boots to song select with the starter library', boot.includes('Stepzone Starter'));
 
   // Gameplay needs a WebGPU adapter (no canvas fallback); probe once.
   const hasGpu = await page.evaluate(() =>
@@ -221,14 +240,11 @@ try {
 
   // 2. Full gameplay round trip on a starter song (audible clock must run).
   if (hasGpu) {
-    await page.keyboard.press('ArrowRight'); // ALL SONGS → Stepzone Starter card
-    await page.keyboard.press('Enter'); // open the pack
-    await waitText(page, '▲▼ SONG'); // wait for the song list, not a fixed delay
-    await page.keyboard.press('Enter'); // highlighted song → PLAYER OPTIONS
-    await page.waitForFunction(() => /PLAYER OPTIONS|SPEED/i.test(document.body.innerText), null, {
+    await page.keyboard.press('Enter'); // highlighted song → PLAY MODS
+    await page.waitForFunction(() => /SCROLL SPEED/i.test(document.body.innerText), null, {
       timeout: 30_000,
     });
-    step('reaches PLAYER OPTIONS', true);
+    step('reaches PLAY MODS', true);
     await page.keyboard.press('Enter'); // START
     await page.waitForFunction(() => !!window.__nfSession, null, { timeout: 30_000 });
     // Dev StrictMode can re-create the session shortly after mount; assert the
@@ -259,37 +275,34 @@ try {
 
   // 3. Load a pack through the real drop path (mints banners + pack art).
   await dropPack(page);
-  // Back out to the pack grid if a pack is open (SELECT menu → BACK).
-  if (!(await bodyText(page)).includes('ALL SONGS')) {
-    const t = await bodyText(page);
-    await page.keyboard.press('Escape'); // open the SELECT menu (BACK ‹ PACKS)
-    await waitChanged(page, t, 8_000);
-    await page.keyboard.press('Enter'); // activate BACK → pack grid
-    await waitText(page, 'ALL SONGS');
-  }
-  step('dropped pack appears in the grid', (await bodyText(page)).includes('E2E Pack'));
+  step('dropped pack appears in the rail', (await bodyText(page)).includes('E2E Pack'));
   const minted1 = await page.evaluate(() => window.__urlLog.minted.length);
   step('drop minted banner/pack-art blob URLs', minted1 >= 3, `${minted1} minted`);
-  const art1 = await waitPackArt(page, 'E2E Pack'); // wait for the art to decode
-  step('pack card art renders from a blob URL', !!art1 && art1.decoded, art1?.src ?? 'no art img');
+  const art1 = await waitPackArt(page, 'E2E Pack'); // wait for the rail art
+  step(
+    'pack rail art renders from a blob URL',
+    !!art1 && (await urlDecodes(page, art1)),
+    art1 ?? 'no rail art',
+  );
 
   // 4. Re-drop the same pack: fresh scan replaces pack art, stale URL revoked.
   await dropPack(page);
-  // Wait for the card to re-render with a NEW blob src that has decoded.
-  const art2 = await waitPackArt(page, 'E2E Pack', art1?.src ?? null);
+  // Wait for the rail row to re-render with a NEW blob url.
+  const art2 = await waitPackArt(page, 'E2E Pack', art1 ?? null);
   const revoked = await page.evaluate(() => window.__urlLog.revoked);
-  step('re-drop replaces the pack art URL', !!art2 && !!art1 && art2.src !== art1.src);
-  step('stale pack art URL was revoked', !!art1 && revoked.includes(art1.src));
-  step('replacement art still decodes', !!art2 && art2.decoded);
+  step('re-drop replaces the pack art URL', !!art2 && !!art1 && art2 !== art1);
+  step('stale pack art URL was revoked', !!art1 && revoked.includes(art1));
+  step('replacement art still decodes', !!art2 && (await urlDecodes(page, art2)));
 
   // 5. Play a dropped song end to end (real parse → charts → audio → clock).
   if (hasGpu) {
-    await page.keyboard.press('ArrowRight'); // ALL SONGS → E2E Pack card
-    await page.keyboard.press('Enter');
-    await waitText(page, '▲▼ SONG'); // wait for the song list
+    await page.keyboard.press('Escape'); // list pane → collection rail
+    await page.keyboard.press('ArrowDown'); // All songs → E2E Pack (first pack)
+    await page.keyboard.press('Enter'); // show the pack's songs (back to list)
+    await waitText(page, 'Alpha Song');
     await page.keyboard.press('ArrowRight'); // the E2E charts are HARD-only; move the diff cursor
-    await page.keyboard.press('Enter'); // Alpha Song → PLAYER OPTIONS
-    await page.waitForFunction(() => /PLAYER OPTIONS|SPEED/i.test(document.body.innerText), null, {
+    await page.keyboard.press('Enter'); // Alpha Song → PLAY MODS
+    await page.waitForFunction(() => /SCROLL SPEED/i.test(document.body.innerText), null, {
       timeout: 30_000,
     });
     await page.keyboard.press('Enter'); // START
@@ -300,19 +313,25 @@ try {
     skip('gameplay on a dropped song', 'no WebGPU adapter in this environment');
   }
 
-  // 6. Hygiene: every revoked URL was minted; every rendered blob image decodes.
+  // 6. Hygiene: every revoked URL was minted; every blob URL still painted as
+  //    art (CSS background-image) must still decode.
   const log = await page.evaluate(() => window.__urlLog);
   step(
     'every revoked URL was one we minted',
     log.revoked.every((u) => log.minted.includes(u)),
   );
-  const broken = await page.evaluate(() =>
-    [...document.querySelectorAll('img')]
-      .filter((i) => i.src.startsWith('blob:') && i.complete && i.naturalWidth === 0)
-      .map((i) => i.src),
-  );
+  const painted = await page.evaluate(() => {
+    const urls = new Set();
+    for (const el of document.querySelectorAll('*')) {
+      const m = getComputedStyle(el).backgroundImage.match(/url\("?(blob:[^")]+)"?\)/);
+      if (m) urls.add(m[1]);
+    }
+    return [...urls];
+  });
+  const broken = [];
+  for (const u of painted) if (!(await urlDecodes(page, u))) broken.push(u);
   step(
-    'no rendered blob image is broken (revoked/leaked src)',
+    'no painted blob art is broken (revoked/leaked src)',
     broken.length === 0,
     broken.join(', '),
   );
