@@ -16,6 +16,37 @@
  */
 
 import { SyncMap } from './syncMap';
+import { stretchChannels } from './timeStretch';
+
+/** Run the WSOLA stretch off-thread; falls back to inline math if the worker
+ *  can't start (it's pure — only slower on the main thread). */
+function stretchInWorker(
+  channels: Float32Array[],
+  sampleRate: number,
+  rate: number,
+): Promise<Float32Array[]> {
+  return new Promise((resolve, reject) => {
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./stretchWorker.ts', import.meta.url), { type: 'module' });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    worker.onmessage = (e: MessageEvent) => {
+      worker.terminate();
+      resolve((e.data as { channels: Float32Array[] }).channels);
+    };
+    worker.onerror = (e) => {
+      worker.terminate();
+      reject(new Error(e.message || 'stretch worker failed'));
+    };
+    worker.postMessage(
+      { channels, sampleRate, rate },
+      channels.map((c) => c.buffer),
+    );
+  });
+}
 
 /**
  * Re-anchor a SyncMap from the audio hardware — THE sync primitive shared by
@@ -52,6 +83,9 @@ export class WebAudioClock {
   private buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
   private disposed = false;
+  /** The tempo factor already baked into `buffer` by the WSOLA stretch — 1 for
+   *  unstretched buffers (metronome, 1.00× play), which keep the resample path. */
+  private stretchRate = 1;
 
   constructor() {
     // 'interactive' minimizes output buffer size (lowest latency the device allows).
@@ -64,18 +98,47 @@ export class WebAudioClock {
   }
 
   /** Decode an encoded audio file (ArrayBuffer) into a playable buffer.
-   *  Decodes a copy so the caller's ArrayBuffer stays usable (replays). */
+   *  Decodes a copy so the caller's ArrayBuffer stays usable (replays).
+   *
+   *  When the sync's playbackRate is already set to a music rate ≠ 1, the
+   *  buffer is time-stretched (WSOLA, pitch-preserving) here — start() then
+   *  plays it at playbackRate 1 instead of resampling, so MUSIC RATE changes
+   *  tempo without the chipmunk/slow-mo pitch shift. Set the rate BEFORE load. */
   async load(encoded: ArrayBuffer): Promise<void> {
-    this.buffer = await this.ctx.decodeAudioData(encoded.slice(0));
+    const decoded = await this.ctx.decodeAudioData(encoded.slice(0));
+    const rate = this.sync.playbackRate;
+    if (rate === 1) {
+      this.buffer = decoded;
+      this.stretchRate = 1;
+      return;
+    }
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < decoded.numberOfChannels; c++)
+      channels.push(decoded.getChannelData(c).slice()); // copies — transferable
+    const stretched = await stretchInWorker(channels, decoded.sampleRate, rate).catch(() =>
+      // Worker unavailable (no bundler URL, CSP) — same math, main thread.
+      stretchChannels(channels, decoded.sampleRate, rate),
+    );
+    const buf = this.ctx.createBuffer(
+      decoded.numberOfChannels,
+      stretched[0].length,
+      decoded.sampleRate,
+    );
+    stretched.forEach((c, i) => buf.copyToChannel(c as Float32Array<ArrayBuffer>, i));
+    this.buffer = buf;
+    this.stretchRate = rate;
   }
 
   /** Use a pre-made buffer (e.g. a synthesized click track). */
   setBuffer(buffer: AudioBuffer): void {
     this.buffer = buffer;
+    this.stretchRate = 1;
   }
 
+  /** Duration on the SONG axis (chart seconds at 1×) — a stretched buffer's
+   *  wall duration times the rate baked into it. */
   get durationSeconds(): number {
-    return this.buffer?.duration ?? 0;
+    return (this.buffer?.duration ?? 0) * this.stretchRate;
   }
 
   /**
@@ -88,11 +151,16 @@ export class WebAudioClock {
 
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
-    src.playbackRate.value = this.sync.playbackRate;
+    // A stretched buffer already runs at the music rate — play it 1:1 (pitch
+    // preserved). Unstretched buffers (metronome) keep the resample path; both
+    // cases reduce to the same song↔context mapping below.
+    src.playbackRate.value = this.sync.playbackRate / this.stretchRate;
     src.connect(this.ctx.destination);
 
     const when = this.ctx.currentTime + leadSeconds;
-    src.start(when, offsetSeconds);
+    // `offsetSeconds` is on the song axis; the stretched buffer's sample at
+    // song-second s lives at buffer-second s/stretchRate.
+    src.start(when, offsetSeconds / this.stretchRate);
 
     // song-second 0 == context time (when - offset/rate).
     this.sync.startContextTime = when - offsetSeconds / this.sync.playbackRate;
