@@ -22,7 +22,7 @@ import type { Steps } from '../song/steps';
 import { bestChartsPerSlot, DIFF_SLOT_COLORS, DIFF_SLOT_NAMES } from './difficultyUi';
 import { useLeaderboard } from './useLeaderboard';
 import { useSettings } from './SettingsContext';
-import type { SongVM } from './songSelectModel';
+import { initials, type SongVM } from './songSelectModel';
 import { AC, artGradient, CLEAR_COLOR, CLEAR_LABEL, clearState, FAV_CLR } from './songSelectUi';
 
 const SHORT = ['BEG', 'EASY', 'MED', 'HARD', 'EXPERT'] as const;
@@ -159,6 +159,16 @@ export function SongInspector({
               : { background: artGradient(vm?.title ?? '') }
           }
         />
+        {/* Banner-less songs get an initials monogram over the gradient (the
+            1b mock's "DH" block), so the header still reads as THIS song.
+            Centered in the band ABOVE the title/scrim so the two never collide. */}
+        {!bannerUrl && vm && (
+          <div className="absolute inset-x-0 top-[6px] bottom-[56px] flex items-center justify-center">
+            <span className="font-display text-[28px] font-bold tracking-[0.1em] text-white/55">
+              {initials(vm.title)}
+            </span>
+          </div>
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-[#0e0f12] via-[#0e0f12]/40 to-transparent" />
         <div className="absolute right-[20px] bottom-[12px] left-[20px]">
           <div className="flex items-center gap-2">

@@ -22,7 +22,7 @@ import {
   type Collection,
   type CollectionCounts,
 } from './songSelectUi';
-import type { SongVM } from './songSelectModel';
+import { initials, type SongVM } from './songSelectModel';
 
 export interface RailItem {
   collection: Collection;
@@ -101,14 +101,23 @@ export function CollectionRail({
           </span>
         ) : (
           <span
-            className="h-[20px] w-[34px] flex-none overflow-hidden"
+            className="flex h-[20px] w-[34px] flex-none items-center justify-center overflow-hidden"
             style={{
               background: art ? undefined : artGradient(item.label),
               backgroundImage: art ? `url(${art})` : undefined,
               backgroundSize: 'cover',
               backgroundPosition: 'center',
             }}
-          />
+          >
+            {/* Art-less packs get an initials monogram over the deterministic
+                gradient (the 1b mock's "DH" block) — a swatch you can actually
+                tell apart, instead of an anonymous smear of colour. */}
+            {!art && (
+              <span className="font-display text-[9px] font-bold tracking-[0.06em] text-white/70">
+                {initials(item.label)}
+              </span>
+            )}
+          </span>
         )}
         <span
           className="min-w-0 flex-1 truncate text-[14px]"
