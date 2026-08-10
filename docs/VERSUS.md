@@ -11,7 +11,7 @@ exchange on the existing Vercel deployment.
 ```
 host                        /api/versus (HTTP)                     joiners (N)
 ────                        ──────────────────                     ───────────
-create room  ──POST create──▶  room row (code, heartbeat)
+create room  ──POST create──▶  room row (code, host-token hash, heartbeat)
 show arrow code                     │
 poll ?role=host ◀──────────────  join rows   ◀──POST join── joiner offer SDP
 POST answer     ──────────────▶  (offer/answer  ◀─poll answer── each joiner
@@ -25,7 +25,8 @@ POST answer     ──────────────▶  (offer/answer  �
   request/response HTTP — works on serverless, no WebSocket. V2 is
   _joiner-initiated_: the room row is just "this code has a live host"
   (Postgres in prod via `pgSignalStore.ts`, memory in dev); each joiner posts
-  an offer row and the host, polling, answers it. The host's poll doubles as
+  an offer row and the host, polling with a per-room bearer secret, answers it.
+  Only the secret hash is stored server-side. The host's poll doubles as
   a heartbeat — a room is joinable while its host keeps polling (parties can
   last hours; abandoned rooms vanish in a minute). ICE is non-trickle: each
   side ships ONE complete SDP.
@@ -95,7 +96,9 @@ plays still submit to the async leaderboard like any play.
   host should own what they share.
 - Signaling on prod requires `DATABASE_URL` (the same Neon database as the
   leaderboards); without it /api/versus reports unavailable.
-- Trust: friends racing friends. Results ride the channel unverified (the
+- Trust: friends racing friends. The short pad-operable room code is an invite,
+  not a host credential; a separate 256-bit secret protects host poll/answer
+  operations. Results ride the channel unverified (the
   leaderboard's server-side checks still apply to ranked submissions).
 
 ## Tests

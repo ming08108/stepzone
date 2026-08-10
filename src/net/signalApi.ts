@@ -12,15 +12,30 @@
  *   POST {t:'join', code, joinerName, offer} -> { joinId } | 404 not_found
  *   POST {t:'answer', code, joinId, answer}  -> { ok: true } | 404 not_found
  *   GET  ?code=XXXXXX             (lookup)     -> { hostName } | 404
- *   GET  ?code=XXXXXX&role=host   (host poll)  -> { joins: [...] } (heartbeats) | 404
+ *   GET  ?code=XXXXXX&role=host   (host poll, bearer auth) -> { joins: [...] } | 404
  *   GET  ?code=XXXXXX&joinId=YYY  (join poll)  -> { answer } | 404
  */
 
 import { error, json } from './httpResponse';
 import { isRoomCode, parseSignalRequest, randomRoomCode } from './versus';
 import type { SignalStore } from './signalStore';
+import { bearerToken, randomToken, sha256Hex } from './crypto';
 
 const MAX_BODY_BYTES = 128 * 1024;
+
+async function authenticateHost(
+  store: SignalStore,
+  req: Request,
+  code: string,
+  now: number,
+): Promise<Response | null> {
+  const token = bearerToken(req);
+  if (!token) return error(401, 'unauthorized', 'host token required');
+  const outcome = await store.authenticateHost(code, await sha256Hex(token), now);
+  if (outcome === 'missing') return error(404, 'not_found', 'no such room (or it expired)');
+  if (outcome === 'forbidden') return error(403, 'forbidden', 'invalid host token');
+  return null;
+}
 
 export interface SignalHandlers {
   GET(req: Request): Promise<Response>;
@@ -47,9 +62,8 @@ export function createSignalHandlers(
 
       // Host polling for joins — also refreshes the room heartbeat.
       if (url.searchParams.get('role') === 'host') {
-        if (!(await store.heartbeat(code, now()))) {
-          return error(404, 'not_found', 'no such room (or it expired)');
-        }
+        const denied = await authenticateHost(store, req, code, now());
+        if (denied) return denied;
         const joins = await store.pendingJoins(code, now());
         return json(200, {
           joins: joins.map((j) => ({ joinId: j.joinId, joinerName: j.joinerName, offer: j.offer })),
@@ -78,14 +92,16 @@ export function createSignalHandlers(
         // Codes are 4^6 — collisions are rare; retry a few times then give up.
         for (let attempt = 0; attempt < 5; attempt++) {
           const code = randomRoomCode();
+          const hostToken = randomToken();
           const at = now();
           const ok = await store.createRoom({
             code,
             hostName: msg.hostName,
+            hostTokenHash: await sha256Hex(hostToken),
             createdAt: at,
             lastSeen: at,
           });
-          if (ok) return json(200, { code });
+          if (ok) return json(200, { code, hostToken });
         }
         return error(503, 'busy', 'could not allocate a room code');
       }
@@ -105,6 +121,8 @@ export function createSignalHandlers(
       }
 
       // msg.t === 'answer'
+      const denied = await authenticateHost(store, req, msg.code, now());
+      if (denied) return denied;
       if (!(await store.answerJoin(msg.code, msg.joinId, msg.answer, now()))) {
         return error(404, 'not_found', 'no such pending join');
       }

@@ -14,13 +14,7 @@
  *    percent (ties share a rank).
  */
 
-import type {
-  ChartRef,
-  GhostFrame,
-  LeaderboardResponse,
-  PlayResult,
-  SubmitScoreRequest,
-} from './protocol';
+import type { ChartRef, LeaderboardResponse, PlayResult, SubmitScoreRequest } from './protocol';
 import { rateKey } from './protocol';
 
 export interface StoredBest {
@@ -30,21 +24,22 @@ export interface StoredBest {
   plays: number;
   /** Unix ms of the play that set the current best. */
   updatedAt: number;
-  /** Timeline of the best play, when the client sent one (race the ghost). */
-  ghost?: GhostFrame[];
 }
 
 export type SubmitOutcome =
   { ok: true; isPersonalBest: boolean; rank: number } | { ok: false; code: 'bad_secret' };
 
 export interface ScoreStore {
+  /** Fixed-window admission control for one privacy-preserving actor hash. */
+  consumeSubmissionBudget(actorHash: string, now: number): Promise<boolean>;
   /** Fold one validated play into the board; claims the playerId if new. */
   submit(req: SubmitScoreRequest, secretHash: string, now: number): Promise<SubmitOutcome>;
   /** Top rows for one board, best first. */
   top(chartHash: string, rate: number, limit: number): Promise<LeaderboardResponse>;
-  /** The stored ghost of a player's best on one board, or null. */
-  ghost(chartHash: string, rate: number, playerId: string): Promise<GhostFrame[] | null>;
 }
+
+export const SUBMISSION_WINDOW_MS = 60_000;
+export const SUBMISSION_LIMIT = 12;
 
 /** The mergeBest policy applied to a stored row (pure; shared by stores). */
 export function mergeStoredBest(
@@ -69,9 +64,6 @@ export function mergeStoredBest(
     plays: (prev?.plays ?? 0) + 1,
     updatedAt: isPersonalBest ? now : (prev?.updatedAt ?? now),
   };
-  // The ghost belongs to the play that owns the best percent.
-  const ghost = isPersonalBest ? req.ghost : prev?.ghost;
-  if (ghost) next.ghost = ghost;
   return { next, isPersonalBest };
 }
 
@@ -93,6 +85,18 @@ export class MemoryScoreStore implements ScoreStore {
   private readonly boards = new Map<string, Map<string, StoredBest>>();
   /** Chart metadata by hash (display only; last write wins). */
   private readonly charts = new Map<string, ChartRef>();
+  private readonly budgets = new Map<string, { windowStart: number; hits: number }>();
+
+  consumeSubmissionBudget(actorHash: string, now: number): Promise<boolean> {
+    const current = this.budgets.get(actorHash);
+    if (!current || now - current.windowStart >= SUBMISSION_WINDOW_MS) {
+      this.budgets.set(actorHash, { windowStart: now, hits: 1 });
+      return Promise.resolve(true);
+    }
+    if (current.hits >= SUBMISSION_LIMIT) return Promise.resolve(false);
+    current.hits++;
+    return Promise.resolve(true);
+  }
 
   private board(chartHash: string, rk: number): Map<string, StoredBest> {
     const key = `${chartHash}·${rk}`;
@@ -143,14 +147,8 @@ export class MemoryScoreStore implements ScoreStore {
         maxCombo: row.result.maxCombo,
         failed: row.result.failed,
         at: row.updatedAt,
-        hasGhost: row.ghost !== undefined && row.ghost.length > 0,
       };
     });
     return Promise.resolve({ rows, total: board.size });
-  }
-
-  ghost(chartHash: string, rate: number, playerId: string): Promise<GhostFrame[] | null> {
-    const row = this.board(chartHash, rateKey(rate)).get(playerId);
-    return Promise.resolve(row?.ghost && row.ghost.length > 0 ? row.ghost : null);
   }
 }

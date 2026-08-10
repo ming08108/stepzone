@@ -7,7 +7,6 @@
  *
  * Routes (mounted at /api/scores):
  *   GET  ?chartHash=..&rate=1&limit=20        -> LeaderboardResponse
- *   GET  ?chartHash=..&rate=1&ghostOf=player  -> { ghost } (404 if none)
  *   POST SubmitScoreRequest                   -> SubmitScoreResponse
  */
 
@@ -15,6 +14,7 @@ import { error, json } from './httpResponse';
 import { parseSubmitScoreRequest, type SubmitScoreRequest } from './protocol';
 import { verifyReplay } from '../gameplay/replayVerify';
 import type { ScoreStore } from './scoreStore';
+import { sha256Hex } from './crypto';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -50,9 +50,10 @@ function degenerateReplay(sub: SubmitScoreRequest): string | null {
   return null;
 }
 
-export async function sha256Hex(s: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+function trustedClientAddress(req: Request): string | null {
+  const raw = req.headers.get('x-vercel-forwarded-for') ?? req.headers.get('x-real-ip');
+  const first = raw?.split(',')[0]?.trim();
+  return first && first.length <= 128 ? first : null;
 }
 
 export interface ScoresHandlers {
@@ -71,13 +72,6 @@ export function createHandlers(store: ScoreStore, now: () => number = Date.now):
       const rate = Number(url.searchParams.get('rate') ?? '1');
       if (!Number.isFinite(rate) || rate < 0.5 || rate > 3) {
         return error(400, 'bad_request', 'rate out of range');
-      }
-      const ghostOf = url.searchParams.get('ghostOf');
-      if (ghostOf) {
-        if (ghostOf.length > 64) return error(400, 'bad_request', 'ghostOf too long');
-        const ghost = await store.ghost(chartHash, rate, ghostOf);
-        if (!ghost) return error(404, 'not_found', 'no ghost stored for this player');
-        return json(200, { ghost });
       }
       const limit = Math.min(
         MAX_LIMIT,
@@ -100,6 +94,16 @@ export function createHandlers(store: ScoreStore, now: () => number = Date.now):
       }
       const sub = parseSubmitScoreRequest(parsed);
       if (!sub) return error(400, 'bad_request', 'invalid submission');
+      const address = trustedClientAddress(req);
+      // Bind the fallback budget to the unguessable credential, not just the
+      // public playerId (otherwise anyone could exhaust another player's cap).
+      const actorKeys = address
+        ? [`address:${address}`, `credential:${sub.playerId}:${sub.secret}`]
+        : [`credential:${sub.playerId}:${sub.secret}`];
+      for (const actor of actorKeys) {
+        const allowed = await store.consumeSubmissionBudget(await sha256Hex(actor), now());
+        if (!allowed) return error(429, 'rate_limited', 'too many score submissions');
+      }
       const degenerate = degenerateReplay(sub);
       if (degenerate) return error(400, 'bad_request', degenerate);
       // The real anti-cheat: re-run the replay against the shipped chart (bound

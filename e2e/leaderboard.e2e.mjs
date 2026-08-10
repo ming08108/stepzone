@@ -82,7 +82,7 @@ try {
   const rate = reqUrl.searchParams.get('rate') ?? '1';
   step('song select queries the board for the highlighted chart', !!chartHash, `hash ${chartHash}`);
 
-  // 2. v3 anti-cheat: the server RE-SIMULATES every submitted replay against
+  // 2. v4 verification: the server RE-SIMULATES every submitted replay against
   //    the submitted chart and ranks on what it scores, ignoring the claimed
   //    result. A seed must therefore ship the genuine chart the board is keyed
   //    on plus a replay that actually plays it — which the harness gets from
@@ -101,13 +101,12 @@ try {
   // taps => no minimum-span rule) — the stored score is whatever the replay
   // scores. RIVAL plays the full ideal replay (~100%); BRONZE plays only the
   // first half (the rest miss), so RIVAL must outrank BRONZE on the re-sim.
-  const submit = (playerId, playerName, replay, ghost) =>
+  const submit = (playerId, playerName, replay) =>
     fetch(`${base}api/scores`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        protocol: 3,
-        input: { device: 'pad', padId: 'E2E Virtual Dance Pad', padKnown: true },
+        protocol: 4,
         chartData: seed.chartData,
         replay,
         playerId,
@@ -130,15 +129,11 @@ try {
           counts: { 9: 5 },
           holdCounts: {},
         },
-        ...(ghost ? { ghost } : {}),
       }),
     });
   const full = seed.perfectReplay;
   const half = full.slice(0, Math.max(2, Math.floor(full.length / 2)));
-  const r1 = await submit('rival-1', 'RIVAL', full, [
-    { atSong: 0, percent: 0, combo: 0, life: 0.5 },
-    { atSong: 1, percent: 0.5, combo: 5, life: 0.8 },
-  ]);
+  const r1 = await submit('rival-1', 'RIVAL', full);
   const r2 = await submit('bronze-1', 'BRONZE', half);
   step('seed submissions accepted', r1.status === 200 && r2.status === 200);
 

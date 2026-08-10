@@ -15,9 +15,12 @@ type Sql = ReturnType<typeof neon>;
 const ROOMS_SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_rooms3 (
   code       TEXT PRIMARY KEY,
   host_name  TEXT NOT NULL,
+  host_token_hash TEXT NOT NULL,
   created_at BIGINT NOT NULL,
   last_seen  BIGINT NOT NULL
 )`;
+
+const ROOMS_AUTH_MIGRATION = `ALTER TABLE net_versus_rooms3 ADD COLUMN IF NOT EXISTS host_token_hash TEXT`;
 
 const JOINS_SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_joins1 (
   code        TEXT NOT NULL,
@@ -32,6 +35,7 @@ const JOINS_SCHEMA = `CREATE TABLE IF NOT EXISTS net_versus_joins1 (
 interface RoomRow {
   code: string;
   host_name: string;
+  host_token_hash: string | null;
   created_at: string | number;
   last_seen: string | number;
 }
@@ -56,6 +60,7 @@ export class PgSignalStore implements SignalStore {
   private ensureSchema(): Promise<void> {
     this.schemaReady ??= (async () => {
       await this.sql.query(ROOMS_SCHEMA);
+      await this.sql.query(ROOMS_AUTH_MIGRATION);
       await this.sql.query(JOINS_SCHEMA);
     })();
     return this.schemaReady;
@@ -71,11 +76,11 @@ export class PgSignalStore implements SignalStore {
       room.createdAt - JOIN_TTL_MS,
     ]);
     const rows = (await this.sql.query(
-      `INSERT INTO net_versus_rooms3 (code, host_name, created_at, last_seen)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO net_versus_rooms3 (code, host_name, host_token_hash, created_at, last_seen)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (code) DO NOTHING
        RETURNING code`,
-      [room.code, room.hostName, room.createdAt, room.lastSeen],
+      [room.code, room.hostName, room.hostTokenHash, room.createdAt, room.lastSeen],
     )) as { code: string }[];
     return rows.length > 0;
   }
@@ -91,20 +96,30 @@ export class PgSignalStore implements SignalStore {
     return {
       code: r.code,
       hostName: r.host_name,
+      hostTokenHash: r.host_token_hash ?? '',
       createdAt: Number(r.created_at),
       lastSeen: Number(r.last_seen),
     };
   }
 
-  async heartbeat(code: string, now: number): Promise<boolean> {
+  async authenticateHost(
+    code: string,
+    hostTokenHash: string,
+    now: number,
+  ): Promise<'ok' | 'missing' | 'forbidden'> {
     await this.ensureSchema();
     const rows = (await this.sql.query(
-      `UPDATE net_versus_rooms3 SET last_seen = $2
-       WHERE code = $1 AND last_seen > $3
-       RETURNING code`,
-      [code, now, now - ROOM_LIVE_MS],
-    )) as { code: string }[];
-    return rows.length > 0;
+      `SELECT host_token_hash FROM net_versus_rooms3 WHERE code = $1 AND last_seen > $2`,
+      [code, now - ROOM_LIVE_MS],
+    )) as { host_token_hash: string | null }[];
+    const room = rows[0];
+    if (!room) return 'missing';
+    if (room.host_token_hash !== hostTokenHash) return 'forbidden';
+    await this.sql.query(`UPDATE net_versus_rooms3 SET last_seen = $2 WHERE code = $1`, [
+      code,
+      now,
+    ]);
+    return 'ok';
   }
 
   async addJoin(join: SignalJoin): Promise<AddJoinOutcome> {

@@ -1,6 +1,6 @@
 /**
  * DEV-only leaderboard seeding helper. The e2e (e2e/leaderboard.e2e.mjs) needs
- * to seed real scores on the *highlighted* starter chart, but the v3 server
+ * to seed real scores on the *highlighted* starter chart, but the v4 server
  * re-simulates every submitted replay against the submitted chart — so a seed
  * has to ship the genuine chart payload AND a replay that actually plays it.
  * The harness can't reach the app's parsed chart, so SongSelect exposes

@@ -461,7 +461,8 @@ interface SubmitScore {
   chart: ChartRef;
   conditions: PlayConditions;
   result: PlayResult;
-  ghost?: GhostFrame[];
+  chartData: ChartData;
+  replay: ReplayEvent[];
   nonce: string;
 }
 // GET  /leaderboard?chartKey=..&rate=..  ->
@@ -472,15 +473,6 @@ interface LeaderboardRow {
   grade: string;
   maxCombo: number;
   at: number;
-  hasGhost: boolean;
-}
-
-/** Optional compact replay for the "race a ghost" mode (mode 1 in §3). */
-interface GhostFrame {
-  atSong: number;
-  percent: number;
-  combo: number;
-  life: number;
 }
 ```
 
@@ -495,10 +487,10 @@ sends `finish` — the same `judge` fields already feed `recordPlay`.
 
 Each phase ends with something demoable and reuses the prior phase's transport.
 
-- **M1 — Async leaderboards & ghosts.** WS/HTTP server + a `chartHash` (M6 in the
+- **M1 — Async leaderboards.** WS/HTTP server + a `chartHash` (M6 in the
   main roadmap already plans `ChartKey` hashing). On `onEnd`, submit
-  `PlayResult`; add a leaderboard view keyed by `chartKey` + rate; optional ghost
-  capture (`GhostFrame[]`) and a "race the ghost" bar in `Play.tsx`. **No live
+  `PlayResult`; add a leaderboard view keyed by `chartKey` + rate and submit the
+  chart plus full input replay for authoritative re-simulation. **No live
   connection needed during play** → most robust, ships first, works offline
   (queue + retry). This is the GrooveStats-equivalent and the safe MVP.
 
@@ -557,8 +549,7 @@ implausibility**:
   finish arrives no earlier than the chart length ÷ rate after `startAt`.
 - **Chart hashing** (`chartHash`) so scores bind to an exact chart; reject
   unknown/edited charts on ranked boards.
-- **Replay/ghost as proof.** Requiring a `GhostFrame[]` (or a fuller input replay)
-  for top ranked scores lets the server (or a re-judge job) validate the score is
+- **Replay as evidence.** Requiring a full input replay lets the server validate the score is
   reproducible; bot-perfect timing distributions are also flaggable.
 - **Rate/mod lock** for ranked (§5.4); partition boards by conditions.
 - **Anti-abuse plumbing:** authenticated accounts for ranked, per-connection rate

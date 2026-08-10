@@ -11,6 +11,7 @@
     "prepare": "node scripts/setup-hooks.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build && npm run build:api",
+    "build:check": "npm run build && git diff --exit-code -- api",
     "build:api": "node scripts/buildApi.mjs",
     "preview": "vite preview",
     "test": "vitest run",
@@ -38,7 +39,7 @@
     "@types/node": "^20.17.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@types/three": "^0.185.1",
+    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^4.3.4",
     "@webgpu/types": "^0.1.71",
     "playwright-core": "^1.61.1",
@@ -47,6 +48,6 @@
     "tailwindcss": "^4.3.2",
     "typescript": "^5.6.3",
     "vite": "^6.0.7",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.10"
   }
 }

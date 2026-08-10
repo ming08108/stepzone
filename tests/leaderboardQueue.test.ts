@@ -44,8 +44,8 @@ function queued(): unknown[] {
 }
 
 function play(percent = 0.9): PendingPlay {
-  const { chart, musicRate, result, input, chartData, replay } = validSubmit();
-  return { chart, musicRate, result: { ...result, percent }, input, chartData, replay };
+  const { chart, musicRate, result, chartData, replay } = validSubmit();
+  return { chart, musicRate, result: { ...result, percent }, chartData, replay };
 }
 
 const okBody = { ok: true, rank: 1, isPersonalBest: true };
@@ -65,12 +65,11 @@ describe('submitScore', () => {
     expect(await submitScore(play())).toEqual(okBody);
     expect(queued()).toHaveLength(0);
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
-    expect(body.protocol).toBe(3);
+    expect(body.protocol).toBe(4);
     expect(typeof body.playerId).toBe('string');
     expect(body.result.percent).toBe(0.9);
-    expect(body.input.device).toBe('pad');
     expect(Array.isArray(body.replay)).toBe(true);
-    // v3 ships the chart so the server can re-simulate the replay.
+    // v4 ships the chart so the server can re-simulate the replay.
     expect(typeof body.chartData.noteData).toBe('string');
     expect(Array.isArray(body.chartData.timing.bpms)).toBe(true);
   });
@@ -99,8 +98,21 @@ describe('submitScore', () => {
     expect(queued()).toHaveLength(1);
   });
 
-  it('drops an older queued play with no chartData (pre-v3 evidence)', async () => {
-    // A play parked before v3 carries no chartData; the server would re-simulate
+  it('queues rate-limited plays for a later retry', async () => {
+    vi.stubGlobal('fetch', respond(429, { ok: false, code: 'rate_limited' }));
+    expect(await submitScore(play())).toBeNull();
+    expect(queued()).toHaveLength(1);
+  });
+
+  it('does not lose concurrent offline submissions', async () => {
+    vi.stubGlobal('fetch', offline());
+    await Promise.all([submitScore(play(0.31)), submitScore(play(0.62))]);
+    const q = queued() as { result: { percent: number } }[];
+    expect(q.map((entry) => entry.result.percent)).toEqual([0.31, 0.62]);
+  });
+
+  it('drops an older queued play with no chartData (pre-replay evidence)', async () => {
+    // An older play with no chartData cannot be re-simulated by the server,
     // against nothing, so loadQueue must drop it rather than submit it blind.
     const stale = { ...play() } as Record<string, unknown>;
     delete stale.chartData;

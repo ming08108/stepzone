@@ -17,6 +17,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run format:check
+      # Compile the production app/functions and reject stale committed API bundles.
+      - run: npm run build:check
       # Drives the real app in the runner's system Chrome (playwright-core,
       # no bundled browsers). Gameplay legs self-skip if WebGPU is absent.
       - run: npm run e2e

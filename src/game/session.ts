@@ -10,7 +10,7 @@
 import { WebAudioClock } from '../audio/clock';
 import { makeClickTrack, type Click } from '../audio/synth';
 import { Judge } from '../gameplay/judge';
-import { MAX_GHOST_FRAMES, type GhostFrame, type ReplayEvent } from '../net/protocol';
+import type { ReplayEvent } from '../net/protocol';
 import { DEFAULT_WINDOWS } from '../gameplay/windows';
 import { noteRowToBeat, TapNoteScore } from '../notes/noteTypes';
 import { remapTracks, turnPermutation } from '../notes/transforms';
@@ -22,7 +22,7 @@ import {
   type PracticeSection,
 } from './playOptions';
 import { columnAnglesFor } from '../render/columns';
-import type { AttractConfig } from '../render/gpu/attractGpu';
+import { preloadThreeDancer, type AttractConfig } from '../render/gpu/attractGpu';
 import { beatTimes, GpuNoteField } from '../render/gpu/gpuNoteField';
 import type { Feedback, NoteFieldConfig } from '../render/fieldConfig';
 import { songMaxBpm } from '../render/scroll';
@@ -75,11 +75,6 @@ export class GameSession {
    *  judge's counts it survives practice-loop resets, so the global lifetime
    *  step counter (app/stats.ts) can bank it once when the session ends. */
   stepsTaken = 0;
-  /** Scoreboard timeline of this play (2 Hz), for the online ghost. Not
-   *  recorded in practice mode (looping timelines are meaningless). */
-  readonly ghostFrames: GhostFrame[] = [];
-  private lastGhostAt = Number.NEGATIVE_INFINITY;
-
   /** Every judged-relevant input this play (song-seconds, 4dp), in time order —
    *  the replay of the run (todo: REPLAYS). Not recorded in practice mode
    *  (looping passes have no single coherent timeline) nor in a replay session
@@ -297,6 +292,12 @@ export class GameSession {
    * Returns false when the session was stopped mid-prepare or GPU init failed.
    */
   async prepare(encodedAudio: ArrayBuffer | null = null): Promise<boolean> {
+    // Start parsing the optional VRM renderer while GPU/audio setup is already
+    // showing the loading splash. Await it before begin() to prevent a large
+    // dynamic import from hitching the first live gameplay frame.
+    const dancerReady = this.bgAttract
+      ? preloadThreeDancer().catch(() => undefined)
+      : Promise.resolve();
     let freshField = false;
     this.onLoadStage?.('STARTING THE GPU FIELD', 0.1);
     // Create the WebGPU field once per session (both skins render on it). If
@@ -347,6 +348,8 @@ export class GameSession {
       this.clock.setBuffer(buffer);
     }
     this.pendingPrewarm = freshField;
+    await dancerReady;
+    if (this.stopped) return false;
     this.onLoadStage?.('BAKING NOTE SPRITES', 0.9);
     return !this.stopped;
   }
@@ -486,22 +489,6 @@ export class GameSession {
     }
 
     this.judge.update(now, this.held);
-
-    // Ghost sample (after judging, so the frame reflects everything at `now`).
-    if (
-      !this.practice &&
-      now >= 0 &&
-      now >= this.lastGhostAt + 0.5 &&
-      this.ghostFrames.length < MAX_GHOST_FRAMES
-    ) {
-      this.lastGhostAt = now;
-      this.ghostFrames.push({
-        atSong: Math.round(now * 100) / 100,
-        percent: Math.max(0, Math.min(1, Math.round(this.judge.percentDancePoints * 1e4) / 1e4)),
-        combo: this.judge.combo,
-        life: Math.max(0, Math.min(1, Math.round(this.judge.life * 1e3) / 1e3)),
-      });
-    }
 
     if (this.judge.judgmentSeq !== this.lastSeq) {
       this.lastSeq = this.judge.judgmentSeq;

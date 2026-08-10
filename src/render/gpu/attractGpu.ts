@@ -13,9 +13,23 @@
  * the palettes and layer design mirror it 1:1.
  */
 
-import { ThreeVrmDancer, type DancerStep, type DancerCamera } from '../threeDancer';
+import type { ThreeVrmDancer, DancerStep, DancerCamera } from '../threeDancer';
 import { dancerModelUrl } from '../dancerModels';
 import { loadSettings } from '../../app/settings';
+
+type DancerModule = typeof import('../threeDancer');
+let dancerModulePromise: Promise<DancerModule> | null = null;
+
+function loadDancerModule(): Promise<DancerModule> {
+  dancerModulePromise ??= import('../threeDancer');
+  return dancerModulePromise;
+}
+
+/** Parse the optional Three/VRM renderer during the session's loading phase,
+ * never on the first live gameplay frame. */
+export async function preloadThreeDancer(): Promise<void> {
+  await loadDancerModule();
+}
 
 /** Cheap stable pseudo-random 0..1 for the beat-cut camera (keyed by shot index). */
 const camHash = (n: number): number => {
@@ -420,6 +434,7 @@ export class AttractGpu {
     [0, 0, 0],
   ];
   private modelLoadStarted = false; // the (single-player-only) heavy load kicked off
+  private destroyed = false;
   // The three.js VRM dancer (loaded async, single-player only). Renders offscreen; its
   // colorView is composited over the neon background. Null until the model loads.
   private dancer: ThreeVrmDancer | null = null;
@@ -493,21 +508,23 @@ export class AttractGpu {
     }
     this.modelLoadStarted = true;
     this.modelId = id;
-    const d = new ThreeVrmDancer({
-      modelUrl: dancerModelUrl(id),
-      device: this.device,
-      width: this.lastW || 512,
-      height: this.lastH || 768,
-    });
-    void d
-      .init()
-      .then(() => {
-        if (this.modelId !== id) {
-          d.dispose(); // a newer model was selected while this one loaded
-          return;
-        }
-        d.setSteps(this.steps);
-        this.dancer = d;
+    void loadDancerModule()
+      .then(({ ThreeVrmDancer }) => {
+        if (this.destroyed || this.modelId !== id) return;
+        const d = new ThreeVrmDancer({
+          modelUrl: dancerModelUrl(id),
+          device: this.device,
+          width: this.lastW || 512,
+          height: this.lastH || 768,
+        });
+        return d.init().then(() => {
+          if (this.destroyed || this.modelId !== id) {
+            d.dispose();
+            return;
+          }
+          d.setSteps(this.steps);
+          this.dancer = d;
+        });
       })
       .catch(() => {
         // Load/decode failed (e.g. 404) — attract shows just the neon background.
@@ -726,6 +743,7 @@ export class AttractGpu {
   private compositeBind: GPUBindGroup | null = null;
 
   destroy(): void {
+    this.destroyed = true;
     this.dancer?.dispose();
     this.dancer = null;
     try {

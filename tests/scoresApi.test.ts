@@ -137,12 +137,9 @@ describe('POST /api/scores', () => {
 });
 
 describe('POST /api/scores — anti-cheat', () => {
-  it('rejects a keyboard device and a missing input', async () => {
-    const kb = { ...validSubmit(), input: { device: 'keyboard', padId: 'kb', padKnown: false } };
-    expect((await post(handlers, kb)).status).toBe(400);
-    const noInput = { ...validSubmit() } as Record<string, unknown>;
-    delete noInput.input;
-    expect((await post(handlers, noInput)).status).toBe(400);
+  it('does not treat client controller metadata as trusted evidence', async () => {
+    const claimed = { ...validSubmit(), input: { device: 'keyboard', padId: 'made-up' } };
+    expect((await post(handlers, claimed)).status).toBe(200);
   });
 
   it('rejects a malformed / missing replay', async () => {
@@ -158,6 +155,13 @@ describe('POST /api/scores — anti-cheat', () => {
 
   it('rejects a v1 submission outright', async () => {
     expect((await post(handlers, { ...validSubmit(), protocol: 1 })).status).toBe(400);
+  });
+
+  it('rate-limits repeated submissions by player credential', async () => {
+    for (let i = 0; i < 12; i++) {
+      expect((await post(handlers, play({ playerId: 'rate-test' }))).status).toBe(200);
+    }
+    expect((await post(handlers, play({ playerId: 'rate-test' }))).status).toBe(429);
   });
 
   it('rejects a stunted replay that cannot back the claimed play', async () => {
@@ -205,37 +209,6 @@ describe('GET /api/scores', () => {
       ['b', 1],
       ['c', 3],
     ]);
-  });
-
-  it('stores a ghost with a personal best and serves it via ghostOf', async () => {
-    const ghost = [{ atSong: 0, percent: 0.1, combo: 3, life: 0.9 }];
-    await post(handlers, { ...play({ playerId: 'a', percent: 0.9 }), ghost });
-    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(true);
-
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ghost });
-  });
-
-  it('a worse play keeps the best ghost; a better ghostless play clears it', async () => {
-    const ghost = [{ atSong: 0, percent: 0.1, combo: 3, life: 0.9 }];
-    // Best so far (0.75) carries a ghost.
-    await post(handlers, { ...play({ playerId: 'a', replay: spreadReplay(12) }), ghost });
-    // A worse ghostless play (0.375) doesn't beat it — the ghost is retained.
-    await post(handlers, play({ playerId: 'a', replay: spreadReplay(8) }));
-    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(true);
-
-    // A better ghostless play (100%) sets a new best and clears the old ghost.
-    await post(handlers, play({ playerId: 'a', replay: perfectReplay() }));
-    expect((await board(handlers, HASH)).rows[0].hasGhost).toBe(false);
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
-    expect(res.status).toBe(404);
-  });
-
-  it('404s a ghost request for a player with no stored ghost', async () => {
-    await post(handlers, play({ playerId: 'a' }));
-    const res = await handlers.GET(new Request(`${URL_BASE}?chartHash=${HASH}&rate=1&ghostOf=a`));
-    expect(res.status).toBe(404);
   });
 
   it('caps rows at the limit but reports the full total', async () => {

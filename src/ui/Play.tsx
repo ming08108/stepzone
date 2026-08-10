@@ -7,14 +7,12 @@ import { columnAnglesFor } from '../render/columns';
 import type { Feedback } from '../render/fieldConfig';
 import { isVideoFile } from '../io/songFiles';
 import { roleToColumn } from '../input/controls';
-import { connectedPadInfo } from '../input/gamepad';
-import { looksLikeDancePad } from '../input/padDetect';
 import { difficultyToString } from '../song/difficulty';
 import { TapNoteScore } from '../notes/noteTypes';
 import { songKey } from '../app/favorites';
 import { chartKey, loadScores, recordPlay } from '../app/scores';
 import { submitScore } from '../net/leaderboard';
-import { type PlayResult, type ReplayEvent, type SubmitInput } from '../net/protocol';
+import { type PlayResult, type ReplayEvent } from '../net/protocol';
 import { chartDataOf } from '../song/chartData';
 import { RoomStandings } from './RoomRace';
 import { addSongPlay, addSteps, recordPlayEnd } from '../app/stats';
@@ -540,12 +538,10 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             counts,
             failed: judge.failed,
           });
-      // Submission gate (anti-cheat): a keyboard note press this run holds the
-      // play off the leaderboard entirely — local records still stand. A
-      // pad-only run submits with its device tag + full replay.
+      // Pad-only is a local product rule: a keyboard note press holds the play
+      // off the leaderboard. The server independently verifies the replay's
+      // score, but browsers cannot provide trustworthy device attestation.
       const usedKeyboard = noteInputRef.current.keyboard;
-      const padId = connectedPadInfo()[0]?.id || 'Gamepad';
-      const input: SubmitInput = { device: 'pad', padId, padKnown: looksLikeDancePad(padId) };
       // Online leaderboard (fire-and-forget; queued offline). Practice
       // sections never submit; keyboard plays never submit; rate-modded plays
       // do — the server partitions boards by rate (never the 1.0x one).
@@ -568,10 +564,8 @@ export function Play({ req, onExit }: { req: PlayRequest; onExit: () => void }) 
             counts,
             holdCounts: { ...judge.holdCounts },
           },
-          input,
           chartData: chartDataOf(req.song, req.chart),
           replay: [...session.inputLog],
-          ...(session.ghostFrames.length > 0 ? { ghost: [...session.ghostFrames] } : {}),
         });
       }
       // Lifetime stats: fold the finished play in (steps bank separately).

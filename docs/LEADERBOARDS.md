@@ -16,12 +16,14 @@ existing Vercel deployment; no second service.
   `setPlayerName` (UI affordance still to come).
 - **Submission** (src/net/leaderboard.ts): `Play.tsx onEnd` fires a
   fire-and-forget submit for every non-practice play. Offline / undeployed /
-  5xx → the play parks in a localStorage queue (newest 50) and retries on app
-  start and the next submit. 4xx (the server will never take it) → dropped.
+  5xx / 429 → the play parks in a localStorage queue (newest 50) and retries on
+  app start and the next submit. Other 4xx responses are dropped. Queue
+  updates are serialized across tabs when Web Locks is available.
 - **API** (`api/scores.ts` → src/net/scoresApi.ts): Web-signature Vercel
   Function. `POST /api/scores` validates against src/net/protocol.ts (all
-  client input is hostile), folds the play into the stored best with the same
-  merge policy as local scores (mergeStoredBest), returns rank + PB flag.
+  client input is hostile), atomically folds the play into the stored best,
+  returns rank + PB flag, and rate-limits submissions by credential and trusted
+  proxy address.
   `GET /api/scores?chartHash=..&rate=1&limit=20` returns the board.
 - **UI**: `GlobalBest` (src/ui/GlobalBest.tsx) in the song-select header shows
   the world best + your rank for the highlighted chart at the current rate.
@@ -32,7 +34,7 @@ existing Vercel deployment; no second service.
 
 1. In the Vercel project, add a Postgres database (Marketplace → Neon) and let
    it set `DATABASE_URL` on the project.
-2. Deploy. The schema (`net_players`, `net_scores`) bootstraps itself on the
+2. Deploy. The schema (`net_players`, `net_scores`, `net_score_rate_limits`) bootstraps itself on the
    first request (`CREATE TABLE IF NOT EXISTS`, src/net/pgScoreStore.ts).
 
 Without `DATABASE_URL` the endpoint falls back to an in-memory store (scores
@@ -42,7 +44,7 @@ boards. The client needs no configuration either way; it just talks to
 
 ## Trust model (M1)
 
-**Server-side replay verification (v3) — the score is NOT trusted.** A
+**Server-side replay verification (v4) — the score is NOT trusted.** A
 submission ships the full input replay (song-seconds press/release log) AND the
 chart it ran on (`chartData`: raw note grid + resolved timing). On every POST
 the server (src/gameplay/replayVerify.ts, bundled into the scores function):
@@ -55,26 +57,13 @@ the server (src/gameplay/replayVerify.ts, bundled into the scores function):
    produce**. The client's self-reported `result` is ignored for ranking — a
    forged 99% with a replay that scores 40% is stored as 40%.
 
-Pad gating (v2) still blocks keyboard plays client-side (`input.device`), and
-identity spoofing is blocked by the secret hash. What survives: a **bot/TAS**
+Pad-only submission is a client-side product rule; browsers cannot attest that
+a replay came from a physical pad, so the API makes no such claim. Identity
+spoofing is blocked by the secret hash. What survives: a **bot/TAS**
 that genuinely produces winning inputs for the chart — the irreducible limit
 for any rhythm game, and the target for statistical anomaly detection later.
 Compute is bounded against a crafted chart (note-grid + timing-segment caps in
 protocol.ts, a fine-sim horizon cap in replayVerify.ts).
-
-## Ghosts (race the ghost)
-
-- `GameSession` samples the scoreboard timeline at 2 Hz
-  (`ghostFrames: GhostFrame[]` — atSong/percent/combo/life, capped at
-  `MAX_GHOST_FRAMES`; never in practice mode). The submission carries it;
-  the server keeps a ghost only on the row it belongs to (the personal best —
-  a better ghostless play clears the stale one).
-- `GET /api/scores?...&ghostOf=playerId` serves a stored ghost;
-  `LeaderboardRow.hasGhost` marks racable rows.
-- In Play, the best racable timeline on the board (which may be your own PB —
-  labeled YOUR BEST) drives the `GhostRace` badge: your live percent vs the
-  ghost's at the same song position, green ahead / red behind. Read-only
-  overlay; hidden offline, in practice mode, or when no ghost exists yet.
 
 ## Player name
 
@@ -86,7 +75,7 @@ submission.
 
 The board for the highlighted chart renders beside the song list
 (src/ui/LeaderboardSide.tsx): top rows with rank, name (yours highlighted),
-percent, grade, and a ▶ marker on racable (ghost) rows. Purely informational
+percent and grade. Purely informational
 (no focus, no input — pad-only untouched); collapses when offline and hides
 on narrow viewports. It shares one debounced/cached fetch with the header's
 WORLD readout (src/ui/useLeaderboard.ts).

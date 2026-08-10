@@ -458,6 +458,8 @@ export const MAX_SDP_LENGTH = 64 * 1024;
 export interface SignalRoom {
   code: string;
   hostName: string;
+  /** SHA-256 of the opaque credential returned only to the creating host. */
+  hostTokenHash: string;
   createdAt: number;
   /** Last host poll (heartbeat) — liveness is measured from this. */
   lastSeen: number;

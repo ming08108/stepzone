@@ -31,8 +31,17 @@ async function bridge(
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   const body = Buffer.concat(chunks);
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
   const request = new Request(`http://localhost${req.url ?? '/'}`, {
     method,
+    headers,
     ...(method === 'POST' ? { body } : {}),
   });
   const response = await handler(request);

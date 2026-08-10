@@ -6,9 +6,14 @@ import { Options } from './Options';
 import { Calibrate } from './Calibrate';
 import { Benchmark } from './Benchmark';
 import { InputTest } from './InputTest';
-import { VrmTest } from './VrmTest';
 // Code-split: IsaacViewer pulls in three/webgpu; keep it out of the main bundle.
+const VrmTest = import.meta.env.DEV
+  ? lazy(() => import('./VrmTest').then((m) => ({ default: m.VrmTest })))
+  : null;
 const IsaacViewer = lazy(() => import('./IsaacViewer').then((m) => ({ default: m.IsaacViewer })));
+const RetargetDebug = import.meta.env.DEV
+  ? lazy(() => import('./RetargetDebug').then((m) => ({ default: m.RetargetDebug })))
+  : null;
 const ReplayDancer = lazy(() =>
   import('./ReplayDancer').then((m) => ({ default: m.ReplayDancer })),
 );
@@ -31,6 +36,7 @@ type View =
   | 'inputtest'
   | 'vrmtest'
   | 'isaacviewer'
+  | 'retargetdebug'
   | 'replaydancer'
   | 'experiments';
 
@@ -40,8 +46,9 @@ export function App() {
   const [view, setView] = useState<View>(() => {
     const params = new URLSearchParams(location.search);
     if (params.has('bench')) return 'benchmark';
-    if (params.has('vrm')) return 'vrmtest';
+    if (import.meta.env.DEV && params.has('vrm')) return 'vrmtest';
     if (params.has('isaacviewer')) return 'isaacviewer';
+    if (import.meta.env.DEV && params.has('retargetdebug')) return 'retargetdebug';
     if (params.has('replaydancer')) return 'replaydancer';
     if (params.has('experiments')) return 'experiments';
     return 'menu';
@@ -123,12 +130,22 @@ export function App() {
     body = <Benchmark onBack={() => setView('options')} />;
   } else if (view === 'inputtest') {
     body = <InputTest onBack={() => setView('options')} />;
-  } else if (view === 'vrmtest') {
-    body = <VrmTest onExit={() => setView('menu')} />;
+  } else if (view === 'vrmtest' && VrmTest) {
+    body = (
+      <Suspense fallback={null}>
+        <VrmTest onExit={() => setView('menu')} />
+      </Suspense>
+    );
   } else if (view === 'isaacviewer') {
     body = (
       <Suspense fallback={null}>
         <IsaacViewer onExit={() => setView('menu')} />
+      </Suspense>
+    );
+  } else if (view === 'retargetdebug' && RetargetDebug) {
+    body = (
+      <Suspense fallback={null}>
+        <RetargetDebug onExit={() => setView('menu')} />
       </Suspense>
     );
   } else if (view === 'replaydancer') {

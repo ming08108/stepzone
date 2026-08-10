@@ -114,6 +114,7 @@ interface PendingJoin {
  */
 export async function createRoomChannel(hostName: string): Promise<HostedRoomChannel | null> {
   let code: string;
+  let hostToken: string;
   try {
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -121,13 +122,14 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
       body: JSON.stringify({ t: 'create', hostName }),
     });
     if (!res.ok) return null;
-    ({ code } = (await res.json()) as { code: string });
+    ({ code, hostToken } = (await res.json()) as { code: string; hostToken: string });
   } catch {
     return null;
   }
   // A malformed create response (no/invalid code) would otherwise spin the poll
   // loop forever on `?code=undefined` (400s, never 404) — fail fast instead.
-  if (!isRoomCode(code)) return null;
+  if (!isRoomCode(code) || typeof hostToken !== 'string' || hostToken.length < 32) return null;
+  const hostHeaders = { authorization: `Bearer ${hostToken}` };
 
   let closed = false;
   /** Joins whose answer we've committed — never answer them twice. */
@@ -154,7 +156,7 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
       const answer = await completeSdp(pc);
       const res = await fetch(API_URL, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...hostHeaders },
         body: JSON.stringify({ t: 'answer', code, joinId: join.joinId, answer }),
       });
       if (!res.ok) throw new Error(`answer ${res.status}`);
@@ -187,7 +189,7 @@ export async function createRoomChannel(hostName: string): Promise<HostedRoomCha
   const poll = async (): Promise<void> => {
     while (!closed) {
       try {
-        const res = await fetch(`${API_URL}?code=${code}&role=host`);
+        const res = await fetch(`${API_URL}?code=${code}&role=host`, { headers: hostHeaders });
         if (res.status === 404) {
           // Room expired server-side — surface it once and stop.
           if (!closed) room.onDead?.();

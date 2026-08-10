@@ -14,21 +14,17 @@ import { isRecord, loadJson, saveJson } from '../app/storage';
 import { getIdentity } from './identity';
 import type {
   ChartRef,
-  GhostFrame,
   LeaderboardResponse,
   PlayResult,
   ReplayEvent,
-  SubmitInput,
   SubmitScoreRequest,
   SubmitScoreResponse,
 } from './protocol';
 import {
   parseChartData,
   parseChartRef,
-  parseGhost,
   parsePlayResult,
   parseReplay,
-  parseSubmitInput,
   PROTOCOL_VERSION,
   type ChartData,
 } from './protocol';
@@ -37,15 +33,11 @@ export interface PendingPlay {
   chart: ChartRef;
   musicRate: number;
   result: PlayResult;
-  /** Device the play ran on — a pad (keyboard plays are never queued). */
-  input: SubmitInput;
   /** The chart the play ran on, so the server can re-simulate the replay. */
   chartData: ChartData;
   /** Full input log of the play; the server RE-SIMULATES it to score the play
    *  and stores it on a PB. */
   replay: ReplayEvent[];
-  /** Scoreboard timeline for race-the-ghost; kept server-side on a PB. */
-  ghost?: GhostFrame[];
 }
 
 const QUEUE_KEY = 'notefield.net.submitQueue.v1';
@@ -60,22 +52,17 @@ function loadQueue(): PendingPlay[] {
     if (!isRecord(v) || typeof v.musicRate !== 'number') continue;
     const chart = parseChartRef(v.chart);
     const result = parsePlayResult(v.result);
-    // input + chartData + replay are required in v3 — a queued older play (no
-    // chart evidence) fails here and is dropped rather than submitted blind.
-    const input = parseSubmitInput(v.input);
+    // Chart data + replay are required in v4. Older queued payloads fail the
+    // current protocol shape here and are dropped rather than submitted blind.
     const chartData = parseChartData(v.chartData);
     const replay = parseReplay(v.replay);
-    if (!chart || !result || !input || !chartData || !replay) continue;
-    // A corrupt parked ghost drops the ghost, not the play.
-    const ghost = v.ghost !== undefined ? parseGhost(v.ghost) : null;
+    if (!chart || !result || !chartData || !replay) continue;
     out.push({
       chart,
       musicRate: v.musicRate,
       result,
-      input,
       chartData,
       replay,
-      ...(ghost ? { ghost } : {}),
     });
   }
   return out;
@@ -98,10 +85,8 @@ function toRequest(play: PendingPlay): SubmitScoreRequest {
       ...play.result,
       percent: Math.max(0, Math.min(1, play.result.percent)),
     },
-    input: play.input,
     chartData: play.chartData,
     replay: play.replay,
-    ...(play.ghost && play.ghost.length > 0 ? { ghost: play.ghost } : {}),
   };
 }
 
@@ -129,7 +114,7 @@ async function send(play: PendingPlay): Promise<SubmitScoreResponse | 'drop' | '
       return 'drop';
     }
   }
-  return res.status >= 500 ? 'retry' : 'drop';
+  return res.status === 429 || res.status >= 500 ? 'retry' : 'drop';
 }
 
 async function drainQueue(): Promise<void> {
@@ -142,56 +127,55 @@ async function drainQueue(): Promise<void> {
   }
 }
 
-let flushing: Promise<void> | null = null;
+let operations: Promise<void> = Promise.resolve();
+
+async function withBrowserLock<T>(work: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request('notefield-score-queue', work);
+  }
+  return work();
+}
+
+/** Serialize read-modify-write queue operations in this tab and, where the
+ * Web Locks API exists, across tabs sharing the same localStorage. */
+function exclusive<T>(work: () => Promise<T>): Promise<T> {
+  const run = operations.then(
+    () => withBrowserLock(work),
+    () => withBrowserLock(work),
+  );
+  operations = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 /** Retry queued plays, oldest first, stopping at the first retryable failure.
- *  Concurrent calls share one drain; the guard resets in a .finally() so a
- *  synchronously-completing drain can't null it before it is even assigned. */
+ * Concurrent calls serialize so each drain sees the prior drain's writes. */
 export function flushQueue(): Promise<void> {
-  flushing ??= drainQueue().finally(() => {
-    flushing = null;
-  });
-  return flushing;
+  return exclusive(drainQueue);
 }
 
 /**
  * Submit a finished play. Tries the network right away (so the caller can
  * show rank/PB feedback) and parks the play in the queue when that fails.
  */
-export async function submitScore(play: PendingPlay): Promise<SubmitScoreResponse | null> {
-  // Older parked plays go first so the board sees them in order.
-  await flushQueue();
-  const queued = loadQueue();
-  if (queued.length > 0) {
-    // Still blocked — park this one behind the rest.
-    saveQueue([...queued, play]);
-    return null;
-  }
-  const outcome = await send(play);
-  if (outcome === 'retry') {
-    saveQueue([play]);
-    return null;
-  }
-  return outcome === 'drop' ? null : outcome;
-}
-
-/** The stored ghost of one player's best on a board; null when absent/offline. */
-export async function fetchGhost(
-  chartHash: string,
-  musicRate: number,
-  playerId: string,
-): Promise<GhostFrame[] | null> {
-  try {
-    const url =
-      `${API_URL}?chartHash=${encodeURIComponent(chartHash)}` +
-      `&rate=${musicRate}&ghostOf=${encodeURIComponent(playerId)}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const body = (await res.json()) as { ghost?: unknown };
-    return parseGhost(body.ghost);
-  } catch {
-    return null;
-  }
+export function submitScore(play: PendingPlay): Promise<SubmitScoreResponse | null> {
+  return exclusive(async () => {
+    // Older parked plays go first so the board sees them in order.
+    await drainQueue();
+    const queued = loadQueue();
+    if (queued.length > 0) {
+      saveQueue([...queued, play]);
+      return null;
+    }
+    const outcome = await send(play);
+    if (outcome === 'retry') {
+      saveQueue([play]);
+      return null;
+    }
+    return outcome === 'drop' ? null : outcome;
+  });
 }
 
 /** Top rows for one board; null when offline/undeployed (callers hide the panel). */
