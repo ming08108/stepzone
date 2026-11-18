@@ -39,6 +39,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { readSongAudio } from '../io/songFiles';
+import { supportsFolderPicker } from '../io/localFolder';
 import { resolveBackground, subscribeBgConvert, type BgConvertStatus } from '../io/bgVideo';
 import { clearVideoCache, videoCacheStats } from '../io/videoCache';
 import { prefetchSong, previewCached, previewSong, stopPreview } from '../audio/songPreview';
@@ -690,7 +691,7 @@ export function SongSelect({
         </div>
       </div>
 
-      {/* Song-folder sources panel (unchanged behaviour, header-anchored) */}
+      {/* Song-folder sources panel */}
       {showSources && (
         <div className="absolute top-[62px] right-[20px] z-30 w-[360px] border border-white/[0.14] bg-[#101114] p-[14px] text-[12px] tracking-[0.08em]">
           <div className="mb-2 flex items-center justify-between text-[#ececec]/50">
@@ -752,6 +753,16 @@ export function SongSelect({
           >
             + ADD FOLDER
           </button>
+          {supportsFolderPicker() && (
+            <button
+              type="button"
+              onClick={() => folderRef.current?.click()}
+              className="mt-2 w-full border border-white/[0.14] py-[6px] text-[#ececec]/70 hover:border-[#ff5d47] hover:text-[#ececec]"
+              title="Load a folder for this visit if Add Folder fails"
+            >
+              IMPORT FOR THIS SESSION
+            </button>
+          )}
           {videoCache && videoCache.count > 0 && (
             <div className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2 text-[#ececec]/40">
               <span>
@@ -1027,7 +1038,7 @@ export function SongSelect({
 
             {drag && (
               <div
-                className="absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
+                className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center text-[15px] tracking-[0.14em]"
                 style={{ background: 'rgba(11,12,14,.85)', color: AC }}
               >
                 DROP A SONG FOLDER / PACK
