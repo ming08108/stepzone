@@ -245,8 +245,12 @@ const scanTick = (n: number): void => setState({ loading: { msg: `SCANNING FOLDE
  * skips the walk+parse entirely; untagged loads (multi-folder drops, the
  * fallback input) simply append for this session. The starter pack stays.
  */
-export async function addFiles(files: File[], sourceId?: string, persisted = false): Promise<void> {
-  if (files.length === 0) return;
+export async function addFiles(
+  files: File[],
+  sourceId?: string,
+  persisted = false,
+): Promise<number> {
+  if (files.length === 0) return 0;
   setState({ loading: { msg: 'LOADING SONGS…' } });
   try {
     const { entries: loaded, packImages } = await loadLibraryFromFiles(files, (done, total) =>
@@ -296,6 +300,7 @@ export async function addFiles(files: File[], sourceId?: string, persisted = fal
         }),
       );
     }
+    return loaded.length;
   } finally {
     setState({ loading: null });
   }
@@ -427,16 +432,18 @@ export async function addFolderFromPicker(): Promise<boolean> {
  * DataTransfer is only readable then).
  */
 export async function addDropped(dt: DataTransfer): Promise<void> {
-  const adopted = addSourceFromDrop(dt, scanTick);
+  setState({ loading: { msg: 'READING DROPPED FOLDER…' } });
   try {
+    const adopted = addSourceFromDrop(dt, scanTick);
+    let count: number;
     if (adopted) {
       const { id, folder } = await adopted;
-      await addFiles(folder.files, id || undefined);
+      count = await addFiles(folder.files, id || undefined);
       await refreshSources();
     } else {
-      setState({ loading: { msg: 'LOADING SONGS…' } });
-      await addFiles(await filesFromDataTransfer(dt));
+      count = await addFiles(await filesFromDataTransfer(dt));
     }
+    if (count === 0) throw new Error('No readable .sm, .ssc, or .sma charts found in the drop.');
   } finally {
     setState({ loading: null });
   }

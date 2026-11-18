@@ -70,7 +70,7 @@ async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSy
   return out;
 }
 
-async function entryToFiles(entry: FileSystemEntry): Promise<File[]> {
+export async function entryToFiles(entry: FileSystemEntry): Promise<File[]> {
   if (entry.isFile) {
     const file = await new Promise<File>((res, rej) =>
       (entry as FileSystemFileEntry).file(res, rej),

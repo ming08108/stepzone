@@ -157,6 +157,7 @@ export function SongSelect({
   const restoring = useRef(false);
 
   const [drag, setDrag] = useState(false);
+  const [dropError, setDropError] = useState('');
   const [showSources, setShowSources] = useState(false);
   const [bgConvert, setBgConvert] = useState<BgConvertStatus | null>(null);
   const [videoCache, setVideoCache] = useState<{ bytes: number; count: number } | null>(null);
@@ -605,7 +606,12 @@ export function SongSelect({
   const onDrop = async (e: DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDrag(false);
-    await addDropped(e.dataTransfer);
+    setDropError('');
+    try {
+      await addDropped(e.dataTransfer);
+    } catch (err) {
+      setDropError(err instanceof Error ? err.message : 'The browser could not read the drop.');
+    }
   };
 
   /* ── virtualization ───────────────────────────────────────────────────── */
@@ -781,6 +787,17 @@ export function SongSelect({
         </div>
       )}
 
+      {dropError && (
+        <div role="alert" className="flex items-center justify-center gap-4 p-2 text-sm">
+          <span>{dropError}</span>
+          <button className="underline" onClick={() => folderRef.current?.click()}>
+            Choose a folder for this session
+          </button>
+          <button aria-label="Dismiss drop error" onClick={() => setDropError('')}>
+            ✕
+          </button>
+        </div>
+      )}
       {pendingNames.length > 0 && (
         <button
           onClick={() => void finishRestore()}
@@ -799,6 +816,7 @@ export function SongSelect({
         className="hidden"
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
+          setDropError('');
           e.target.value = '';
           void addFiles(files);
         }}

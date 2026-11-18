@@ -139,4 +139,36 @@ describe('addSourceFromDrop', () => {
     const noHandles = { kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) };
     expect(addSourceFromDrop(dropOf([noHandles]))).toBeNull(); // non-Chromium
   });
+
+  it.each(['missing', 'denied'])('reads a dropped entry when its handle is %s', async (reason) => {
+    const file = new File([ssc('Recovered')], 'chart.ssc');
+    const entry = {
+      name: 'Song',
+      isDirectory: true,
+      createReader: () => {
+        const batches = [
+          [
+            {
+              isFile: true,
+              fullPath: '/Song/chart.ssc',
+              file: (accept: (f: File) => void) => accept(file),
+            },
+          ],
+          [],
+        ];
+        return { readEntries: (accept: (value: unknown) => void) => accept(batches.shift()) };
+      },
+    };
+    const item = {
+      kind: 'file',
+      webkitGetAsEntry: () => entry,
+      getAsFileSystemHandle: async () => {
+        if (reason === 'denied') throw new DOMException('Read denied', 'NotAllowedError');
+        return null;
+      },
+    };
+    const loaded = await addSourceFromDrop(dropOf([item]));
+    expect(loaded?.id).toBe('');
+    expect(loaded?.folder.files.map((f) => f.webkitRelativePath)).toEqual(['Song/chart.ssc']);
+  });
 });

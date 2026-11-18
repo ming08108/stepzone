@@ -20,6 +20,8 @@
  * re-parse) refreshes the catalog when the folder changed on disk.
  */
 
+import { entryToFiles } from './songFiles';
+
 // Only files a library can use are collected — simfiles up front, media lazily.
 const KEEP_EXT = new Set([
   '.sm',
@@ -447,15 +449,21 @@ export function addSourceFromDrop(
 ): Promise<LoadedSource> | null {
   const items = Array.from(dt.items ?? []).filter((it) => it.kind === 'file');
   if (items.length !== 1 || !('getAsFileSystemHandle' in items[0])) return null;
-  const entry = items[0].webkitGetAsEntry();
+  const entry = items[0].webkitGetAsEntry?.();
   if (!entry?.isDirectory) return null;
-  const pending = items[0].getAsFileSystemHandle(); // request before the event goes inert
   return (async () => {
-    const handle = await pending;
-    if (!handle || handle.kind !== 'directory') return { id: '', folder: { files: [], name: '' } };
-    const dir = handle as FileSystemDirectoryHandle;
-    const id = await addHandle(dir);
-    return { id, folder: await readFolder(dir, onScan) };
+    try {
+      // Request the handle during dispatch, while the DataTransfer is readable.
+      const handle = await items[0].getAsFileSystemHandle();
+      if (handle?.kind === 'directory') {
+        const dir = handle as FileSystemDirectoryHandle;
+        const folder = await readFolder(dir, onScan);
+        if (folder.files.length) return { id: await addHandle(dir), folder };
+      }
+    } catch {
+      // Chrome can expose a directory entry even when the handle is unreadable.
+    }
+    return { id: '', folder: { name: entry.name, files: await entryToFiles(entry) } };
   })();
 }
 
